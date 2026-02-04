@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "510919765220",
+    "project_id": "ridesafe-5b724",
+    "storage_bucket": "ridesafe-5b724.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:510919765220:android:cf6f2a24e0e652874510f1",
+        "android_client_info": {
+          "package_name": "com.darkhorses.capcap"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDWQwRq4DHlSrTVFu43A-YR2GACcxrFrg4"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
