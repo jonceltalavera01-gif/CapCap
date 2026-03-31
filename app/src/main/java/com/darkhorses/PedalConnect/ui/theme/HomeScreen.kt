@@ -88,7 +88,6 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.ui.graphics.lerp
 
 // ── Colour tokens ─────────────────────────────────────────────────────────────
 private val Green900 = Color(0xFF06402B)
@@ -394,6 +393,7 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
     var selectedShop        by remember { mutableStateOf<ShopItem?>(null) }
     var lastOverpassFetchMs by remember { mutableLongStateOf(0L) }
     var lastOverpassCenter  by remember { mutableStateOf<GeoPoint?>(null) }
+    var mapFocusFilter      by remember { mutableStateOf<ShopType?>(null) }
 
     val avgSpeedKmh = if (elapsedSeconds > 0) (totalDistance / 1000.0) / (elapsedSeconds / 3600.0) else 0.0
 
@@ -498,10 +498,20 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
         }
     }
 
+    fun emergencyToShopType(emergencyType: String): ShopType? = when {
+        emergencyType.contains("flat tire",       ignoreCase = true) -> ShopType.BIKE_SHOP
+        emergencyType.contains("mechanical",      ignoreCase = true) -> ShopType.BIKE_SHOP
+        emergencyType.contains("stranded",        ignoreCase = true) -> ShopType.BIKE_SHOP
+        emergencyType.contains("medical",         ignoreCase = true) -> ShopType.HOSPITAL
+        emergencyType.contains("accident",        ignoreCase = true) -> ShopType.HOSPITAL
+        emergencyType.contains("road hazard",     ignoreCase = true) -> ShopType.HOSPITAL
+        emergencyType.contains("unsafe area",     ignoreCase = true) -> ShopType.HOSPITAL
+        else -> null  // "Other" and unknown types show all markers
+    }
+
     fun publishLocation(loc: GeoPoint) {
         // Admin account should not appear as a cyclist on the map
         if (userName.trim().equals("Admin", ignoreCase = true)) return
-        val isFirstFix = userGeoPoint == null
         userGeoPoint = loc
         val now         = System.currentTimeMillis()
         val lastCenter  = lastOverpassCenter
@@ -520,31 +530,7 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
                 "longitude" to loc.longitude,
                 "timestamp" to System.currentTimeMillis()
             ))
-        // On first GPS fix, immediately re-read all userLocations so nearby
-        // cyclists who are already online appear without waiting for them to move
-        if (isFirstFix) {
-            db.collection("userLocations").get()
-                .addOnSuccessListener { snap ->
-                    nearbyUsers.clear()
-                    for (doc in snap.documents) {
-                        val name = doc.getString("userName") ?: continue
-                        if (name == userName) continue
-                        val lat = doc.getDouble("latitude")  ?: continue
-                        val lon = doc.getDouble("longitude") ?: continue
-                        val ts  = doc.getLong("timestamp")   ?: 0L
-                        if (System.currentTimeMillis() - ts > STALE_MS) continue
-                        val dist = haversineKm(loc.latitude, loc.longitude, lat, lon)
-                        if (dist <= CYCLIST_RADIUS_KM) {
-                            nearbyUsers.add(NearbyUser(
-                                userName   = name,
-                                location   = GeoPoint(lat, lon),
-                                distanceKm = fuzzDistance(dist),
-                                lastSeen   = ts
-                            ))
-                        }
-                    }
-                }
-        }
+
     }
 
     BackHandler {
@@ -585,32 +571,41 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
         }
     }
 
+    // ── Nearby users — reliable periodic poll ─────────────────────────────────
+// Replaces the snapshot listener + isFirstFix bulk read combo.
+// Polls every 8 seconds once GPS is available so all devices converge
+// on the same view regardless of open order or movement.
     LaunchedEffect(Unit) {
-        db.collection("userLocations").addSnapshotListener { snapshot, e ->
-            if (e != null) return@addSnapshotListener
-            snapshot?.let { snap ->
-                // Re-read userGeoPoint inside the lambda so we always
-                // get the latest value — even if GPS just became available
-                val center = userGeoPoint ?: myLocationOverlay?.myLocation ?: return@let
-                nearbyUsers.clear()
-                for (doc in snap.documents) {
-                    val name = doc.getString("userName") ?: continue
-                    if (name == userName) continue
-                    val lat = doc.getDouble("latitude")  ?: continue
-                    val lon = doc.getDouble("longitude") ?: continue
-                    val ts  = doc.getLong("timestamp")   ?: 0L
-                    if (System.currentTimeMillis() - ts > STALE_MS) continue
-                    val dist = haversineKm(center.latitude, center.longitude, lat, lon)
-                    if (dist <= CYCLIST_RADIUS_KM) {
-                        nearbyUsers.add(NearbyUser(
-                            userName   = name,
-                            location   = GeoPoint(lat, lon),
-                            distanceKm = fuzzDistance(dist),
-                            lastSeen   = ts
-                        ))
+        while (true) {
+            val center = userGeoPoint ?: myLocationOverlay?.myLocation
+            if (center != null) {
+                db.collection("userLocations").get()
+                    .addOnSuccessListener { snap ->
+                        val fresh = mutableListOf<NearbyUser>()
+                        for (doc in snap.documents) {
+                            val name = doc.getString("userName") ?: continue
+                            if (name == userName) continue
+                            val lat  = doc.getDouble("latitude")  ?: continue
+                            val lon  = doc.getDouble("longitude") ?: continue
+                            val ts   = doc.getLong("timestamp")   ?: 0L
+                            if (System.currentTimeMillis() - ts > STALE_MS) continue
+                            val dist = haversineKm(
+                                center.latitude, center.longitude, lat, lon
+                            )
+                            if (dist <= CYCLIST_RADIUS_KM) {
+                                fresh.add(NearbyUser(
+                                    userName   = name,
+                                    location   = GeoPoint(lat, lon),
+                                    distanceKm = fuzzDistance(dist),
+                                    lastSeen   = ts
+                                ))
+                            }
+                        }
+                        nearbyUsers.clear()
+                        nearbyUsers.addAll(fresh)
                     }
-                }
             }
+            kotlinx.coroutines.delay(8_000L)
         }
     }
 
@@ -952,7 +947,7 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
         if (minDist > 0.08) { val map = mapViewRef ?: return; fetchRoutes(loc, destinationPoint ?: return, map) }
     }
 
-    DisposableEffect(isTracking) {
+    DisposableEffect(Unit) {
         val locationManager  = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
         val locationListener = object : LocationListener {
             override fun onLocationChanged(location: Location) {
@@ -1158,20 +1153,37 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
                             // Draw inner cyclist circle on top of it
                             view.overlays.add(1, buildCyclistRadiusPolygon(center))
                             nearbyShops.forEach { shop ->
-                                val isHospital   = shop.type == ShopType.HOSPITAL
+                                val isHospital  = shop.type == ShopType.HOSPITAL
+                                val isRelevant  = mapFocusFilter == null || shop.type == mapFocusFilter
+                                val alpha       = if (isRelevant) 255 else 60
+
                                 val markerBitmap = if (isHospital)
-                                    makeMarkerBitmap(view.context, android.graphics.Color.argb(255, 211, 47, 47), true)
-                                else makeMarkerBitmap(view.context, android.graphics.Color.argb(255, 10, 92, 61), false)
+                                    makeMarkerBitmap(
+                                        view.context,
+                                        android.graphics.Color.argb(alpha, 211, 47, 47),
+                                        true
+                                    )
+                                else
+                                    makeMarkerBitmap(
+                                        view.context,
+                                        android.graphics.Color.argb(alpha, 10, 92, 61),
+                                        false
+                                    )
+
                                 Marker(view).apply {
                                     position = shop.location
-                                    title    = shop.name   // kept for accessibility
-                                    snippet  = null        // suppress default OSMDroid bubble
+                                    title    = shop.name
+                                    snippet  = null
                                     setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
                                     icon = android.graphics.drawable.BitmapDrawable(view.context.resources, markerBitmap)
-                                    // Tap opens the Compose bottom sheet instead
+                                    // Tapping a dimmed marker clears the filter so user can see all
                                     setOnMarkerClickListener { _, _ ->
-                                        selectedShop = shop
-                                        true   // true = consume event, no default bubble
+                                        if (!isRelevant) {
+                                            mapFocusFilter = null
+                                        } else {
+                                            selectedShop = shop
+                                        }
+                                        true
                                     }
                                     view.overlays.add(this)
                                 }
@@ -1394,6 +1406,49 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
                             }
                         }
 
+                        // ── Map focus filter banner ───────────────────────────
+                        if (mapFocusFilter != null) {
+                            val filterLabel = when (mapFocusFilter) {
+                                ShopType.HOSPITAL  -> "🏥 Showing hospitals near the alert"
+                                ShopType.BIKE_SHOP -> "🔧 Showing bike shops near the alert"
+                                else               -> ""
+                            }
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(Color(0xFF1565C0).copy(alpha = 0.92f))
+                                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                                verticalAlignment     = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(
+                                    filterLabel,
+                                    fontSize   = 12.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color      = Color.White,
+                                    modifier   = Modifier.weight(1f)
+                                )
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(Color.White.copy(alpha = 0.2f))
+                                        .clickable(
+                                            interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                                            indication        = null
+                                        ) { mapFocusFilter = null }
+                                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                                ) {
+                                    Text(
+                                        "Show all",
+                                        fontSize   = 11.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color      = Color.White
+                                    )
+                                }
+                            }
+                        }
+
                         // ── Start Ride button — hidden for Admin ──────────────
                         if (!isAdmin) Button(
                             onClick = {
@@ -1420,13 +1475,6 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
                         }
                     }
 
-                    // Animate overlay progress — drives SOS + pill darkening
-                    // so they sync with the slide animation instead of snapping instantly
-                    val overlayProgress by animateFloatAsState(
-                        targetValue   = if (showSearchOverlay) 1f else 0f,
-                        animationSpec = tween(300, easing = FastOutSlowInEasing),
-                        label         = "overlayProgress"
-                    )
 
                     // ── Full-screen search overlay — animated drop down ────────
                     AnimatedVisibility(
@@ -1688,209 +1736,142 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
                         if (!isTracking && totalDistance == 0.0) {
                             val nearbyHospitals2 = nearbyShops.count { it.type == ShopType.HOSPITAL }
                             val nearbyBikeShops2 = nearbyShops.count { it.type == ShopType.BIKE_SHOP }
-                            val pillAlpha        = 1f - (overlayProgress * 0.55f)
-                            val textAlpha        = 1f - (overlayProgress * 0.4f)
-
-                            Row(
-                                verticalAlignment  = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                // Nearby cyclists pill
-                                Row(
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(20.dp))
-                                        .background(
-                                            androidx.compose.ui.graphics.lerp(
-                                                Color.White.copy(alpha = 0.92f),
-                                                Color(0xFF1A1A1A).copy(alpha = 0.55f),
-                                                overlayProgress
-                                            )
-                                        )
-                                        .padding(horizontal = 11.dp, vertical = 6.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(5.dp)
-                                ) {
-                                    Box(modifier = Modifier.size(6.dp).clip(CircleShape)
-                                        .background(Color(0xFF4CAF50).copy(alpha = pillAlpha)))
-                                    Icon(Icons.AutoMirrored.Filled.DirectionsBike, null,
-                                        tint = if (showSearchOverlay) Color.White.copy(alpha = textAlpha) else Green900,
-                                        modifier = Modifier.size(13.dp))
-                                    Text("${nearbyUsers.size} nearby", fontSize = 12.sp,
-                                        fontWeight = FontWeight.SemiBold,
-                                        color = if (showSearchOverlay) Color.White.copy(alpha = textAlpha) else Green900)
-                                }
-
-                                // Hospitals pill
-                                Row(
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(20.dp))
-                                        .background(
-                                            androidx.compose.ui.graphics.lerp(
-                                                Color(0xFFD32F2F),
-                                                Color(0xFF3A0A0A).copy(alpha = 0.55f),
-                                                overlayProgress
-                                            )
-                                        )
-                                        .padding(horizontal = 11.dp, vertical = 6.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(5.dp)
-                                ) {
-                                    Icon(Icons.Default.LocalHospital, null,
-                                        tint = Color.White.copy(alpha = textAlpha),
-                                        modifier = Modifier.size(13.dp))
-                                    Text("$nearbyHospitals2 hosp.", fontSize = 12.sp,
-                                        fontWeight = FontWeight.ExtraBold,
-                                        color = Color.White.copy(alpha = textAlpha))
-                                }
-
-                                // Shops pill
-                                Row(
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(20.dp))
-                                        .background(
-                                            androidx.compose.ui.graphics.lerp(
-                                                Color(0xFFE0F2F1),
-                                                Color(0xFF0A1A1A).copy(alpha = 0.55f),
-                                                overlayProgress
-                                            )
-                                        )
-                                        .padding(horizontal = 11.dp, vertical = 6.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(5.dp)
-                                ) {
-                                    Icon(Icons.Default.HomeRepairService, null,
-                                        tint = if (showSearchOverlay) Color.White.copy(alpha = textAlpha) else Color(0xFF00796B),
-                                        modifier = Modifier.size(13.dp))
-                                    Text("$nearbyBikeShops2 shops", fontSize = 12.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = if (showSearchOverlay) Color.White.copy(alpha = textAlpha) else Color(0xFF00796B))
-                                }
-                            }
-                        }
-
-                        if (!isAdmin) {
-                            // Check if user has an active alert
-                            val myActiveAlert = alerts.firstOrNull {
+                            val myActiveSosAlert = alerts.firstOrNull {
                                 it.riderName.trim().lowercase() == userName.trim().lowercase()
                             }
-                            val hasActiveAlert = myActiveAlert != null
+                            val hasActiveAlert = myActiveSosAlert != null
 
-                            if (showSearchOverlay) {
-                                val sosTransition = rememberInfiniteTransition(label = "sos_pulse")
-                                val sosPulse by sosTransition.animateFloat(
-                                    initialValue  = 0.45f,
-                                    targetValue   = 0.75f,
-                                    animationSpec = infiniteRepeatable(
-                                        animation  = tween(900, easing = FastOutSlowInEasing),
-                                        repeatMode = RepeatMode.Reverse
-                                    ),
-                                    label = "sosPulse"
-                                )
-                                Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                                    Box(modifier = Modifier.fillMaxWidth().height(72.dp)
-                                        .clip(RoundedCornerShape(24.dp))
-                                        .background(
-                                            if (hasActiveAlert) Color(0xFF1B5E20).copy(alpha = 0.35f)
-                                            else Color(0xFF3A0A0A).copy(alpha = 0.35f)
-                                        ))
-                                    Button(
-                                        onClick = {
-                                            if (hasActiveAlert) showCancelSosDialog = true
-                                            else showSheet = true
-                                        },
-                                        modifier = Modifier.fillMaxWidth()
-                                            .padding(horizontal = 4.dp, vertical = 4.dp)
-                                            .height(64.dp)
-                                            .shadow(4.dp, RoundedCornerShape(20.dp)),
-                                        shape  = RoundedCornerShape(20.dp),
-                                        colors = ButtonDefaults.buttonColors(
-                                            containerColor = if (hasActiveAlert)
-                                                androidx.compose.ui.graphics.lerp(Color(0xFF2E7D32), Color(0xFF1B5E20), overlayProgress)
-                                            else
-                                                androidx.compose.ui.graphics.lerp(Color(0xFFD32F2F), Color(0xFF8B1A1A), overlayProgress)
-                                        ),
-                                        elevation = ButtonDefaults.buttonElevation(defaultElevation = 0.dp)
+                            AnimatedVisibility(
+                                visible = !showSearchOverlay,
+                                enter   = fadeIn(animationSpec = tween(200)),
+                                exit    = fadeOut(animationSpec = tween(150))
+                            ) {
+                                Row(
+                                    verticalAlignment     = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    // Nearby cyclists pill
+                                    Row(
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(20.dp))
+                                            .background(Color.White.copy(alpha = 0.92f))
+                                            .padding(horizontal = 11.dp, vertical = 6.dp),
+                                        verticalAlignment     = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(5.dp)
                                     ) {
-                                        Row(verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                                            Box(modifier = Modifier.size(36.dp).clip(CircleShape)
-                                                .background(Color.White.copy(alpha = sosPulse * 0.2f)),
-                                                contentAlignment = Alignment.Center) {
-                                                Icon(
-                                                    if (hasActiveAlert) Icons.Default.Cancel else Icons.Default.Warning,
-                                                    null, modifier = Modifier.size(20.dp),
-                                                    tint = Color.White.copy(alpha = sosPulse))
-                                            }
-                                            Column(horizontalAlignment = Alignment.Start) {
-                                                Text(
-                                                    if (hasActiveAlert) "CANCEL SOS" else "SOS",
-                                                    fontWeight = FontWeight.ExtraBold, fontSize = 20.sp,
-                                                    letterSpacing = 4.sp,
-                                                    color = Color.White.copy(alpha = sosPulse))
-                                                Text(
-                                                    if (hasActiveAlert) "Tap to cancel your active alert"
-                                                    else "Tap to send distress signal",
-                                                    fontSize = 9.sp, fontWeight = FontWeight.Medium,
-                                                    color = Color.White.copy(alpha = sosPulse * 0.6f),
-                                                    letterSpacing = 0.3.sp)
-                                            }
-                                        }
+                                        Box(modifier = Modifier.size(6.dp).clip(CircleShape)
+                                            .background(Color(0xFF4CAF50)))
+                                        Icon(Icons.AutoMirrored.Filled.DirectionsBike, null,
+                                            tint     = Green900,
+                                            modifier = Modifier.size(13.dp))
+                                        Text("${nearbyUsers.size} nearby", fontSize = 12.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color      = Green900)
+                                    }
+
+                                    // Hospitals pill
+                                    Row(
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(20.dp))
+                                            .background(Color(0xFFD32F2F))
+                                            .padding(horizontal = 11.dp, vertical = 6.dp),
+                                        verticalAlignment     = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(5.dp)
+                                    ) {
+                                        Icon(Icons.Default.LocalHospital, null,
+                                            tint     = Color.White,
+                                            modifier = Modifier.size(13.dp))
+                                        Text("$nearbyHospitals2 hosp.", fontSize = 12.sp,
+                                            fontWeight = FontWeight.ExtraBold,
+                                            color      = Color.White)
+                                    }
+
+                                    // Shops pill
+                                    Row(
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(20.dp))
+                                            .background(Color(0xFFE0F2F1))
+                                            .padding(horizontal = 11.dp, vertical = 6.dp),
+                                        verticalAlignment     = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(5.dp)
+                                    ) {
+                                        Icon(Icons.Default.HomeRepairService, null,
+                                            tint     = Color(0xFF00796B),
+                                            modifier = Modifier.size(13.dp))
+                                        Text("$nearbyBikeShops2 shops", fontSize = 12.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color      = Color(0xFF00796B))
                                     }
                                 }
-                            } else {
+                            }
+
+                            if (!isAdmin) {
+                                AnimatedVisibility(
+                                    visible = !showSearchOverlay,
+                                    enter   = fadeIn(animationSpec  = tween(200)),
+                                    exit    = fadeOut(animationSpec = tween(150))
+                                ) {
                                 Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                                    Box(modifier = Modifier.fillMaxWidth().height(72.dp)
-                                        .clip(RoundedCornerShape(24.dp))
-                                        .background(
-                                            if (hasActiveAlert) Color(0xFF2E7D32).copy(alpha = 0.18f)
-                                            else Color(0xFFD32F2F).copy(alpha = 0.18f)
-                                        ))
+                                    Box(
+                                        modifier = Modifier.fillMaxWidth().height(72.dp)
+                                            .clip(RoundedCornerShape(24.dp))
+                                            .background(
+                                                if (hasActiveAlert) Color(0xFF2E7D32).copy(alpha = 0.18f)
+                                                else Color(0xFFD32F2F).copy(alpha = 0.18f)
+                                            )
+                                    )
                                     Button(
                                         onClick = {
                                             if (hasActiveAlert) showCancelSosDialog = true
                                             else showSheet = true
                                         },
-                                        modifier = Modifier.fillMaxWidth()
+                                        modifier = Modifier
+                                            .fillMaxWidth()
                                             .padding(horizontal = 4.dp, vertical = 4.dp)
                                             .height(64.dp)
                                             .shadow(16.dp, RoundedCornerShape(20.dp)),
                                         shape  = RoundedCornerShape(20.dp),
                                         colors = ButtonDefaults.buttonColors(
-                                            containerColor = if (hasActiveAlert)
-                                                Color(0xFF2E7D32) else Color(0xFFD32F2F)
+                                            containerColor = if (hasActiveAlert) Color(0xFF2E7D32) else Color(0xFFD32F2F)
                                         ),
                                         elevation = ButtonDefaults.buttonElevation(defaultElevation = 0.dp)
                                     ) {
-                                        Row(verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                                            Box(modifier = Modifier.size(36.dp).clip(CircleShape)
-                                                .background(Color.White.copy(alpha = 0.2f)),
-                                                contentAlignment = Alignment.Center) {
+                                        Row(
+                                            verticalAlignment     = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                        ) {
+                                            Box(
+                                                modifier = Modifier.size(36.dp).clip(CircleShape)
+                                                    .background(Color.White.copy(alpha = 0.2f)),
+                                                contentAlignment = Alignment.Center
+                                            ) {
                                                 Icon(
-                                                    if (hasActiveAlert) Icons.Default.Cancel
-                                                    else Icons.Default.Warning,
-                                                    null, modifier = Modifier.size(20.dp),
-                                                    tint = Color.White)
+                                                    if (hasActiveAlert) Icons.Default.Cancel else Icons.Default.Warning,
+                                                    null, modifier = Modifier.size(20.dp), tint = Color.White
+                                                )
                                             }
                                             Column(horizontalAlignment = Alignment.Start) {
                                                 Text(
                                                     if (hasActiveAlert) "CANCEL SOS" else "SOS",
                                                     fontWeight = FontWeight.ExtraBold,
-                                                    fontSize = 20.sp, letterSpacing = 4.sp,
-                                                    color = Color.White)
+                                                    fontSize   = 20.sp, letterSpacing = 4.sp,
+                                                    color      = Color.White
+                                                )
                                                 Text(
                                                     if (hasActiveAlert) "Tap to cancel your active alert"
                                                     else "Tap to send distress signal",
-                                                    fontSize = 9.sp, fontWeight = FontWeight.Medium,
-                                                    color = Color.White.copy(alpha = 0.8f),
-                                                    letterSpacing = 0.3.sp)
+                                                    fontSize   = 9.sp, fontWeight = FontWeight.Medium,
+                                                    color      = Color.White.copy(alpha = 0.8f),
+                                                    letterSpacing = 0.3.sp
+                                                )
                                             }
                                         }
                                     }
                                 }
-                            }
-                        }
-                    }
+                                }
+                            } // end if (!isAdmin)
+                        } // end if (!isTracking && totalDistance == 0.0)
+                    } // end bottom Column
 
                     // ── Shop detail bottom sheet ──────────────────────────────
                     if (!isAdmin) selectedShop?.let { shop ->
@@ -1915,37 +1896,22 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
                     isLoadingShops   = isLoadingShops,
                     fetchFailed      = fetchFailed,
                     onRetry          = { userGeoPoint?.let { fetchNearbyPlaces(it) } },
-                    onDirectionClick = { destination -> destinationPoint = destination; selectedItem = 1 }
+                    onDirectionClick = { destination ->
+                        destinationPoint = destination
+                        mapFocusFilter   = null  // manual navigation shows all markers
+                        selectedItem     = 1
+                    }
                 )
 
                 3 -> AlertsScreen(
                     paddingValues    = innerPadding,
                     helperName       = userName,
-                    onNavigateToHelp = { destination ->
-                        destinationPoint = destination
+                    onNavigateToHelp = { coordinates, emergencyType ->
+                        destinationPoint = coordinates
+                        mapFocusFilter   = emergencyToShopType(emergencyType)
                         selectedItem     = 1
-                        val start = userGeoPoint ?: myLocationOverlay?.myLocation
-                        if (start != null) {
-                            // GPS already available — route immediately
-                            mapViewRef?.let { map ->
-                                scope.launch {
-                                    kotlinx.coroutines.delay(300L) // let map tab compose first
-                                    fetchRoutes(start, destination, map)
-                                }
-                            }
-                        } else {
-                            // GPS not ready yet — store destination and let the
-                            // MyLocationNewOverlay.runOnFirstFix block pick it up
-                            // (it already calls fetchRoute(loc, destinationPoint, mapView))
-                            // Also center map on alert location as a visual placeholder
-                            mapViewRef?.controller?.apply {
-                                setZoom(15.0)
-                                setCenter(destination)
-                            }
-                        }
                     },
                     onImOnMyWay      = { alert -> Toast.makeText(context, "Notifying ${alert.riderName} you're coming!", Toast.LENGTH_SHORT).show() },
-                    onDismiss        = { }
                 )
 
                 4 -> ProfileScreen(
@@ -1975,18 +1941,59 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
             }
 
             if (showExitDialog) {
-                AlertDialog(onDismissRequest = { showExitDialog = false },
-                    title = { Text("Exit App", fontWeight = FontWeight.Bold) },
-                    text  = { Text("Are you sure you want to exit PedalConnect?") },
-                    confirmButton = {
-                        Button(onClick = { (context as? android.app.Activity)?.finish() },
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD32F2F))) { Text("Exit") }
+                AlertDialog(
+                    onDismissRequest = { showExitDialog = false },
+                    shape            = RoundedCornerShape(24.dp),
+                    containerColor   = Color.White,
+                    icon = {
+                        Box(
+                            Modifier.size(56.dp).clip(CircleShape)
+                                .background(Color(0xFFFEF2F2)),
+                            Alignment.Center
+                        ) {
+                            Icon(Icons.Default.ExitToApp, null,
+                                tint     = Color(0xFFD32F2F),
+                                modifier = Modifier.size(28.dp))
+                        }
                     },
-                    dismissButton = {
-                        OutlinedButton(onClick = { showExitDialog = false },
-                            colors = ButtonDefaults.outlinedButtonColors(contentColor = Green900),
-                            border = androidx.compose.foundation.BorderStroke(1.dp, Green900)) { Text("Cancel") }
-                    })
+                    title = {
+                        Text("Exit PedalConnect?",
+                            fontWeight = FontWeight.Bold, fontSize = 18.sp,
+                            color      = Color(0xFF111827),
+                            textAlign  = androidx.compose.ui.text.style.TextAlign.Center,
+                            modifier   = Modifier.fillMaxWidth())
+                    },
+                    text = {
+                        Text("Are you sure you want to exit the app?",
+                            fontSize  = 14.sp, color = Color(0xFF6B7280),
+                            lineHeight = 22.sp,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+                    },
+                    confirmButton = {
+                        Column(Modifier.fillMaxWidth(),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Button(
+                                onClick  = { (context as? android.app.Activity)?.finish() },
+                                modifier = Modifier.fillMaxWidth().height(48.dp),
+                                shape    = RoundedCornerShape(14.dp),
+                                colors   = ButtonDefaults.buttonColors(
+                                    containerColor = Color(0xFFD32F2F),
+                                    contentColor   = Color.White)
+                            ) {
+                                Text("Exit", fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
+                            }
+                            OutlinedButton(
+                                onClick  = { showExitDialog = false },
+                                modifier = Modifier.fillMaxWidth().height(48.dp),
+                                shape    = RoundedCornerShape(14.dp),
+                                border   = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFD1D5DB)),
+                                colors   = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFF374151))
+                            ) {
+                                Text("Stay", fontWeight = FontWeight.Medium, fontSize = 15.sp)
+                            }
+                        }
+                    }
+                )
             }
 
             if (showCancelSosDialog) {

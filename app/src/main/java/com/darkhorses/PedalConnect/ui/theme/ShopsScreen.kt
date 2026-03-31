@@ -1,8 +1,9 @@
 package com.darkhorses.PedalConnect.ui.theme
 
-import androidx.compose.foundation.Canvas
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -10,18 +11,15 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.DirectionsBike
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -29,15 +27,24 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.osmdroid.util.GeoPoint
 
-private val Green900   = Color(0xFF06402B)
-private val Green700   = Color(0xFF0A5C3D)
-private val Green100   = Color(0xFFE8F5E9)
-private val RedPrimary = Color(0xFFD32F2F)
-private val RedLight   = Color(0xFFFFEBEE)
-private val SurfaceBg  = Color(0xFFF2F5F3)
-private val OnSurface  = Color(0xFF1A1A1A)
-private val TextSub    = Color(0xFF6B7B6B)
+// ── Design tokens ─────────────────────────────────────────────────────────────
+private val S_Green900   = Color(0xFF06402B)
+private val S_Green800   = Color(0xFF0A5C3D)
+private val S_Green700   = Color(0xFF0D7050)
+private val S_Green100   = Color(0xFFDDF1E8)
+private val S_Green50    = Color(0xFFF0FAF5)
+private val S_Red600     = Color(0xFFDC2626)
+private val S_Red50      = Color(0xFFFEF2F2)
+private val S_Red100     = Color(0xFFFFE4E4)
+private val S_Canvas     = Color(0xFFF5F7F6)
+private val S_Surface    = Color(0xFFFFFFFF)
+private val S_TextPrimary   = Color(0xFF111827)
+private val S_TextSecondary = Color(0xFF374151)
+private val S_TextMuted     = Color(0xFF6B7280)
+private val S_Divider       = Color(0xFFE5E7EB)
+private val S_Border        = Color(0xFFD1D5DB)
 
+// ── Data models ───────────────────────────────────────────────────────────────
 data class ShopItem(
     val name: String,
     val address: String,
@@ -51,14 +58,15 @@ data class ShopItem(
 
 enum class ShopType { HOSPITAL, BIKE_SHOP }
 
+// ── Screen ────────────────────────────────────────────────────────────────────
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ShopsScreen(
-    paddingValues  : PaddingValues,
-    shops          : List<ShopItem>  = emptyList(),
-    isLoadingShops : Boolean         = false,
-    fetchFailed    : Boolean         = false,
-    onRetry        : () -> Unit      = {},
+    paddingValues   : PaddingValues,
+    shops           : List<ShopItem>     = emptyList(),
+    isLoadingShops  : Boolean            = false,
+    fetchFailed     : Boolean            = false,
+    onRetry         : () -> Unit         = {},
     onDirectionClick: (GeoPoint) -> Unit
 ) {
     var selectedFilter by remember { mutableStateOf("All") }
@@ -67,9 +75,9 @@ fun ShopsScreen(
     val filteredShops = remember(selectedFilter, searchQuery, shops) {
         shops.filter { shop ->
             val matchesFilter = when (selectedFilter) {
-                "Hospitals"  -> shop.type == ShopType.HOSPITAL
+                "Hospitals"    -> shop.type == ShopType.HOSPITAL
                 "Repair Shops" -> shop.type == ShopType.BIKE_SHOP
-                else         -> true
+                else           -> true
             }
             val matchesSearch = searchQuery.isBlank() ||
                     shop.name.contains(searchQuery, ignoreCase = true) ||
@@ -80,52 +88,77 @@ fun ShopsScreen(
 
     val hospitalCount = shops.count { it.type == ShopType.HOSPITAL }
     val bikeShopCount = shops.count { it.type == ShopType.BIKE_SHOP }
-    val closestHosp   = shops.filter { it.type == ShopType.HOSPITAL }.minByOrNull { it.distanceKm }
-    val closestShop   = shops.filter { it.type == ShopType.BIKE_SHOP }.minByOrNull { it.distanceKm }
+    val allCount      = shops.size
 
     Scaffold(
         topBar = {
             TopAppBar(
                 title = {
-                    Text("Nearby Services", fontWeight = FontWeight.ExtraBold,
-                        fontSize = 20.sp, color = Color.White, letterSpacing = 0.2.sp)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.LocalPharmacy, null,
+                            tint = Color.White, modifier = Modifier.size(22.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            "Nearby Services",
+                            fontWeight    = FontWeight.ExtraBold,
+                            fontSize      = 20.sp,
+                            color         = Color.White,
+                            letterSpacing = 0.3.sp
+                        )
+                    }
                 },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = Green900)
+                colors   = TopAppBarDefaults.topAppBarColors(containerColor = S_Green900),
+                modifier = Modifier
             )
         },
-        containerColor = SurfaceBg
+        containerColor = S_Canvas
     ) { innerPadding ->
         LazyColumn(
-            modifier            = Modifier.fillMaxSize().padding(innerPadding),
-            contentPadding      = PaddingValues(bottom = paddingValues.calculateBottomPadding() + 32.dp),
-            verticalArrangement = Arrangement.spacedBy(0.dp)
+            modifier       = Modifier.fillMaxSize().padding(innerPadding),
+            contentPadding = PaddingValues(bottom = paddingValues.calculateBottomPadding() + 32.dp)
         ) {
+
             // ── Hero search bar ───────────────────────────────────────────────
             item {
                 Box(
-                    modifier = Modifier.fillMaxWidth()
-                        .background(Brush.verticalGradient(listOf(Green900, Green700), 0f, 220f))
-                        .padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 24.dp)
+                    Modifier
+                        .fillMaxWidth()
+                        .background(
+                            Brush.verticalGradient(listOf(S_Green900, S_Green800))
+                        )
+                        .padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 20.dp)
                 ) {
                     OutlinedTextField(
                         value         = searchQuery,
                         onValueChange = { searchQuery = it },
-                        placeholder   = { Text("Search hospitals or repair shops…", fontSize = 14.sp, color = Color.White.copy(alpha = 0.55f)) },
-                        leadingIcon   = { Icon(Icons.Default.Search, null, tint = Color.White.copy(alpha = 0.75f), modifier = Modifier.size(20.dp)) },
-                        trailingIcon  = {
+                        placeholder   = {
+                            Text(
+                                "Search services here…",
+                                fontSize = 14.sp,
+                                color    = Color.White.copy(alpha = 0.5f)
+                            )
+                        },
+                        leadingIcon  = {
+                            Icon(Icons.Default.Search, null,
+                                tint     = Color.White.copy(alpha = 0.65f),
+                                modifier = Modifier.size(20.dp))
+                        },
+                        trailingIcon = {
                             if (searchQuery.isNotEmpty()) {
                                 IconButton(onClick = { searchQuery = "" }) {
-                                    Icon(Icons.Default.Close, "Clear", tint = Color.White.copy(alpha = 0.7f), modifier = Modifier.size(18.dp))
+                                    Icon(Icons.Default.Close, "Clear",
+                                        tint     = Color.White.copy(alpha = 0.65f),
+                                        modifier = Modifier.size(18.dp))
                                 }
                             }
                         },
                         singleLine = true,
-                        shape      = RoundedCornerShape(16.dp),
+                        shape      = RoundedCornerShape(14.dp),
                         colors     = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor      = Color.White.copy(alpha = 0.7f),
-                            unfocusedBorderColor    = Color.White.copy(alpha = 0.25f),
-                            focusedContainerColor   = Color.White.copy(alpha = 0.14f),
-                            unfocusedContainerColor = Color.White.copy(alpha = 0.09f),
+                            focusedBorderColor      = Color.White.copy(alpha = 0.6f),
+                            unfocusedBorderColor    = Color.White.copy(alpha = 0.2f),
+                            focusedContainerColor   = Color.White.copy(alpha = 0.12f),
+                            unfocusedContainerColor = Color.White.copy(alpha = 0.08f),
                             cursorColor             = Color.White,
                             focusedTextColor        = Color.White,
                             unfocusedTextColor      = Color.White
@@ -136,186 +169,155 @@ fun ShopsScreen(
                 }
             }
 
-            // ── Quick stat cards ──────────────────────────────────────────────
-            item {
-                Row(
-                    modifier = Modifier.fillMaxWidth()
-                        .padding(horizontal = 16.dp)
-                        .offset(y = (-18).dp),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    // Hospital card
-                    Card(modifier = Modifier.weight(1f), shape = RoundedCornerShape(18.dp),
-                        colors = CardDefaults.cardColors(containerColor = Color.White),
-                        elevation = CardDefaults.cardElevation(6.dp)) {
-                        Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                                Box(modifier = Modifier.size(40.dp).clip(RoundedCornerShape(12.dp)).background(RedLight), contentAlignment = Alignment.Center) {
-                                    Icon(Icons.Default.LocalHospital, null, tint = RedPrimary, modifier = Modifier.size(22.dp))
-                                }
-                                Column {
-                                    if (isLoadingShops) CircularProgressIndicator(color = RedPrimary, modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-                                    else Text("$hospitalCount", fontWeight = FontWeight.ExtraBold, fontSize = 22.sp, color = OnSurface)
-                                    Text("Hospitals", fontSize = 11.sp, color = TextSub, fontWeight = FontWeight.Medium)
-                                }
-                            }
-                            // Closest hospital hint
-                            if (closestHosp != null && !isLoadingShops) {
-                                HorizontalDivider(color = Color(0xFFF5F5F5))
-                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                                    Icon(Icons.Default.NearMe, null, tint = RedPrimary, modifier = Modifier.size(11.dp))
-                                    Text("Nearest: ${closestHosp.distance}", fontSize = 11.sp,
-                                        color = RedPrimary, fontWeight = FontWeight.SemiBold,
-                                        maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                }
-                            }
-                        }
-                    }
-                    // Bike shop card
-                    Card(modifier = Modifier.weight(1f), shape = RoundedCornerShape(18.dp),
-                        colors = CardDefaults.cardColors(containerColor = Color.White),
-                        elevation = CardDefaults.cardElevation(6.dp)) {
-                        Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                                Box(modifier = Modifier.size(40.dp).clip(RoundedCornerShape(12.dp)).background(Green100), contentAlignment = Alignment.Center) {
-                                    Icon(Icons.Default.Build, null, tint = Green700, modifier = Modifier.size(22.dp))
-                                }
-                                Column {
-                                    if (isLoadingShops) CircularProgressIndicator(color = Green700, modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-                                    else Text("$bikeShopCount", fontWeight = FontWeight.ExtraBold, fontSize = 22.sp, color = OnSurface)
-                                    Text("Repair Shops", fontSize = 11.sp, color = TextSub, fontWeight = FontWeight.Medium)
-                                }
-                            }
-                            // Closest bike shop hint
-                            if (closestShop != null && !isLoadingShops) {
-                                HorizontalDivider(color = Color(0xFFF5F5F5))
-                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                                    Icon(Icons.Default.NearMe, null, tint = Green700, modifier = Modifier.size(11.dp))
-                                    Text("Nearest: ${closestShop.distance}", fontSize = 11.sp,
-                                        color = Green700, fontWeight = FontWeight.SemiBold,
-                                        maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            // ── Filter chips ──────────────────────────────────────────────────
+            // ── Filter chips with counts ──────────────────────────────────────
             item {
                 LazyRow(
-                    modifier = Modifier.fillMaxWidth().padding(top = 2.dp, bottom = 14.dp),
+                    modifier       = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 12.dp),
                     contentPadding = PaddingValues(horizontal = 16.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    val filters = listOf(
-                        Triple("All",        Icons.Default.Apps,                           Color(0xFF555555)),
-                        Triple("Hospitals",  Icons.Default.LocalHospital,                  RedPrimary),
-                        Triple("Repair Shops", Icons.Default.Build, Green700)
+                    data class ChipDef(
+                        val label: String,
+                        val count: Int,
+                        val icon: ImageVector,
+                        val activeColor: Color
                     )
-                    items(filters) { (label, icon, color) ->
-                        val selected = selectedFilter == label
+                    val chips = listOf(
+                        ChipDef("All",          allCount,      Icons.Default.Apps,           S_Green900),
+                        ChipDef("Hospitals",    hospitalCount, Icons.Default.LocalHospital,  S_Red600),
+                        ChipDef("Repair Shops", bikeShopCount, Icons.Default.Build,          S_Green700)
+                    )
+                    items(chips) { chip ->
+                        val isSelected = selectedFilter == chip.label
                         FilterChip(
-                            selected    = selected,
-                            onClick     = { selectedFilter = label },
-                            label       = { Text(label, fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium, fontSize = 13.sp) },
-                            leadingIcon = { Icon(icon, null, modifier = Modifier.size(16.dp)) },
+                            selected = isSelected,
+                            onClick  = { selectedFilter = chip.label },
+                            label    = {
+                                Text(
+                                    "${chip.label} (${chip.count})",
+                                    fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                                    fontSize   = 13.sp
+                                )
+                            },
+                            leadingIcon = {
+                                Icon(chip.icon, null, modifier = Modifier.size(15.dp))
+                            },
                             colors = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor   = if (label == "Hospitals") RedPrimary else Green900,
+                                selectedContainerColor   = chip.activeColor,
                                 selectedLabelColor       = Color.White,
                                 selectedLeadingIconColor = Color.White,
-                                containerColor           = Color.White,
-                                labelColor               = OnSurface,
-                                iconColor                = color
+                                containerColor           = S_Surface,
+                                labelColor               = S_TextSecondary,
+                                iconColor                = chip.activeColor
                             ),
                             border = FilterChipDefaults.filterChipBorder(
-                                enabled = true, selected = selected,
-                                borderColor = Color(0xFFE0E0E0), selectedBorderColor = Color.Transparent
+                                enabled             = true,
+                                selected            = isSelected,
+                                borderColor         = S_Border,
+                                selectedBorderColor = Color.Transparent,
+                                borderWidth         = 1.dp,
+                                selectedBorderWidth = 0.dp
                             ),
-                            shape     = RoundedCornerShape(12.dp),
-                            elevation = FilterChipDefaults.filterChipElevation(elevation = 2.dp, pressedElevation = 0.dp)
+                            shape = RoundedCornerShape(20.dp)
                         )
                     }
                 }
             }
 
-            // ── Section header ────────────────────────────────────────────────
-            item {
-                Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment     = Alignment.CenterVertically) {
-                    Text(
-                        when (selectedFilter) { "Hospitals" -> "Hospitals"; "Repair Shops" -> "Repair Shops"; else -> "All Services" },
-                        fontWeight = FontWeight.ExtraBold, fontSize = 16.sp, color = OnSurface
-                    )
-                    if (isLoadingShops) {
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            CircularProgressIndicator(color = Green900, modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
-                            Text("Scanning area…", fontSize = 12.sp, color = TextSub, fontWeight = FontWeight.Medium)
-                        }
-                    } else {
-                        Box(modifier = Modifier.clip(RoundedCornerShape(20.dp)).background(Green100).padding(horizontal = 12.dp, vertical = 5.dp)) {
-                            Text("${filteredShops.size} found", fontSize = 12.sp, color = Green900, fontWeight = FontWeight.Bold)
-                        }
-                    }
-                }
-                Spacer(Modifier.height(4.dp))
-            }
-
-            // ── Loading state ─────────────────────────────────────────────────
+            // ── Loading state — shimmer cards ─────────────────────────────────
             if (isLoadingShops && shops.isEmpty()) {
-                item {
-                    Column(modifier = Modifier.fillMaxWidth().padding(vertical = 56.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                        CircularProgressIndicator(color = Green900, modifier = Modifier.size(36.dp))
-                        Text("Scanning your area…", fontSize = 14.sp, color = TextSub, fontWeight = FontWeight.Medium)
-                        Text("Finding hospitals & bike shops within 3 km", fontSize = 12.sp, color = Color.Gray)
-                    }
+                items(4) {
+                    ShopShimmerCard(
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 5.dp)
+                    )
                 }
             }
 
-            // ── Empty / GPS not ready ─────────────────────────────────────────
-            if (!isLoadingShops && shops.isEmpty()) {
+            // ── Error state ───────────────────────────────────────────────────
+            if (!isLoadingShops && fetchFailed && shops.isEmpty()) {
                 item {
-                    Column(modifier = Modifier.fillMaxWidth().padding(vertical = 56.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Box(modifier = Modifier.size(72.dp).clip(CircleShape)
-                            .background(if (fetchFailed) Color(0xFFFFEBEE) else Color(0xFFF0F0F0)),
-                            contentAlignment = Alignment.Center) {
-                            Icon(if (fetchFailed) Icons.Default.WifiOff else Icons.Default.LocationSearching, null,
-                                tint = if (fetchFailed) Color(0xFFD32F2F) else Color(0xFFBBBBBB), modifier = Modifier.size(38.dp))
-                        }
-                        Text(if (fetchFailed) "Could not load services" else "Waiting for GPS fix",
-                            fontWeight = FontWeight.Bold, fontSize = 16.sp, color = Color(0xFF555555))
-                        Text(if (fetchFailed) "Check your connection and try again"
-                        else "Move to the Map tab to enable location,\nthen return here",
-                            fontSize = 13.sp, color = TextSub, textAlign = TextAlign.Center)
-                        if (fetchFailed) {
-                            Spacer(Modifier.height(4.dp))
-                            Button(onClick = onRetry, shape = RoundedCornerShape(14.dp),
-                                colors = ButtonDefaults.buttonColors(containerColor = Green900, contentColor = Color.White),
-                                modifier = Modifier.height(46.dp)) {
-                                Icon(Icons.Default.Refresh, null, modifier = Modifier.size(18.dp))
-                                Spacer(Modifier.width(8.dp))
-                                Text("Retry", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                    ServiceEmptyState(
+                        icon    = Icons.Default.WifiOff,
+                        iconBg  = S_Red50,
+                        iconTint = S_Red600,
+                        title   = "Could not load services",
+                        message = "Check your connection and try again.",
+                        action  = {
+                            Button(
+                                onClick = onRetry,
+                                shape   = RoundedCornerShape(12.dp),
+                                colors  = ButtonDefaults.buttonColors(
+                                    containerColor = S_Green900,
+                                    contentColor   = Color.White),
+                                modifier = Modifier.height(44.dp)
+                            ) {
+                                Icon(Icons.Default.Refresh, null, modifier = Modifier.size(16.dp))
+                                Spacer(Modifier.width(6.dp))
+                                Text("Retry", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
                             }
                         }
-                    }
+                    )
+                }
+            }
+
+            // ── GPS not ready ─────────────────────────────────────────────────
+            if (!isLoadingShops && !fetchFailed && shops.isEmpty()) {
+                item {
+                    ServiceEmptyState(
+                        icon     = Icons.Default.LocationSearching,
+                        iconBg   = Color(0xFFF3F4F6),
+                        iconTint = S_TextMuted,
+                        title    = "Waiting for GPS fix",
+                        message  = "Go to the Map tab to enable location, then return here."
+                    )
                 }
             }
 
             // ── No search results ─────────────────────────────────────────────
             if (!isLoadingShops && shops.isNotEmpty() && filteredShops.isEmpty()) {
                 item {
-                    Column(modifier = Modifier.fillMaxWidth().padding(vertical = 56.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Box(modifier = Modifier.size(72.dp).clip(CircleShape).background(Color(0xFFF0F0F0)), contentAlignment = Alignment.Center) {
-                            Icon(Icons.Default.SearchOff, null, tint = Color(0xFFBBBBBB), modifier = Modifier.size(38.dp))
-                        }
-                        Text("Nothing found", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = Color(0xFF555555))
-                        Text(if (searchQuery.isNotEmpty()) "Try a different keyword" else "Try changing your filter",
-                            fontSize = 13.sp, color = TextSub)
+                    ServiceEmptyState(
+                        icon     = Icons.Default.SearchOff,
+                        iconBg   = Color(0xFFF3F4F6),
+                        iconTint = S_TextMuted,
+                        title    = "Nothing found",
+                        message  = if (searchQuery.isNotEmpty())
+                            "Try a different keyword."
+                        else
+                            "Try changing your filter."
+                    )
+                }
+            }
+
+            // ── Result count label ────────────────────────────────────────────
+            if (!isLoadingShops && filteredShops.isNotEmpty()) {
+                item {
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            when (selectedFilter) {
+                                "Hospitals"    -> "Hospitals nearby"
+                                "Repair Shops" -> "Repair shops nearby"
+                                else           -> "All services nearby"
+                            },
+                            fontSize   = 13.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color      = S_TextPrimary
+                        )
+                        Text(
+                            "${filteredShops.size} found",
+                            fontSize = 12.sp,
+                            color    = S_TextMuted
+                        )
                     }
+                    Spacer(Modifier.height(4.dp))
                 }
             }
 
@@ -328,154 +330,306 @@ fun ShopsScreen(
                 )
             }
 
-            item { Spacer(Modifier.height(12.dp)) }
+            item { Spacer(Modifier.height(16.dp)) }
         }
     }
 }
 
+// ── Shop card — clean, scannable, action-forward ──────────────────────────────
 @Composable
 fun ShopCard(
-    shop             : ShopItem,
-    onDirectionClick : (GeoPoint) -> Unit,
-    modifier         : Modifier = Modifier
+    shop            : ShopItem,
+    onDirectionClick: (GeoPoint) -> Unit,
+    modifier        : Modifier = Modifier
 ) {
-    val isHospital      = shop.type == ShopType.HOSPITAL
-    val primaryColor    = if (isHospital) RedPrimary else Green700
-    val bgColor         = if (isHospital) RedLight   else Green100
-    val typeLabel       = if (isHospital) "Hospital"  else "Repair Shop"
-    val isOpen24        = shop.openHours.contains("24", ignoreCase = true)
-    val hasRealAddress  = shop.address != "See map" && shop.address.isNotBlank()
-    val hasRealHours    = shop.openHours != "See location" && shop.openHours.isNotBlank()
+    val isHospital   = shop.type == ShopType.HOSPITAL
+    val accentColor  = if (isHospital) S_Red600  else S_Green700
+    val accentBg     = if (isHospital) S_Red50   else S_Green50
+    val accentBg2    = if (isHospital) S_Red100  else S_Green100
+    val typeLabel    = if (isHospital) "Hospital" else "Repair Shop"
+    val typeIcon     = if (isHospital) Icons.Default.LocalHospital else Icons.Default.Build
+    val isOpen24     = shop.openHours.contains("24", ignoreCase = true)
+    val hasAddress   = shop.address != "See map" && shop.address.isNotBlank()
+    val hasHours     = shop.openHours != "See location" && shop.openHours.isNotBlank()
 
     Card(
         modifier  = modifier.fillMaxWidth(),
-        shape     = RoundedCornerShape(20.dp),
-        colors    = CardDefaults.cardColors(containerColor = Color.White),
-        elevation = CardDefaults.cardElevation(3.dp)
+        shape     = RoundedCornerShape(16.dp),
+        colors    = CardDefaults.cardColors(containerColor = S_Surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
     ) {
-        Column(modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.fillMaxWidth()) {
 
-            // ── Coloured top accent bar ───────────────────────────────────────
-            Box(
-                modifier = Modifier
+            // ── Left accent bar + header ──────────────────────────────────────
+            Row(
+                Modifier
                     .fillMaxWidth()
-                    .background(bgColor, RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp))
-                    .padding(horizontal = 16.dp, vertical = 12.dp)
+                    .height(IntrinsicSize.Min)
             ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
+                // Left color bar
+                Box(
+                    Modifier
+                        .width(4.dp)
+                        .fillMaxHeight()
+                        .background(
+                            accentColor,
+                            RoundedCornerShape(topStart = 16.dp, bottomStart = 16.dp)
+                        )
+                )
+
+                Column(
+                    Modifier
+                        .weight(1f)
+                        .padding(start = 14.dp, end = 16.dp, top = 14.dp, bottom = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    // Left: icon + name
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp),
-                        modifier = Modifier.weight(1f)) {
-                        Box(modifier = Modifier.size(48.dp).clip(RoundedCornerShape(14.dp))
-                            .background(Color.White.copy(alpha = 0.7f)), contentAlignment = Alignment.Center) {
-                            if (isHospital) {
-                                Icon(Icons.Default.LocalHospital, null, tint = primaryColor, modifier = Modifier.size(26.dp))
-                            } else {
-                                Icon(Icons.Default.Build, null, tint = primaryColor, modifier = Modifier.size(26.dp))
+
+                    // Name + distance row
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        verticalAlignment     = Alignment.Top,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(
+                            verticalAlignment     = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            modifier              = Modifier.weight(1f)
+                        ) {
+                            Box(
+                                Modifier
+                                    .size(40.dp)
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(accentBg),
+                                Alignment.Center
+                            ) {
+                                Icon(typeIcon, null, tint = accentColor, modifier = Modifier.size(20.dp))
                             }
-                        }
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(shop.name, fontWeight = FontWeight.ExtraBold, fontSize = 15.sp,
-                                lineHeight = 20.sp, color = OnSurface, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                            Spacer(Modifier.height(3.dp))
-                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-                                Box(modifier = Modifier.clip(RoundedCornerShape(6.dp))
-                                    .background(primaryColor).padding(horizontal = 8.dp, vertical = 2.dp)) {
-                                    Text(typeLabel, fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color.White)
-                                }
-                                if (isOpen24) {
-                                    Box(modifier = Modifier.clip(RoundedCornerShape(6.dp))
-                                        .background(Color(0xFF2E7D32)).padding(horizontal = 8.dp, vertical = 2.dp)) {
-                                        Text("24h", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                            Column(
+                                Modifier.weight(1f),
+                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Text(
+                                    shop.name,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize   = 15.sp,
+                                    color      = S_TextPrimary,
+                                    maxLines   = 2,
+                                    overflow   = TextOverflow.Ellipsis,
+                                    lineHeight = 20.sp
+                                )
+                                // Type + open badges
+                                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    Box(
+                                        Modifier
+                                            .clip(RoundedCornerShape(6.dp))
+                                            .background(accentBg2)
+                                            .padding(horizontal = 7.dp, vertical = 2.dp)
+                                    ) {
+                                        Text(
+                                            typeLabel,
+                                            fontSize   = 10.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color      = accentColor
+                                        )
+                                    }
+                                    if (isOpen24) {
+                                        Box(
+                                            Modifier
+                                                .clip(RoundedCornerShape(6.dp))
+                                                .background(Color(0xFFDCFCE7))
+                                                .padding(horizontal = 7.dp, vertical = 2.dp)
+                                        ) {
+                                            Text(
+                                                "24h",
+                                                fontSize   = 10.sp,
+                                                fontWeight = FontWeight.SemiBold,
+                                                color      = Color(0xFF166534)
+                                            )
+                                        }
                                     }
                                 }
-                                if (shop.rating > 0) {
-                                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
-                                        Icon(Icons.Default.Star, null, tint = Color(0xFFFFB800), modifier = Modifier.size(12.dp))
-                                        Text(String.format("%.1f", shop.rating), fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFF666666))
-                                    }
-                                }
                             }
                         }
-                    }
-                    // Right: distance badge
-                    Box(modifier = Modifier.clip(RoundedCornerShape(12.dp))
-                        .background(primaryColor).padding(horizontal = 10.dp, vertical = 6.dp)) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Icon(Icons.Default.NearMe, null, tint = Color.White, modifier = Modifier.size(14.dp))
+
+                        // Distance badge
+                        Spacer(Modifier.width(8.dp))
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            modifier            = Modifier
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(accentBg)
+                                .padding(horizontal = 10.dp, vertical = 6.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.NearMe, null,
+                                tint     = accentColor,
+                                modifier = Modifier.size(13.dp)
+                            )
                             Spacer(Modifier.height(2.dp))
-                            Text(shop.distance, fontSize = 11.sp, fontWeight = FontWeight.ExtraBold, color = Color.White)
+                            Text(
+                                shop.distance,
+                                fontSize   = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                color      = accentColor
+                            )
                         }
                     }
-                }
-            }
 
-            // ── Info rows ─────────────────────────────────────────────────────
-            Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)) {
-
-                if (hasRealAddress) {
-                    Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Box(modifier = Modifier.size(28.dp).clip(CircleShape).background(SurfaceBg),
-                            contentAlignment = Alignment.Center) {
-                            Icon(Icons.Default.LocationOn, null, tint = primaryColor.copy(alpha = 0.8f), modifier = Modifier.size(14.dp))
+                    // ── Address ───────────────────────────────────────────────
+                    if (hasAddress) {
+                        Row(
+                            verticalAlignment     = Alignment.Top,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.LocationOn, null,
+                                tint     = S_TextMuted,
+                                modifier = Modifier.size(14.dp).padding(top = 1.dp)
+                            )
+                            Text(
+                                shop.address,
+                                fontSize   = 13.sp,
+                                color      = S_TextSecondary,
+                                lineHeight = 18.sp,
+                                maxLines   = 2,
+                                overflow   = TextOverflow.Ellipsis,
+                                modifier   = Modifier.weight(1f)
+                            )
                         }
-                        Text(shop.address, fontSize = 13.sp, color = TextSub, lineHeight = 19.sp, modifier = Modifier.weight(1f))
                     }
-                }
 
-                if (hasRealHours) {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Box(modifier = Modifier.size(28.dp).clip(CircleShape).background(SurfaceBg),
-                            contentAlignment = Alignment.Center) {
-                            Icon(Icons.Default.AccessTime, null, tint = primaryColor.copy(alpha = 0.8f), modifier = Modifier.size(14.dp))
+                    // ── Hours ─────────────────────────────────────────────────
+                    if (hasHours) {
+                        Row(
+                            verticalAlignment     = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.AccessTime, null,
+                                tint     = S_TextMuted,
+                                modifier = Modifier.size(14.dp)
+                            )
+                            Text(
+                                shop.openHours,
+                                fontSize = 13.sp,
+                                color    = S_TextSecondary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f)
+                            )
                         }
-                        Text(shop.openHours, fontSize = 13.sp, color = TextSub,
-                            maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
                     }
-                }
 
-                // ── What to expect row (always shown) ────────────────────────
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Box(modifier = Modifier.size(28.dp).clip(CircleShape).background(SurfaceBg),
-                        contentAlignment = Alignment.Center) {
-                        Icon(
-                            if (isHospital) Icons.Default.HealthAndSafety else Icons.Default.Build,
-                            null, tint = primaryColor.copy(alpha = 0.8f), modifier = Modifier.size(14.dp)
+                    // ── Get Directions button ─────────────────────────────────
+                    Button(
+                        onClick  = { onDirectionClick(shop.location) },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(44.dp),
+                        shape    = RoundedCornerShape(12.dp),
+                        colors   = ButtonDefaults.buttonColors(
+                            containerColor = accentColor,
+                            contentColor   = Color.White
+                        ),
+                        elevation = ButtonDefaults.buttonElevation(defaultElevation = 0.dp)
+                    ) {
+                        Icon(Icons.Default.Directions, null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            "Get Directions",
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize   = 14.sp
                         )
                     }
-                    Text(
-                        if (isHospital) "Emergency care • First aid • Medical services"
-                        else "Repair services • Parts • Accessories",
-                        fontSize = 13.sp, color = TextSub, modifier = Modifier.weight(1f)
-                    )
-                }
-
-                Spacer(Modifier.height(4.dp))
-
-                Button(
-                    onClick   = { onDirectionClick(shop.location) },
-                    modifier  = Modifier.fillMaxWidth().height(48.dp),
-                    colors    = ButtonDefaults.buttonColors(
-                        containerColor = primaryColor,
-                        contentColor   = Color.White
-                    ),
-                    shape     = RoundedCornerShape(14.dp),
-                    elevation = ButtonDefaults.buttonElevation(defaultElevation = 2.dp)
-                ) {
-                    Box(modifier = Modifier.size(26.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.18f)),
-                        contentAlignment = Alignment.Center) {
-                        Icon(Icons.Default.Directions, null, tint = Color.White, modifier = Modifier.size(15.dp))
-                    }
-                    Spacer(Modifier.width(8.dp))
-                    Text("Get Directions", color = Color.White,
-                        fontWeight = FontWeight.ExtraBold, fontSize = 14.sp, letterSpacing = 0.3.sp)
                 }
             }
+        }
+    }
+}
+
+// ── Shimmer loading card ──────────────────────────────────────────────────────
+@Composable
+private fun ShopShimmerCard(modifier: Modifier = Modifier) {
+    val infiniteTransition = androidx.compose.animation.core.rememberInfiniteTransition(label = "shimmer")
+    val shimmerAlpha by infiniteTransition.animateFloat(
+        initialValue  = 0.3f,
+        targetValue   = 0.7f,
+        animationSpec = androidx.compose.animation.core.infiniteRepeatable(
+            animation  = androidx.compose.animation.core.tween(900),
+            repeatMode = androidx.compose.animation.core.RepeatMode.Reverse
+        ),
+        label = "shimmerAlpha"
+    )
+    val shimmer = Color(0xFFE0E0E0).copy(alpha = shimmerAlpha)
+
+    Card(
+        modifier  = modifier.fillMaxWidth(),
+        shape     = RoundedCornerShape(16.dp),
+        colors    = CardDefaults.cardColors(containerColor = S_Surface),
+        elevation = CardDefaults.cardElevation(2.dp)
+    ) {
+        Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min)) {
+            Box(Modifier.width(4.dp).fillMaxHeight().background(shimmer,
+                RoundedCornerShape(topStart = 16.dp, bottomStart = 16.dp)))
+            Column(
+                Modifier.weight(1f).padding(start = 14.dp, end = 16.dp, top = 14.dp, bottom = 14.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Box(Modifier.size(40.dp).clip(RoundedCornerShape(12.dp)).background(shimmer))
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Box(Modifier.width(160.dp).height(13.dp).clip(RoundedCornerShape(6.dp)).background(shimmer))
+                        Box(Modifier.width(80.dp).height(10.dp).clip(RoundedCornerShape(6.dp)).background(shimmer))
+                    }
+                }
+                Box(Modifier.fillMaxWidth(0.85f).height(10.dp).clip(RoundedCornerShape(6.dp)).background(shimmer))
+                Box(Modifier.fillMaxWidth().height(44.dp).clip(RoundedCornerShape(12.dp)).background(shimmer))
+            }
+        }
+    }
+}
+
+// ── Empty / error state ───────────────────────────────────────────────────────
+@Composable
+private fun ServiceEmptyState(
+    icon    : androidx.compose.ui.graphics.vector.ImageVector,
+    iconBg  : Color,
+    iconTint: Color,
+    title   : String,
+    message : String,
+    action  : (@Composable () -> Unit)? = null
+) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(vertical = 56.dp, horizontal = 32.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Box(
+            Modifier.size(72.dp).clip(CircleShape).background(iconBg),
+            Alignment.Center
+        ) {
+            Icon(icon, null, tint = iconTint, modifier = Modifier.size(34.dp))
+        }
+        Text(
+            title,
+            fontWeight = FontWeight.SemiBold,
+            fontSize   = 16.sp,
+            color      = S_TextPrimary,
+            textAlign  = TextAlign.Center
+        )
+        Text(
+            message,
+            fontSize   = 13.sp,
+            color      = S_TextMuted,
+            textAlign  = TextAlign.Center,
+            lineHeight = 20.sp
+        )
+        if (action != null) {
+            Spacer(Modifier.height(4.dp))
+            action()
         }
     }
 }

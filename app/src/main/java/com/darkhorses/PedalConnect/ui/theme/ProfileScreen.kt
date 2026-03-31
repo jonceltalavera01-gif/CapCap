@@ -92,6 +92,9 @@ fun ProfileScreen(navController: NavController, userName: String, paddingValues:
 
     var userEmail     by remember { mutableStateOf<String?>(null) }
     var userCreatedAt by remember { mutableStateOf<String?>(null) }
+    var userBio       by remember { mutableStateOf<String?>(null) }
+    var userBikeType  by remember { mutableStateOf<String?>(null) }
+    var userSkillLevel by remember { mutableStateOf<String?>(null) }
     var photoUrl         by remember { mutableStateOf<String?>(null) }
     var isUploadingPhoto by remember { mutableStateOf(false) }
     var userDocId        by remember { mutableStateOf<String?>(null) }
@@ -189,10 +192,13 @@ fun ProfileScreen(navController: NavController, userName: String, paddingValues:
                 snap.documents.firstOrNull()?.let { doc ->
                     userDocId     = doc.id
                     photoUrl      = doc.getString("photoUrl")
-                    userEmail     = doc.getString("email")
-                    userCreatedAt = doc.getTimestamp("createdAt")?.toDate()?.let {
+                    userEmail      = doc.getString("email")
+                    userCreatedAt  = doc.getTimestamp("createdAt")?.toDate()?.let {
                         java.text.SimpleDateFormat("MMMM d, yyyy", java.util.Locale.getDefault()).format(it)
                     }
+                    userBio        = doc.getString("bio")
+                    userBikeType   = doc.getString("bikeType")
+                    userSkillLevel = doc.getString("skillLevel")
                 }
             }
     }
@@ -311,10 +317,10 @@ fun ProfileScreen(navController: NavController, userName: String, paddingValues:
                             tint = Color.White, modifier = Modifier.size(20.dp))
                         Text(
                             "My Profile",
-                            fontWeight    = FontWeight.Bold,
+                            fontWeight    = FontWeight.ExtraBold,
+                            fontSize      = 20.sp,
                             color         = Color.White,
-                            fontSize      = 18.sp,
-                            letterSpacing = (-0.3).sp
+                            letterSpacing = 0.3.sp
                         )
                     }
                 },
@@ -458,6 +464,80 @@ fun ProfileScreen(navController: NavController, userName: String, paddingValues:
                                         fontSize = 11.sp,
                                         color    = Color.White.copy(alpha = 0.55f)
                                     )
+                                }
+                            }
+
+                            // Bio
+                            Text(
+                                text     = if (userBio.isNullOrBlank()) "No bio yet" else userBio!!,
+                                fontSize = 12.sp,
+                                color    = if (userBio.isNullOrBlank())
+                                    Color.White.copy(alpha = 0.35f)
+                                else
+                                    Color.White.copy(alpha = 0.80f),
+                                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                                modifier  = Modifier.padding(horizontal = 24.dp)
+                            )
+
+                            // Bike type + Skill level pills
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalAlignment     = Alignment.CenterVertically
+                            ) {
+                                // Bike type pill
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(20.dp))
+                                        .background(Color.White.copy(alpha = 0.15f))
+                                        .padding(horizontal = 10.dp, vertical = 4.dp)
+                                ) {
+                                    Row(
+                                        verticalAlignment     = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                    ) {
+                                        Icon(
+                                            Icons.Default.DirectionsBike, null,
+                                            tint     = Color.White.copy(alpha = 0.75f),
+                                            modifier = Modifier.size(11.dp)
+                                        )
+                                        Text(
+                                            text     = if (userBikeType.isNullOrBlank()) "No bike set" else userBikeType!!,
+                                            fontSize = 11.sp,
+                                            color    = if (userBikeType.isNullOrBlank())
+                                                Color.White.copy(alpha = 0.35f)
+                                            else
+                                                Color.White.copy(alpha = 0.85f),
+                                            fontWeight = FontWeight.Medium
+                                        )
+                                    }
+                                }
+
+                                // Skill level pill
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(20.dp))
+                                        .background(Color.White.copy(alpha = 0.15f))
+                                        .padding(horizontal = 10.dp, vertical = 4.dp)
+                                ) {
+                                    Row(
+                                        verticalAlignment     = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                    ) {
+                                        Icon(
+                                            Icons.Default.Star, null,
+                                            tint     = Color.White.copy(alpha = 0.75f),
+                                            modifier = Modifier.size(11.dp)
+                                        )
+                                        Text(
+                                            text     = if (userSkillLevel.isNullOrBlank()) "No level set" else userSkillLevel!!,
+                                            fontSize = 11.sp,
+                                            color    = if (userSkillLevel.isNullOrBlank())
+                                                Color.White.copy(alpha = 0.35f)
+                                            else
+                                                Color.White.copy(alpha = 0.85f),
+                                            fontWeight = FontWeight.Medium
+                                        )
+                                    }
                                 }
                             }
                             if (isUploadingPhoto) {

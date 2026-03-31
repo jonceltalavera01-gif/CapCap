@@ -108,6 +108,15 @@ fun AddPostScreen(navController: NavController, userName: String) {
     var visible           by remember { mutableStateOf(false) }
     var selectedImageUri  by remember { mutableStateOf<Uri?>(null) }
     var imageError        by remember { mutableStateOf("") }
+    var userPhotoUrl      by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(userName) {
+        db.collection("users").whereEqualTo("username", userName)
+            .limit(1).get()
+            .addOnSuccessListener { snap ->
+                userPhotoUrl = snap.documents.firstOrNull()?.getString("photoUrl")
+            }
+    }
 
     val scope = rememberCoroutineScope()
 
@@ -218,7 +227,16 @@ fun AddPostScreen(navController: NavController, userName: String) {
                                     .background(Brush.linearGradient(listOf(Green900, Green700))),
                                 Alignment.Center
                             ) {
-                                Text(userName.take(1).uppercase(), fontSize = 18.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                                if (!userPhotoUrl.isNullOrBlank()) {
+                                    AsyncImage(
+                                        model              = userPhotoUrl,
+                                        contentDescription = "Profile photo",
+                                        contentScale       = ContentScale.Crop,
+                                        modifier           = Modifier.fillMaxSize().clip(CircleShape)
+                                    )
+                                } else {
+                                    Text(userName.take(1).uppercase(), fontSize = 18.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                                }
                             }
                             Spacer(Modifier.width(12.dp))
                             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {

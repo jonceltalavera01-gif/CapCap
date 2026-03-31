@@ -78,9 +78,8 @@ enum class AlertSeverity { HIGH, MEDIUM, LOW }
 fun AlertsScreen(
     paddingValues    : PaddingValues,
     helperName       : String,
-    onNavigateToHelp : (GeoPoint) -> Unit,
+    onNavigateToHelp : (GeoPoint, String) -> Unit,
     onImOnMyWay      : (AlertItem) -> Unit,
-    onDismiss        : (AlertItem) -> Unit
 ) {
     var isRefreshing    by remember { mutableStateOf(false) }
     var selectedFilter  by remember { mutableStateOf("All") }
@@ -210,7 +209,7 @@ fun AlertsScreen(
         scope.launch {
             try {
                 sendHelpNotification(alert.riderName, "$helperName is navigating to your location!")
-                onNavigateToHelp(alert.coordinates)
+                onNavigateToHelp(alert.coordinates, alert.emergencyType)
                 successMessage = "Navigating to ${alert.riderName}"
             } catch (e: Exception) { errorMessage = "Failed: ${e.message}" }
         }
@@ -661,8 +660,6 @@ private fun OwnAlertCard(
                 }
                 Spacer(Modifier.width(12.dp))
                 Column(modifier = Modifier.weight(1f)) {
-                    Text("Your Active Alert", fontWeight = FontWeight.ExtraBold,
-                        fontSize = 14.sp, color = Color(0xFF1565C0))
                     Text(alert.emergencyType, fontSize = 13.sp,
                         fontWeight = FontWeight.SemiBold, color = OnSurface)
                     Spacer(Modifier.height(2.dp))

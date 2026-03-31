@@ -764,7 +764,7 @@ fun LoginScreen(navController: NavController, paddingValues: PaddingValues) {
                                 OutlinedTextField(
                                     value         = regUsername,
                                     onValueChange = { if (it.length <= 30) { regUsername = it; regUsernameError = "" } },
-                                    placeholder   = { Text("enter username", color = Color(0xFFB0BEC5)) },
+                                    placeholder   = { Text("Enter username", color = Color(0xFFB0BEC5)) },
                                     leadingIcon   = { Icon(Icons.Rounded.Person, null, tint = LGreen700, modifier = Modifier.size(20.dp)) },
                                     trailingIcon  = {
                                         when (usernameAvailable) {

@@ -762,7 +762,7 @@
                     title = {
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             Icon(Icons.Default.PedalBike, null, tint = Color.White, modifier = Modifier.size(22.dp))
-                            Text("PedalConnect", fontWeight = FontWeight.Bold, fontSize = 19.sp, color = Color.White, letterSpacing = (-0.3).sp)
+                            Text("PedalConnect", fontWeight = FontWeight.ExtraBold, fontSize = 20.sp, color = Color.White, letterSpacing = 0.3.sp)
                         }
                     },
                     actions = {
