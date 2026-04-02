@@ -124,6 +124,7 @@
     data class PostItem(
         val id: String            = "",
         val userName: String      = "",
+        val displayName: String   = "",
         val description: String   = "",
         val activity: String      = "",
         val distance: String      = "",
@@ -220,6 +221,7 @@
         var nextEvent      by remember { mutableStateOf<RideEvent?>(null) }
         var isLoadingEvent by remember { mutableStateOf(true) }
         var userPhotoUrl   by remember { mutableStateOf<String?>(null) }
+        var userDisplayName  by remember { mutableStateOf("") }
         val userPhotoCache = remember { mutableStateMapOf<String, String>() }
 
         LaunchedEffect(errorMessage) {
@@ -229,9 +231,11 @@
         LaunchedEffect(userName) {
             db.collection("users").whereEqualTo("username", userName)
                 .limit(1).addSnapshotListener { snap, _ ->
-                    val url = snap?.documents?.firstOrNull()?.getString("photoUrl")
+                    val doc = snap?.documents?.firstOrNull()
+                    val url = doc?.getString("photoUrl")
                     userPhotoUrl = url
                     if (url != null) userPhotoCache[userName] = url
+                    userDisplayName = doc?.getString("displayName") ?: ""
                 }
         }
 
@@ -342,7 +346,12 @@
                         return@addSnapshotListener
                     }
                     val accepted = snapshot?.documents
-                        ?.mapNotNull { it.toObject(PostItem::class.java)?.copy(id = it.id) }
+                        ?.mapNotNull { doc ->
+                            doc.toObject(PostItem::class.java)?.copy(
+                                id          = doc.id,
+                                displayName = doc.getString("displayName") ?: ""
+                            )
+                        }
                         ?: emptyList()
                     acceptedPostsCache.clear()
                     acceptedPostsCache.addAll(accepted)
@@ -359,7 +368,12 @@
                 .addSnapshotListener { snapshot, e ->
                     if (e != null) return@addSnapshotListener
                     val pending = snapshot?.documents
-                        ?.mapNotNull { it.toObject(PostItem::class.java)?.copy(id = it.id) }
+                        ?.mapNotNull { doc ->
+                            doc.toObject(PostItem::class.java)?.copy(
+                                id          = doc.id,
+                                displayName = doc.getString("displayName") ?: ""
+                            )
+                        }
                         ?: emptyList()
                     pendingPostsCache.clear()
                     pendingPostsCache.addAll(pending)
@@ -811,7 +825,7 @@
                     verticalArrangement = Arrangement.spacedBy(0.dp)
                 ) {
                     // Hero
-                    item { HeroHeader(userName = userName, weather = weather, isAdmin = isAdmin, photoUrl = userPhotoUrl) }
+                    item { HeroHeader(userName = userName, userDisplayName = userDisplayName, weather = weather, isAdmin = isAdmin, photoUrl = userPhotoUrl) }
 
                     // Ride events card — hidden for Admin
                     if (isAdmin) item { Spacer(Modifier.height(16.dp)) }
@@ -911,7 +925,8 @@
                                     onComment = { selectedPostId = post.id; showCommentsSheet = true },
                                     onEdit    = { editingPost = post; editDescription = post.description; showEditDialog = true },
                                     onDelete  = { deletingPost = post; showDeleteDialog = true },
-                                    photoUrl  = userPhotoCache[post.userName]
+                                    photoUrl  = userPhotoCache[post.userName],
+                                    isAdmin   = isAdmin
                                 )
                                 Spacer(Modifier.height(8.dp))
                             }
@@ -934,7 +949,8 @@
                                     onComment = { selectedPostId = post.id; showCommentsSheet = true },
                                     onEdit    = { editingPost = post; editDescription = post.description; showEditDialog = true },
                                     onDelete  = { deletingPost = post; showDeleteDialog = true },
-                                    photoUrl  = userPhotoCache[post.userName]
+                                    photoUrl  = userPhotoCache[post.userName],
+                                    isAdmin   = isAdmin
                                 )
                                 Spacer(Modifier.height(8.dp))
                             }
@@ -949,7 +965,7 @@
     // Hero Header
     // ─────────────────────────────────────────────────────────────────────────────
     @Composable
-    fun HeroHeader(userName: String, weather: WeatherState, isAdmin: Boolean = false, photoUrl: String? = null) {
+    fun HeroHeader(userName: String, userDisplayName: String = "", weather: WeatherState, isAdmin: Boolean = false, photoUrl: String? = null) {
         val hour     = Calendar.getInstance(TimeZone.getDefault()).get(Calendar.HOUR_OF_DAY)
         val greeting = when { hour < 12 -> "Good morning"; hour < 17 -> "Good afternoon"; else -> "Good evening" }
         val today    = SimpleDateFormat("EEEE, MMM dd yyyy", Locale.getDefault()).format(Date())
@@ -965,7 +981,7 @@
                     Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                         Text("$greeting 👋", fontSize = 12.sp, color = Color.White.copy(alpha = 0.65f), fontWeight = FontWeight.Medium)
                         Text(
-                            userName.split(" ").first(),
+                            userDisplayName.ifBlank { userName }.split(" ").first(),
                             fontSize = 22.sp, fontWeight = FontWeight.Bold,
                             color = Color.White, letterSpacing = (-0.5).sp
                         )
@@ -1216,6 +1232,22 @@
         var menuExpanded by remember { mutableStateOf(false) }
         var expanded     by remember { mutableStateOf(false) }
         val isLiked      = post.likedBy.contains(currentUser)
+        var hasReported  by remember { mutableStateOf(false) }
+
+        // Check if current user already reported this post
+        LaunchedEffect(post.id) {
+            if (!isOwner && !isAdmin) {
+                FirebaseFirestore.getInstance()
+                    .collection("reportedPosts")
+                    .whereEqualTo("postId", post.id)
+                    .whereEqualTo("reportedBy", currentUser)
+                    .limit(1)
+                    .get()
+                    .addOnSuccessListener { snap ->
+                        hasReported = !snap.isEmpty
+                    }
+            }
+        }
     
         Card(
             Modifier.fillMaxWidth().padding(horizontal = 16.dp),
@@ -1254,7 +1286,7 @@
                             horizontalArrangement = Arrangement.SpaceBetween,
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            Text(post.userName, fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = TextPrimary)
+                            Text(post.displayName.ifBlank { post.userName }, fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = TextPrimary)
                         }
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                             // Activity badge
@@ -1286,8 +1318,8 @@
                             }
                         }
                     }
-                    // Action: owner menu or follow
-                    if (isOwner) {
+                    // Action: owner menu (edit/delete) or non-owner menu (report) — hidden for admin
+                    if (!isAdmin && (isOwner || post.status == "accepted")) {
                         Box {
                             IconButton(onClick = { menuExpanded = true }) {
                                 Icon(Icons.Default.MoreVert, "Options", tint = TextMuted)
@@ -1296,37 +1328,112 @@
                                 expanded = menuExpanded, onDismissRequest = { menuExpanded = false },
                                 containerColor = BgSurface, shape = RoundedCornerShape(14.dp)
                             ) {
-                                DropdownMenuItem(
-                                    text = {
-                                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                                            Box(Modifier.size(32.dp).clip(RoundedCornerShape(8.dp)).background(Green50), Alignment.Center) {
-                                                Icon(Icons.Default.Edit, null, tint = Green900, modifier = Modifier.size(15.dp))
+                                if (isOwner) {
+                                    DropdownMenuItem(
+                                        text = {
+                                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                                Box(Modifier.size(32.dp).clip(RoundedCornerShape(8.dp)).background(Green50), Alignment.Center) {
+                                                    Icon(Icons.Default.Edit, null, tint = Green900, modifier = Modifier.size(15.dp))
+                                                }
+                                                Column {
+                                                    Text("Edit post", fontWeight = FontWeight.Medium, fontSize = 14.sp, color = TextPrimary)
+                                                    Text("Update description", fontSize = 11.sp, color = TextMuted)
+                                                }
                                             }
-                                            Column {
-                                                Text("Edit post", fontWeight = FontWeight.Medium, fontSize = 14.sp, color = TextPrimary)
-                                                Text("Update description", fontSize = 11.sp, color = TextMuted)
+                                        },
+                                        onClick = { menuExpanded = false; onEdit() },
+                                        modifier = Modifier.padding(horizontal = 4.dp)
+                                    )
+                                    HorizontalDivider(Modifier.padding(horizontal = 12.dp), color = DividerColor)
+                                    DropdownMenuItem(
+                                        text = {
+                                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                                Box(Modifier.size(32.dp).clip(RoundedCornerShape(8.dp)).background(Red50), Alignment.Center) {
+                                                    Icon(Icons.Default.Delete, null, tint = Red600, modifier = Modifier.size(15.dp))
+                                                }
+                                                Column {
+                                                    Text("Delete post", fontWeight = FontWeight.Medium, fontSize = 14.sp, color = Red600)
+                                                    Text("Remove permanently", fontSize = 11.sp, color = TextMuted)
+                                                }
                                             }
-                                        }
-                                    },
-                                    onClick = { menuExpanded = false; onEdit() },
-                                    modifier = Modifier.padding(horizontal = 4.dp)
-                                )
-                                HorizontalDivider(Modifier.padding(horizontal = 12.dp), color = DividerColor)
-                                DropdownMenuItem(
-                                    text = {
-                                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                                            Box(Modifier.size(32.dp).clip(RoundedCornerShape(8.dp)).background(Red50), Alignment.Center) {
-                                                Icon(Icons.Default.Delete, null, tint = Red600, modifier = Modifier.size(15.dp))
+                                        },
+                                        onClick = { menuExpanded = false; onDelete() },
+                                        modifier = Modifier.padding(horizontal = 4.dp)
+                                    )
+                                } else {
+                                    DropdownMenuItem(
+                                        text = {
+                                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                                Box(Modifier.size(32.dp).clip(RoundedCornerShape(8.dp))
+                                                    .background(if (hasReported) Color(0xFFF3F4F6) else Red50),
+                                                    Alignment.Center) {
+                                                    Icon(Icons.Default.Flag, null,
+                                                        tint = if (hasReported) TextMuted else Red600,
+                                                        modifier = Modifier.size(15.dp))
+                                                }
+                                                Column {
+                                                    Text(
+                                                        if (hasReported) "Already reported" else "Report post",
+                                                        fontWeight = FontWeight.Medium, fontSize = 14.sp,
+                                                        color = if (hasReported) TextMuted else Red600
+                                                    )
+                                                    Text(
+                                                        if (hasReported) "You've already flagged this" else "Flag inappropriate content",
+                                                        fontSize = 11.sp, color = TextMuted
+                                                    )
+                                                }
                                             }
-                                            Column {
-                                                Text("Delete post", fontWeight = FontWeight.Medium, fontSize = 14.sp, color = Red600)
-                                                Text("Remove permanently", fontSize = 11.sp, color = TextMuted)
+                                        },
+                                        onClick = {
+                                            if (!hasReported) {
+                                                menuExpanded = false
+                                                val db = FirebaseFirestore.getInstance()
+                                                db.collection("reportedPosts").add(hashMapOf(
+                                                    "postId"     to post.id,
+                                                    "reportedBy" to currentUser,
+                                                    "userName"   to post.userName,
+                                                    "timestamp"  to System.currentTimeMillis()
+                                                )).addOnSuccessListener {
+                                                    hasReported = true
+                                                    // Check total report count
+                                                    db.collection("reportedPosts")
+                                                        .whereEqualTo("postId", post.id)
+                                                        .get()
+                                                        .addOnSuccessListener { snap ->
+                                                            val count = snap.size()
+                                                            if (count >= 3) {
+                                                                // Auto-hide post
+                                                                db.collection("posts")
+                                                                    .document(post.id)
+                                                                    .update("status", "hidden")
+                                                                // Notify admin
+                                                                db.collection("notifications").add(hashMapOf(
+                                                                    "userName"  to "Admin",
+                                                                    "message"   to "⚠️ Post by ${post.userName} was auto-hidden after $count reports.",
+                                                                    "type"      to "alert",
+                                                                    "timestamp" to System.currentTimeMillis(),
+                                                                    "read"      to false
+                                                                ))
+                                                            } else {
+                                                                // Notify admin of new report
+                                                                db.collection("notifications").add(hashMapOf(
+                                                                    "userName"  to "Admin",
+                                                                    "message"   to "🚩 $currentUser reported a post by ${post.userName}. ($count/3 reports)",
+                                                                    "type"      to "alert",
+                                                                    "timestamp" to System.currentTimeMillis(),
+                                                                    "read"      to false
+                                                                ))
+                                                            }
+                                                        }
+                                                }
+                                            } else {
+                                                menuExpanded = false
                                             }
-                                        }
-                                    },
-                                    onClick = { menuExpanded = false; onDelete() },
-                                    modifier = Modifier.padding(horizontal = 4.dp)
-                                )
+                                        },
+                                        enabled = !hasReported,
+                                        modifier = Modifier.padding(horizontal = 4.dp)
+                                    )
+                                }
                             }
                         }
                     }
@@ -1383,22 +1490,6 @@
                             modifier = Modifier.fillMaxWidth().height(220.dp),
                             contentScale = androidx.compose.ui.layout.ContentScale.Crop
                         )
-                        Box(
-                            Modifier
-                                .align(Alignment.BottomEnd)
-                                .padding(8.dp)
-                                .clip(RoundedCornerShape(6.dp))
-                                .background(Color.Black.copy(alpha = 0.45f))
-                                .padding(horizontal = 6.dp, vertical = 3.dp)
-                        ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(3.dp)
-                            ) {
-                                Icon(Icons.Default.ZoomIn, null, tint = Color.White, modifier = Modifier.size(11.dp))
-                                Text("Tap to expand", fontSize = 10.sp, color = Color.White)
-                            }
-                        }
                     }
                 }
     

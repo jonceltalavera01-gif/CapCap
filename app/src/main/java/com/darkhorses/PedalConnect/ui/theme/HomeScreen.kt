@@ -667,7 +667,7 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
             profiles.forEachIndexed { idx, (profile, label, _) ->
                 try {
                     val url = "https://api.openrouteservice.org/v2/directions/$profile" +
-                            "?api_key=eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6IjEyZmM2ZTY4YmI5NTRiOGM4NzI4ZjU3MTJhZmI3N2U5IiwiaCI6Im11cm11cjY0In0=" +
+                            "?api_key=${com.darkhorses.PedalConnect.BuildConfig.ORS_API_KEY}" +
                             "&start=${start.longitude},${start.latitude}" +
                             "&end=${end.longitude},${end.latitude}"
                     val json     = JSONObject(URL(url).readText())
@@ -790,7 +790,7 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
                         // This gives us road distance, not straight-line approximation
                         scope.launch(Dispatchers.IO) {
                             try {
-                                val apiKey = "eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6IjEyZmM2ZTY4YmI5NTRiOGM4NzI4ZjU3MTJhZmI3N2U5IiwiaCI6Im11cm11cjY0In0="
+                                val apiKey = com.darkhorses.PedalConnect.BuildConfig.ORS_API_KEY
                                 val checkUrl = "https://api.openrouteservice.org/v2/directions/cycling-road" +
                                         "?api_key=$apiKey" +
                                         "&start=${start.longitude},${start.latitude}" +
@@ -1906,6 +1906,7 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
                 3 -> AlertsScreen(
                     paddingValues    = innerPadding,
                     helperName       = userName,
+                    isAdmin          = isAdmin,
                     onNavigateToHelp = { coordinates, emergencyType ->
                         destinationPoint = coordinates
                         mapFocusFilter   = emergencyToShopType(emergencyType)

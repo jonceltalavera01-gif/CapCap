@@ -229,6 +229,9 @@ internal data class RouteResult(
 
 internal suspend fun geocodePlace(placeName: String): GeoPoint? =
     withContext(Dispatchers.IO) {
+        val key = placeName.trim().lowercase()
+        if (geocodeCache.containsKey(key)) return@withContext geocodeCache[key]
+        nominatimThrottle()
         try {
             val encoded  = URLEncoder.encode(placeName.trim(), "UTF-8")
             val url      = "https://nominatim.openstreetmap.org/search" +
@@ -237,12 +240,14 @@ internal suspend fun geocodePlace(placeName: String): GeoPoint? =
             conn.setRequestProperty("User-Agent", "PedalConnect/1.0 (Android; pedalconnect@gmail.com)")
             conn.connectTimeout = 8000
             conn.readTimeout    = 8000
-            if (conn.responseCode != 200) return@withContext null
+            if (conn.responseCode != 200) { geocodeCache[key] = null; return@withContext null }
             val response = conn.inputStream.bufferedReader().readText()
             val array = JSONArray(response)
-            if (array.length() == 0) return@withContext null
+            if (array.length() == 0) { geocodeCache[key] = null; return@withContext null }
             val obj = array.getJSONObject(0)
-            GeoPoint(obj.getDouble("lat"), obj.getDouble("lon"))
+            val result = GeoPoint(obj.getDouble("lat"), obj.getDouble("lon"))
+            geocodeCache[key] = result
+            result
         } catch (e: Exception) { null }
     }
 
@@ -1650,20 +1655,28 @@ private fun CreateEventSheet(
     var maxPaxText   by remember { mutableStateOf(initialMaxPax) }
     var difficulty          by remember { mutableStateOf(initialDiff) }
     var selectedDate        by remember { mutableStateOf(initialDate) }
-    var originConfirmed     by remember { mutableStateOf(initialOriginConfirmed) }
-    var destConfirmed       by remember { mutableStateOf(initialDestConfirmed) }
+    val samePlace = run {
+        val firstOrigin = initialOrigin.trim().lowercase().split(",").firstOrNull()?.trim() ?: ""
+        val firstDest   = initialDest.trim().lowercase().split(",").firstOrNull()?.trim() ?: ""
+        firstOrigin.isNotBlank() && firstDest.isNotBlank() && firstOrigin == firstDest
+    }
+    var originConfirmed by remember { mutableStateOf(if (samePlace) false else initialOriginConfirmed) }
+    var destConfirmed   by remember { mutableStateOf(if (samePlace) false else initialDestConfirmed) }
+    var routeError      by remember { mutableStateOf(if (samePlace) "Destination cannot be the same as the starting point" else "") }
     var duration            by remember { mutableStateOf(initialDuration) }
     var originIslandGroup   by remember { mutableStateOf(IslandGroup.UNKNOWN) }
     var crossIslandError    by remember { mutableStateOf("") }
     var routeOrigin      by remember { mutableStateOf(initialOrigin.ifBlank {
         if (route.contains(" to ", ignoreCase = true)) route.substringBefore(" to ").trim() else route
     }) }
-    var routeDestination by remember { mutableStateOf(initialDest.ifBlank {
-        if (route.contains(" to ", ignoreCase = true)) route.substringAfter(" to ").trim() else ""
-    }) }
+    var routeDestination by remember { mutableStateOf(
+        if (samePlace) ""
+        else initialDest.ifBlank {
+            if (route.contains(" to ", ignoreCase = true)) route.substringAfter(" to ").trim() else ""
+        }
+    ) }
 
     var titleError     by remember { mutableStateOf("") }
-    var routeError     by remember { mutableStateOf("") }
     var dateError      by remember { mutableStateOf("") }
     var distanceError  by remember { mutableStateOf("") }
     var maxPaxError    by remember { mutableStateOf("") }
@@ -1865,31 +1878,67 @@ private fun CreateEventSheet(
                 route = if (routeDestination.isNotBlank())
                     "${routeOrigin.trim()} to ${routeDestination.trim()}"
                 else routeOrigin.trim()
-                routeError = ""
+                val firstOrigin = routeOrigin.trim().lowercase().split(",").firstOrNull()?.trim() ?: ""
+                val firstDest   = routeDestination.trim().lowercase().split(",").firstOrNull()?.trim() ?: ""
+                if (firstOrigin.isNotBlank() && firstDest.isNotBlank() && firstOrigin == firstDest) {
+                    routeError      = "Invalid! The input cannot be the same location"
+                    originConfirmed = false
+                    destConfirmed   = false
+                } else {
+                    routeError = ""
+                }
             }
 
             RouteAutocompleteField(
                 value             = routeOrigin,
                 onValueChange     = { routeOrigin = it },
-                onPlaceSelected   = { routeOrigin = it },
+                onPlaceSelected   = { selected -> routeOrigin = selected },
                 label             = "Starting point *",
                 placeholder       = "e.g. Mall of Asia, Pasay",
                 isError           = routeError.isNotEmpty() && routeOrigin.isBlank(),
                 errorText         = if (routeOrigin.isBlank()) routeError else "",
                 confirmed         = originConfirmed,
-                onConfirmedChange = { originConfirmed = it }
+                onConfirmedChange = { confirmed ->
+                    if (confirmed) {
+                        val firstOrigin = routeOrigin.trim().lowercase().split(",").firstOrNull()?.trim() ?: ""
+                        val firstDest   = routeDestination.trim().lowercase().split(",").firstOrNull()?.trim() ?: ""
+                        if (firstOrigin.isNotBlank() && destConfirmed && firstOrigin == firstDest) {
+                            routeError      = "Starting point cannot be the same as the destination"
+                            originConfirmed = false
+                        } else {
+                            originConfirmed = true
+                            routeError      = ""
+                        }
+                    } else {
+                        originConfirmed = false
+                    }
+                }
             )
             Spacer(Modifier.height(12.dp))
             RouteAutocompleteField(
                 value             = routeDestination,
                 onValueChange     = { routeDestination = it },
-                onPlaceSelected   = { routeDestination = it },
+                onPlaceSelected   = { selected -> routeDestination = selected },
                 label             = "Destination *",
                 placeholder       = "e.g. Tagaytay City, Cavite",
-                isError           = routeError.isNotEmpty() && routeDestination.isBlank(),
-                errorText         = if (routeDestination.isBlank()) routeError else "",
+                isError           = routeError.isNotEmpty(),
+                errorText         = routeError,
                 confirmed         = destConfirmed,
-                onConfirmedChange = { destConfirmed = it }
+                onConfirmedChange = { confirmed ->
+                    if (confirmed) {
+                        val firstOrigin = routeOrigin.trim().lowercase().split(",").firstOrNull()?.trim() ?: ""
+                        val firstDest   = routeDestination.trim().lowercase().split(",").firstOrNull()?.trim() ?: ""
+                        if (firstDest.isNotBlank() && firstDest == firstOrigin) {
+                            routeError    = "Destination cannot be the same as the starting point"
+                            destConfirmed = false
+                        } else {
+                            destConfirmed = true
+                            routeError    = ""
+                        }
+                    } else {
+                        destConfirmed = false
+                    }
+                }
             )
             // Auto-fetch distance from OSRM — with cross-island detection
             LaunchedEffect(routeOrigin, routeDestination) {
@@ -2477,6 +2526,7 @@ private fun detectIslandGroup(lat: Double, lon: Double): IslandGroup {
 
 private suspend fun geocodePlaceWithIsland(placeName: String): Pair<GeoPoint, IslandGroup>? =
     withContext(Dispatchers.IO) {
+        nominatimThrottle()
         try {
             val encoded  = URLEncoder.encode(placeName.trim(), "UTF-8")
             val url      = "https://nominatim.openstreetmap.org/search" +
@@ -2511,10 +2561,30 @@ private sealed class SearchState {
     object NoResults : SearchState()
     data class Results(val items: List<PlaceSuggestion>) : SearchState()
 }
+private val nominatimCache  = mutableMapOf<String, List<PlaceSuggestion>>()
+private val geocodeCache    = mutableMapOf<String, GeoPoint?>()
+private val nominatimMutex  = kotlinx.coroutines.sync.Mutex()
+private var lastNominatimRequestMs = 0L
+private const val NOMINATIM_MIN_INTERVAL_MS = 1200L
+
+private suspend fun nominatimThrottle() {
+    nominatimMutex.lock()
+    try {
+        val now  = System.currentTimeMillis()
+        val wait = NOMINATIM_MIN_INTERVAL_MS - (now - lastNominatimRequestMs)
+        if (wait > 0) delay(wait)
+        lastNominatimRequestMs = System.currentTimeMillis()
+    } finally {
+        nominatimMutex.unlock()
+    }
+}
 
 private suspend fun nominatimSearch(query: String): List<PlaceSuggestion> =
     withContext(Dispatchers.IO) {
-        if (query.trim().length < 3) return@withContext emptyList()
+        val key = query.trim().lowercase()
+        if (key.length < 5) return@withContext emptyList()
+        nominatimCache[key]?.let { return@withContext it }
+        nominatimThrottle()
         try {
             val encoded = java.net.URLEncoder.encode(query.trim(), "UTF-8")
             val url = "https://nominatim.openstreetmap.org/search" +
@@ -2531,7 +2601,7 @@ private suspend fun nominatimSearch(query: String): List<PlaceSuggestion> =
             if (conn.responseCode != 200) return@withContext emptyList()
             val body  = conn.inputStream.bufferedReader().readText()
             val array = org.json.JSONArray(body)
-            (0 until array.length()).mapNotNull { i ->
+            val results = (0 until array.length()).mapNotNull { i ->
                 val obj  = array.getJSONObject(i)
                 val full = obj.optString("display_name", "").trim()
                 if (full.isBlank()) return@mapNotNull null
@@ -2541,6 +2611,8 @@ private suspend fun nominatimSearch(query: String): List<PlaceSuggestion> =
                     shortName   = parts.take(3).joinToString(", ")
                 )
             }.distinctBy { it.shortName }
+            if (results.isNotEmpty()) nominatimCache[key] = results
+            results
         } catch (e: Exception) {
             emptyList()
         }
@@ -2577,15 +2649,20 @@ private fun RouteAutocompleteField(
             }
         }
         if (suppressSearch) { suppressSearch = false; return@LaunchedEffect }
-        // Only clear confirmation if user actually typed (not a programmatic set)
-        if (confirmed) onConfirmedChange(false)
         searchJob?.cancel()
-        if (value.trim().length < 3) { searchState = SearchState.Idle; return@LaunchedEffect }
+        val trimmed = value.trim()
+        if (trimmed.length < 5) { searchState = SearchState.Idle; return@LaunchedEffect }
+        val cached = nominatimCache[trimmed.lowercase()]
+        if (cached != null) {
+            searchState = if (cached.isEmpty()) SearchState.NoResults
+            else SearchState.Results(cached)
+            return@LaunchedEffect
+        }
         searchState = SearchState.Idle
         searchJob = scope.launch {
-            delay(400)
+            delay(800)
             searchState = SearchState.Searching
-            val results = nominatimSearch(value)
+            val results = nominatimSearch(trimmed)
             searchState = if (results.isEmpty()) SearchState.NoResults
             else SearchState.Results(results)
         }
@@ -2637,11 +2714,12 @@ private fun RouteAutocompleteField(
                         )
                     value.isNotBlank() ->
                         IconButton(onClick = {
+                            searchJob?.cancel()
+                            searchJob = null
                             suppressSearch = true
+                            searchState = SearchState.Idle
                             onValueChange("")
                             onConfirmedChange(false)
-                            searchState = SearchState.Idle
-                            searchJob?.cancel()
                         }) {
                             Icon(Icons.Default.Close, "Clear",
                                 tint     = if (confirmed) Green700 else TextMuted,
@@ -2715,7 +2793,7 @@ private fun RouteAutocompleteField(
         when {
             showError && displayError.isNotEmpty() ->
                 ErrorText(displayError)
-            value.isNotBlank() && value.trim().length < 3 ->
+            value.isNotBlank() && value.trim().length < 5 ->
                 Row(verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(4.dp),
                     modifier = Modifier.padding(top = 4.dp, start = 2.dp)) {

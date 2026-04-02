@@ -109,12 +109,15 @@ fun AddPostScreen(navController: NavController, userName: String) {
     var selectedImageUri  by remember { mutableStateOf<Uri?>(null) }
     var imageError        by remember { mutableStateOf("") }
     var userPhotoUrl      by remember { mutableStateOf<String?>(null) }
+    var userDisplayName   by remember { mutableStateOf("") }
 
     LaunchedEffect(userName) {
         db.collection("users").whereEqualTo("username", userName)
             .limit(1).get()
             .addOnSuccessListener { snap ->
-                userPhotoUrl = snap.documents.firstOrNull()?.getString("photoUrl")
+                val doc = snap.documents.firstOrNull()
+                userPhotoUrl    = doc?.getString("photoUrl")
+                userDisplayName = doc?.getString("displayName") ?: ""
             }
     }
 
@@ -148,20 +151,16 @@ fun AddPostScreen(navController: NavController, userName: String) {
     suspend fun uploadImageBytes(bytes: ByteArray): ImgBBResult = withContext(Dispatchers.IO) {
         val base64Image = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
         val apiKey      = com.darkhorses.PedalConnect.BuildConfig.IMGBB_API_KEY
-        val apiUrl = java.net.URL("https://api.imgbb.com/1/upload?key=$apiKey")
-        val boundary    = "----FormBoundary${System.currentTimeMillis()}"
-        val conn        = apiUrl.openConnection() as java.net.HttpURLConnection
+        val conn        = java.net.URL("https://api.imgbb.com/1/upload").openConnection()
+                as java.net.HttpURLConnection
         conn.requestMethod = "POST"
         conn.doOutput      = true
         conn.connectTimeout = 30_000
         conn.readTimeout    = 30_000
-        conn.setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
-        conn.outputStream.bufferedWriter().use { writer ->
-            writer.write("--$boundary\r\n")
-            writer.write("Content-Disposition: form-data; name=\"image\"\r\n\r\n")
-            writer.write(base64Image)
-            writer.write("\r\n--$boundary--\r\n")
-        }
+        conn.setRequestProperty("Content-Type", "application/x-www-form-urlencoded")
+        val body = "key=$apiKey&image=${java.net.URLEncoder.encode(base64Image, "UTF-8")}"
+        conn.outputStream.write(body.toByteArray())
+        conn.outputStream.flush()
         val responseCode = conn.responseCode
         val response = if (responseCode == 200) {
             conn.inputStream.bufferedReader().readText()
@@ -169,6 +168,8 @@ fun AddPostScreen(navController: NavController, userName: String) {
             conn.errorStream?.bufferedReader()?.readText()
                 ?: throw Exception("ImgBB upload failed with code $responseCode")
         }
+        android.util.Log.d("ImgBB", "Response code: $responseCode")
+        android.util.Log.d("ImgBB", "Response body: $response")
         val json = org.json.JSONObject(response)
         if (!json.getBoolean("success")) throw Exception("ImgBB upload failed: ${json.optString("error")}")
         val data = json.getJSONObject("data")
@@ -240,7 +241,7 @@ fun AddPostScreen(navController: NavController, userName: String) {
                             }
                             Spacer(Modifier.width(12.dp))
                             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                                Text(userName, fontWeight = FontWeight.SemiBold, fontSize = 15.sp, color = TextPrimary)
+                                Text(userDisplayName.ifBlank { userName }, fontWeight = FontWeight.SemiBold, fontSize = 15.sp, color = TextPrimary)
                                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                                     Box(
                                         Modifier.size(6.dp).clip(CircleShape).background(Color(0xFF22C55E))
@@ -489,6 +490,7 @@ fun AddPostScreen(navController: NavController, userName: String) {
                                         suspendCancellableCoroutine<Unit> { cont ->
                                             db.collection("posts").add(hashMapOf(
                                                 "userName"       to userName,
+                                                "displayName"    to userDisplayName.ifBlank { userName },
                                                 "description"    to description.trim(),
                                                 "activity"       to selectedActivity,
                                                 "distance"       to distance.trim(),
@@ -509,9 +511,10 @@ fun AddPostScreen(navController: NavController, userName: String) {
 
                                     } catch (e: Exception) {
                                         isLoading = false
+                                        android.util.Log.e("AddPost", "Upload error", e)
                                         Toast.makeText(context,
-                                            "Failed to share. Check your connection and try again.",
-                                            Toast.LENGTH_SHORT).show()
+                                            "Error: ${e.message?.take(120)}",
+                                            Toast.LENGTH_LONG).show()
                                     }
                                 }
                             }

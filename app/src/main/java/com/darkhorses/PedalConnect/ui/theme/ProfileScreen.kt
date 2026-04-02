@@ -20,6 +20,7 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.material3.TabRowDefaults.SecondaryIndicator
 import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -72,7 +73,8 @@ private data class ProfilePost(
 private data class JoinedEvent(
     val id: String, val title: String, val route: String,
     val date: Long, val time: String, val difficulty: String,
-    val distanceKm: Double, val isOrganizer: Boolean
+    val distanceKm: Double, val isOrganizer: Boolean,
+    val status: String = "approved"
 )
 
 private data class SavedRide(
@@ -90,15 +92,18 @@ fun ProfileScreen(navController: NavController, userName: String, paddingValues:
     val scope   = rememberCoroutineScope()
     val db      = FirebaseFirestore.getInstance()
 
+    var userDisplayName by remember { mutableStateOf("") }
     var userEmail     by remember { mutableStateOf<String?>(null) }
     var userCreatedAt by remember { mutableStateOf<String?>(null) }
     var userBio       by remember { mutableStateOf<String?>(null) }
-    var userBikeType  by remember { mutableStateOf<String?>(null) }
+    var userBikeTypes by remember { mutableStateOf<List<String>>(emptyList()) }
     var userSkillLevel by remember { mutableStateOf<String?>(null) }
     var photoUrl         by remember { mutableStateOf<String?>(null) }
     var isUploadingPhoto by remember { mutableStateOf(false) }
     var userDocId        by remember { mutableStateOf<String?>(null) }
-    var selectedTab      by remember { mutableIntStateOf(0) }
+    var subTab           by remember { mutableIntStateOf(0) }
+    var showRidesSheet   by remember { mutableStateOf(false) }
+    val ridesSheetState  = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
     val myPosts      = remember { mutableStateListOf<ProfilePost>() }
     val joinedEvents = remember { mutableStateListOf<JoinedEvent>() }
@@ -109,7 +114,7 @@ fun ProfileScreen(navController: NavController, userName: String, paddingValues:
     var isLoadingRides  by remember { mutableStateOf(true) }
 
     // Stats — all posts (accepted + pending) as rider's activity count
-    val totalPostCount  by remember { derivedStateOf { myPosts.size } }
+    val totalPostCount  by remember { derivedStateOf { myPosts.count { it.status == "accepted" } } }
     val totalLikesCount by remember { derivedStateOf {
         myPosts.filter { it.status == "accepted" }.sumOf { it.likes }
     } }
@@ -142,7 +147,7 @@ fun ProfileScreen(navController: NavController, userName: String, paddingValues:
                         return@launch
                     }
 
-                    val imgBBApiKey = "697c37daa7aa4705b309befb3de1d384"
+                    val imgBBApiKey = com.darkhorses.PedalConnect.BuildConfig.IMGBB_API_KEY
 
                     // Read bytes and upload entirely on IO thread
                     val url = withContext(Dispatchers.IO) {
@@ -188,21 +193,28 @@ fun ProfileScreen(navController: NavController, userName: String, paddingValues:
     // ── Data loading ──────────────────────────────────────────────────────────
     LaunchedEffect(userName) {
         db.collection("users").whereEqualTo("username", userName)
-            .limit(1).get().addOnSuccessListener { snap ->
-                snap.documents.firstOrNull()?.let { doc ->
-                    userDocId     = doc.id
-                    photoUrl      = doc.getString("photoUrl")
-                    userEmail      = doc.getString("email")
-                    userCreatedAt  = doc.getTimestamp("createdAt")?.toDate()?.let {
+            .limit(1)
+            .addSnapshotListener { snap, _ ->
+                snap?.documents?.firstOrNull()?.let { doc ->
+                    userDocId       = doc.id
+                    photoUrl        = doc.getString("photoUrl")
+                    userEmail       = doc.getString("email")
+                    userDisplayName = doc.getString("displayName") ?: ""
+                    userCreatedAt   = doc.getTimestamp("createdAt")?.toDate()?.let {
                         java.text.SimpleDateFormat("MMMM d, yyyy", java.util.Locale.getDefault()).format(it)
                     }
                     userBio        = doc.getString("bio")
-                    userBikeType   = doc.getString("bikeType")
+                    userBikeTypes  = when (val raw = doc.get("bikeTypes")) {
+                        is List<*> -> raw.filterIsInstance<String>()
+                        else -> {
+                            val legacy = doc.getString("bikeType") ?: ""
+                            if (legacy.isNotBlank()) listOf(legacy) else emptyList()
+                        }
+                    }
                     userSkillLevel = doc.getString("skillLevel")
                 }
             }
     }
-
     LaunchedEffect(userName) {
         db.collection("posts").whereEqualTo("userName", userName)
             .orderBy("timestamp", Query.Direction.DESCENDING)
@@ -231,15 +243,9 @@ fun ProfileScreen(navController: NavController, userName: String, paddingValues:
             .whereArrayContains("participants", userName)
             .addSnapshotListener { snap, _ ->
                 if (snap == null) { isLoadingEvents = false; return@addSnapshotListener }
-                val today = Calendar.getInstance().apply {
-                    set(Calendar.HOUR_OF_DAY, 0); set(Calendar.MINUTE, 0)
-                    set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
-                }.timeInMillis
                 joinedEvents.clear()
                 for (doc in snap.documents) {
                     if (doc.getString("status") == "rejected") continue
-                    val eventDate = doc.getLong("date") ?: 0L
-                    if (eventDate < today) continue
                     joinedEvents.add(JoinedEvent(
                         id          = doc.id,
                         title       = doc.getString("title")       ?: "Unnamed Ride",
@@ -248,7 +254,8 @@ fun ProfileScreen(navController: NavController, userName: String, paddingValues:
                         time        = doc.getString("time")        ?: "",
                         difficulty  = doc.getString("difficulty")  ?: "Easy",
                         distanceKm  = doc.getDouble("distanceKm") ?: 0.0,
-                        isOrganizer = doc.getString("organizer")   == userName
+                        isOrganizer = doc.getString("organizer")   == userName,
+                        status      = doc.getString("status")      ?: "approved"
                     ))
                 }
                 isLoadingEvents = false
@@ -292,6 +299,12 @@ fun ProfileScreen(navController: NavController, userName: String, paddingValues:
     }
 
     // ── Formatters ────────────────────────────────────────────────────────────
+    fun formatStatNum(n: Int): String = when {
+        n >= 1_000_000 -> String.format("%.1fM", n / 1_000_000f)
+        n >= 1_000     -> String.format("%.1fk", n / 1_000f)
+        else           -> "$n"
+    }
+
     fun formatTs(ts: Long): String =
         if (ts == 0L) "" else SimpleDateFormat("MMM d, yyyy", Locale.getDefault()).format(Date(ts))
 
@@ -336,411 +349,551 @@ fun ProfileScreen(navController: NavController, userName: String, paddingValues:
         containerColor = PBgCanvas
     ) { innerPadding ->
 
-        LazyColumn(
-            modifier       = Modifier.fillMaxSize().padding(innerPadding),
-            contentPadding = PaddingValues(bottom = paddingValues.calculateBottomPadding() + 32.dp)
+        Column(
+            modifier = Modifier.fillMaxSize().padding(innerPadding)
         ) {
 
-            // ── Profile hero ──────────────────────────────────────────────────
-            item {
-                Box(
-                    modifier = Modifier.fillMaxWidth()
-                        .background(Brush.verticalGradient(
-                            colors = listOf(PGreen900, PGreen700),
-                            startY = 0f,
-                            endY   = 600f
-                        ))
-                        .padding(top = 24.dp, bottom = 52.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(12.dp)
+            LazyColumn(
+                modifier       = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(bottom = paddingValues.calculateBottomPadding() + 32.dp)
+            ) {
+
+                // ── Profile hero ──────────────────────────────────────────────────
+                item {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(
+                                Brush.verticalGradient(
+                                    colors = listOf(PGreen900, PGreen800),
+                                    startY = 0f,
+                                    endY   = 400f
+                                )
+                            )
+                            .padding(horizontal = 20.dp, vertical = 20.dp)
                     ) {
-                        // Avatar with camera badge
-                        Box(
-                            modifier = Modifier.size(88.dp),
-                            contentAlignment = Alignment.BottomEnd
+                        Column(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalArrangement = Arrangement.spacedBy(0.dp)
                         ) {
-                            Box(
-                                modifier = Modifier.size(88.dp)
-                                    .clip(CircleShape)
-                                    .background(Color.White.copy(alpha = 0.12f))
-                                    .border(2.5.dp, Color.White.copy(alpha = 0.6f), CircleShape)
-                                    .clickable(
-                                        interactionSource = remember { MutableInteractionSource() },
-                                        indication        = null
-                                    ) { if (!isUploadingPhoto) photoPicker.launch("image/*") },
-                                contentAlignment = Alignment.Center
+                            // ── Avatar row ────────────────────────────────────
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 20.dp)
+                                    .padding(top = 20.dp, bottom = 16.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(16.dp)
                             ) {
-                                if (photoUrl != null) {
-                                    AsyncImage(
-                                        model              = photoUrl,
-                                        contentDescription = "Profile photo",
-                                        contentScale       = ContentScale.Crop,
-                                        modifier           = Modifier.fillMaxSize().clip(CircleShape)
-                                    )
-                                } else {
+                                // Avatar
+                                Box(
+                                    modifier         = Modifier.size(72.dp),
+                                    contentAlignment = Alignment.BottomEnd
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(72.dp)
+                                            .clip(CircleShape)
+                                            .background(Color.White.copy(alpha = 0.12f))
+                                            .border(2.dp, Color.White.copy(alpha = 0.5f), CircleShape)
+                                            .clickable(
+                                                interactionSource = remember { MutableInteractionSource() },
+                                                indication        = null
+                                            ) { if (!isUploadingPhoto) photoPicker.launch("image/*") },
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        if (photoUrl != null) {
+                                            AsyncImage(
+                                                model              = photoUrl,
+                                                contentDescription = "Profile photo",
+                                                contentScale       = ContentScale.Crop,
+                                                modifier           = Modifier.fillMaxSize().clip(CircleShape)
+                                            )
+                                        } else {
+                                            Text(
+                                                userName.take(1).uppercase(),
+                                                fontSize   = 28.sp,
+                                                fontWeight = FontWeight.ExtraBold,
+                                                color      = Color.White
+                                            )
+                                        }
+                                        androidx.compose.animation.AnimatedVisibility(
+                                            visible = isUploadingPhoto,
+                                            enter   = fadeIn(),
+                                            exit    = fadeOut()
+                                        ) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .fillMaxSize()
+                                                    .background(Color.Black.copy(alpha = 0.45f), CircleShape),
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                CircularProgressIndicator(
+                                                    color       = Color.White,
+                                                    modifier    = Modifier.size(22.dp),
+                                                    strokeWidth = 2.dp
+                                                )
+                                            }
+                                        }
+                                    }
+                                    // Camera badge
+                                    Box(
+                                        modifier = Modifier
+                                            .size(24.dp)
+                                            .clip(CircleShape)
+                                            .background(PBgSurface)
+                                            .border(1.dp, PGreen900, CircleShape)
+                                            .clickable(
+                                                interactionSource = remember { MutableInteractionSource() },
+                                                indication        = null
+                                            ) { if (!isUploadingPhoto) photoPicker.launch("image/*") },
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Icon(
+                                            Icons.Default.CameraAlt, "Change photo",
+                                            tint     = PGreen900,
+                                            modifier = Modifier.size(12.dp)
+                                        )
+                                    }
+                                }
+
+                                // Name / email / joined date
+                                Column(
+                                    verticalArrangement = Arrangement.spacedBy(5.dp)
+                                ) {
                                     Text(
-                                        userName.take(1).uppercase(),
-                                        fontSize   = 34.sp,
-                                        fontWeight = FontWeight.ExtraBold,
+                                        userDisplayName.ifBlank { userName },
+                                        fontSize      = 18.sp,
+                                        fontWeight    = FontWeight.Bold,
+                                        color         = Color.White,
+                                        letterSpacing = (-0.3).sp,
+                                        maxLines      = 1,
+                                        overflow      = TextOverflow.Ellipsis
+                                    )
+                                    if (!userEmail.isNullOrBlank()) {
+                                        Text(
+                                            userEmail!!,
+                                            fontSize = 12.sp,
+                                            color    = Color.White.copy(alpha = 0.65f),
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                    if (!userCreatedAt.isNullOrBlank()) {
+                                        Row(
+                                            verticalAlignment     = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                        ) {
+                                            Icon(
+                                                Icons.Default.CalendarMonth, null,
+                                                tint     = Color.White.copy(alpha = 0.45f),
+                                                modifier = Modifier.size(11.dp)
+                                            )
+                                            Text(
+                                                "Since $userCreatedAt",
+                                                fontSize = 11.sp,
+                                                color    = Color.White.copy(alpha = 0.45f)
+                                            )
+                                        }
+                                    }
+                                    if (isUploadingPhoto) {
+                                        Text(
+                                            "Uploading photo…",
+                                            fontSize = 11.sp,
+                                            color    = Color.White.copy(alpha = 0.6f)
+                                        )
+                                    }
+                                }
+                            }
+
+                            // ── Frosted inset: bio + pills ────────────────────
+                            if (!userBio.isNullOrBlank() || userBikeTypes.isNotEmpty() || !userSkillLevel.isNullOrBlank()) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .background(Color.Black.copy(alpha = 0.18f))
+                                        .padding(horizontal = 20.dp, vertical = 12.dp)
+                                ) {
+                                    Column(
+                                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        if (!userBio.isNullOrBlank()) {
+                                            Text(
+                                                userBio!!,
+                                                fontSize   = 13.sp,
+                                                color      = Color.White.copy(alpha = 0.85f),
+                                                lineHeight = 19.sp,
+                                                modifier   = Modifier.fillMaxWidth()
+                                            )
+                                        }
+                                        if (userBikeTypes.isNotEmpty() || !userSkillLevel.isNullOrBlank()) {
+                                            androidx.compose.foundation.layout.FlowRow(
+                                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                                verticalArrangement   = Arrangement.spacedBy(6.dp),
+                                                modifier              = Modifier.fillMaxWidth()
+                                            ) {
+                                                userBikeTypes.forEach { bikeType ->
+                                                    Row(
+                                                        modifier = Modifier
+                                                            .wrapContentWidth()
+                                                            .clip(RoundedCornerShape(20.dp))
+                                                            .background(Color.White.copy(alpha = 0.12f))
+                                                            .padding(horizontal = 8.dp, vertical = 4.dp),
+                                                        verticalAlignment     = Alignment.CenterVertically,
+                                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                                    ) {
+                                                        Icon(
+                                                            Icons.Default.DirectionsBike, null,
+                                                            tint     = Color.White.copy(alpha = 0.75f),
+                                                            modifier = Modifier.size(10.dp)
+                                                        )
+                                                        Text(
+                                                            bikeType,
+                                                            fontSize   = 10.sp,
+                                                            color      = Color.White.copy(alpha = 0.85f),
+                                                            fontWeight = FontWeight.Medium,
+                                                            softWrap   = false
+                                                        )
+                                                    }
+                                                }
+                                                if (!userSkillLevel.isNullOrBlank()) {
+                                                    Row(
+                                                        modifier = Modifier
+                                                            .wrapContentWidth()
+                                                            .clip(RoundedCornerShape(20.dp))
+                                                            .background(Color.White.copy(alpha = 0.12f))
+                                                            .padding(horizontal = 8.dp, vertical = 4.dp),
+                                                        verticalAlignment     = Alignment.CenterVertically,
+                                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                                    ) {
+                                                        Icon(
+                                                            Icons.Default.Star, null,
+                                                            tint     = Color.White.copy(alpha = 0.75f),
+                                                            modifier = Modifier.size(10.dp)
+                                                        )
+                                                        Text(
+                                                            userSkillLevel!!,
+                                                            fontSize   = 10.sp,
+                                                            color      = Color.White.copy(alpha = 0.85f),
+                                                            fontWeight = FontWeight.Medium,
+                                                            softWrap   = false
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // ── Stats card ────────────────────────────────────────────────────
+                item {
+                    Card(
+                        modifier  = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp)
+                            .padding(top = 16.dp),
+                        shape     = RoundedCornerShape(16.dp),
+                        colors    = CardDefaults.cardColors(containerColor = PBgSurface),
+                        elevation = CardDefaults.cardElevation(2.dp)
+                    ) {
+                        Row(
+                            modifier          = Modifier.fillMaxWidth().padding(vertical = 16.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            PStatCell(
+                                icon     = Icons.Default.Article,
+                                value    = formatStatNum(totalPostCount),
+                                label    = "Posts",
+                                modifier = Modifier.weight(1f)
+                            )
+                            Box(Modifier.width(1.dp).height(32.dp).background(PDivider))
+                            PStatCell(
+                                icon     = Icons.Default.Groups,
+                                value    = formatStatNum(totalEventsJoinedCount),
+                                label    = "Events",
+                                modifier = Modifier.weight(1f)
+                            )
+                            Box(Modifier.width(1.dp).height(32.dp).background(PDivider))
+                            PStatCell(
+                                icon     = Icons.Default.Favorite,
+                                value    = formatStatNum(totalLikesCount),
+                                label    = "Likes",
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                    }
+                }
+
+                // ── Tab row with Saved Rides icon button ──────────────────────────
+                item {
+                    Spacer(Modifier.height(16.dp))
+                    Box(modifier = Modifier.fillMaxWidth()) {
+                        // Tab row — right padding reserves space for the icon button
+                        TabRow(
+                            selectedTabIndex = subTab,
+                            containerColor   = PBgSurface,
+                            contentColor     = PGreen900,
+                            modifier         = Modifier.padding(end = 52.dp),
+                            indicator = { tabPositions ->
+                                SecondaryIndicator(
+                                    modifier = Modifier.tabIndicatorOffset(tabPositions[subTab]),
+                                    color    = PGreen900
+                                )
+                            },
+                            divider = { HorizontalDivider(color = PDivider, thickness = 1.dp) }
+                        ) {
+                            Tab(
+                                selected               = subTab == 0,
+                                onClick                = { subTab = 0 },
+                                selectedContentColor   = PGreen900,
+                                unselectedContentColor = PTextMuted,
+                                text = {
+                                    Text(
+                                        "Community Posts",
+                                        fontWeight = if (subTab == 0) FontWeight.SemiBold else FontWeight.Normal,
+                                        fontSize   = 13.sp,
+                                        maxLines   = 1,
+                                        modifier   = Modifier.padding(vertical = 6.dp)
+                                    )
+                                }
+                            )
+                            Tab(
+                                selected               = subTab == 1,
+                                onClick                = { subTab = 1 },
+                                selectedContentColor   = PGreen900,
+                                unselectedContentColor = PTextMuted,
+                                text = {
+                                    Text(
+                                        "Ride Events",
+                                        fontWeight = if (subTab == 1) FontWeight.SemiBold else FontWeight.Normal,
+                                        fontSize   = 13.sp,
+                                        maxLines   = 1,
+                                        modifier   = Modifier.padding(vertical = 6.dp)
+                                    )
+                                }
+                            )
+                        }
+
+                        // Saved Rides icon button — pinned to the right
+                        Box(
+                            modifier = Modifier
+                                .align(Alignment.CenterEnd)
+                                .padding(end = 4.dp)
+                                .size(44.dp)
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(PGreen700)
+                                .clickable(
+                                    interactionSource = remember { MutableInteractionSource() },
+                                    indication        = null
+                                ) { showRidesSheet = true },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                Icons.Default.Bookmarks,
+                                contentDescription = "Saved Rides",
+                                tint     = Color.White,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            // Count badge
+                            if (myRides.isNotEmpty()) {
+                                Box(
+                                    modifier = Modifier
+                                        .align(Alignment.TopEnd)
+                                        .padding(top = 6.dp, end = 6.dp)
+                                        .size(16.dp)
+                                        .clip(CircleShape)
+                                        .background(PGreen900),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        if (myRides.size > 9) "9+" else "${myRides.size}",
+                                        fontSize   = 8.sp,
+                                        fontWeight = FontWeight.Bold,
                                         color      = Color.White
                                     )
                                 }
-                                // Upload overlay
-                                androidx.compose.animation.AnimatedVisibility(
-                                    visible = isUploadingPhoto,
-                                    enter   = fadeIn(),
-                                    exit    = fadeOut()
-                                ) {
-                                    Box(
-                                        modifier = Modifier.fillMaxSize()
-                                            .background(Color.Black.copy(alpha = 0.45f), CircleShape),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        CircularProgressIndicator(
-                                            color       = Color.White,
-                                            modifier    = Modifier.size(24.dp),
-                                            strokeWidth = 2.dp
-                                        )
-                                    }
-                                }
                             }
-                            // Camera badge — 32dp visible, 44dp touch target
+                        }
+                    }
+                }
+
+                // ═════════════════════════════════════════════════════════════════
+                // Ride Events / Community Posts
+                // ═════════════════════════════════════════════════════════════════
+                // ── Community Posts (subTab 0) ────────────────────────────────
+                if (subTab == 0) {
+                    if (isLoadingPosts) {
+                        item {
                             Box(
-                                modifier = Modifier.size(44.dp),
+                                modifier         = Modifier.fillMaxWidth().padding(vertical = 48.dp),
                                 contentAlignment = Alignment.Center
                             ) {
-                                Box(
-                                    modifier = Modifier.size(28.dp).clip(CircleShape)
-                                        .background(PBgSurface)
-                                        .border(1.5.dp, PGreen900, CircleShape)
-                                        .clickable(
-                                            interactionSource = remember { MutableInteractionSource() },
-                                            indication        = null
-                                        ) { if (!isUploadingPhoto) photoPicker.launch("image/*") },
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(
-                                        Icons.Default.CameraAlt, "Change photo",
-                                        tint     = PGreen900,
-                                        modifier = Modifier.size(14.dp)
-                                    )
-                                }
-                            }
-                        }
-
-                        Column(
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.spacedBy(4.dp)
-                        ) {
-                            Text(
-                                userName,
-                                fontSize      = 20.sp,
-                                fontWeight    = FontWeight.Bold,
-                                color         = Color.White,
-                                letterSpacing = (-0.3).sp
-                            )
-                            if (!userEmail.isNullOrBlank()) {
-                                Text(
-                                    userEmail!!,
-                                    fontSize = 12.sp,
-                                    color    = Color.White.copy(alpha = 0.75f)
-                                )
-                            }
-                            if (!userCreatedAt.isNullOrBlank()) {
-                                Row(
-                                    verticalAlignment     = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
-                                ) {
-                                    Icon(
-                                        Icons.Default.CalendarMonth, null,
-                                        tint     = Color.White.copy(alpha = 0.5f),
-                                        modifier = Modifier.size(11.dp)
-                                    )
-                                    Text(
-                                        "Member since $userCreatedAt",
-                                        fontSize = 11.sp,
-                                        color    = Color.White.copy(alpha = 0.55f)
-                                    )
-                                }
-                            }
-
-                            // Bio
-                            Text(
-                                text     = if (userBio.isNullOrBlank()) "No bio yet" else userBio!!,
-                                fontSize = 12.sp,
-                                color    = if (userBio.isNullOrBlank())
-                                    Color.White.copy(alpha = 0.35f)
-                                else
-                                    Color.White.copy(alpha = 0.80f),
-                                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                                modifier  = Modifier.padding(horizontal = 24.dp)
-                            )
-
-                            // Bike type + Skill level pills
-                            Row(
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                verticalAlignment     = Alignment.CenterVertically
-                            ) {
-                                // Bike type pill
-                                Box(
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(20.dp))
-                                        .background(Color.White.copy(alpha = 0.15f))
-                                        .padding(horizontal = 10.dp, vertical = 4.dp)
-                                ) {
-                                    Row(
-                                        verticalAlignment     = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
-                                    ) {
-                                        Icon(
-                                            Icons.Default.DirectionsBike, null,
-                                            tint     = Color.White.copy(alpha = 0.75f),
-                                            modifier = Modifier.size(11.dp)
-                                        )
-                                        Text(
-                                            text     = if (userBikeType.isNullOrBlank()) "No bike set" else userBikeType!!,
-                                            fontSize = 11.sp,
-                                            color    = if (userBikeType.isNullOrBlank())
-                                                Color.White.copy(alpha = 0.35f)
-                                            else
-                                                Color.White.copy(alpha = 0.85f),
-                                            fontWeight = FontWeight.Medium
-                                        )
-                                    }
-                                }
-
-                                // Skill level pill
-                                Box(
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(20.dp))
-                                        .background(Color.White.copy(alpha = 0.15f))
-                                        .padding(horizontal = 10.dp, vertical = 4.dp)
-                                ) {
-                                    Row(
-                                        verticalAlignment     = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
-                                    ) {
-                                        Icon(
-                                            Icons.Default.Star, null,
-                                            tint     = Color.White.copy(alpha = 0.75f),
-                                            modifier = Modifier.size(11.dp)
-                                        )
-                                        Text(
-                                            text     = if (userSkillLevel.isNullOrBlank()) "No level set" else userSkillLevel!!,
-                                            fontSize = 11.sp,
-                                            color    = if (userSkillLevel.isNullOrBlank())
-                                                Color.White.copy(alpha = 0.35f)
-                                            else
-                                                Color.White.copy(alpha = 0.85f),
-                                            fontWeight = FontWeight.Medium
-                                        )
-                                    }
-                                }
-                            }
-                            if (isUploadingPhoto) {
-                                Text(
-                                    "Uploading photo…",
-                                    fontSize = 11.sp,
-                                    color    = Color.White.copy(alpha = 0.65f)
+                                CircularProgressIndicator(
+                                    color       = PGreen900,
+                                    strokeWidth = 2.5.dp,
+                                    modifier    = Modifier.size(32.dp)
                                 )
                             }
                         }
-                    }
-                }
-            }
-
-            // ── Stats card — overlaps hero bottom edge ────────────────────────
-            item {
-                Card(
-                    modifier  = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 20.dp)
-                        .offset(y = (-32).dp),
-                    shape     = RoundedCornerShape(18.dp),
-                    colors    = CardDefaults.cardColors(containerColor = PBgSurface),
-                    elevation = CardDefaults.cardElevation(8.dp)
-                ) {
-                    Row(
-                        modifier              = Modifier.fillMaxWidth().padding(vertical = 20.dp),
-                        horizontalArrangement = Arrangement.SpaceEvenly,
-                        verticalAlignment     = Alignment.CenterVertically
-                    ) {
-                        PStatCell(
-                            icon  = Icons.Default.Article,
-                            value = "$totalPostCount",
-                            label = "Posts"
-                        )
-                        Box(Modifier.width(1.dp).height(36.dp).background(PDivider))
-                        PStatCell(
-                            icon  = Icons.Default.Groups,
-                            value = "$totalEventsJoinedCount",
-                            label = "Events"
-                        )
-                        Box(Modifier.width(1.dp).height(36.dp).background(PDivider))
-                        PStatCell(
-                            icon  = Icons.Default.Favorite,
-                            value = "$totalLikesCount",
-                            label = "Likes"
-                        )
-                        Box(Modifier.width(1.dp).height(36.dp).background(PDivider))
-                        PStatCell(
-                            icon  = Icons.AutoMirrored.Filled.DirectionsBike,
-                            value = "${myRides.size}",
-                            label = "Rides"
-                        )
-                    }
-                }
-                Spacer(Modifier.height(-16.dp))
-            }
-
-            // ── Tabs ──────────────────────────────────────────────────────────
-            item {
-                Spacer(Modifier.height(8.dp))
-                TabRow(
-                    selectedTabIndex = selectedTab,
-                    containerColor   = Color.White,
-                    contentColor     = PGreen900,
-                    indicator = { tabPositions ->
-                        SecondaryIndicator(
-                            modifier = Modifier.tabIndicatorOffset(tabPositions[selectedTab]),
-                            color    = PGreen900
-                        )
-                    },
-                    divider = { HorizontalDivider(color = PDivider) }
-                ) {
-                    Tab(
-                        selected               = selectedTab == 0,
-                        onClick                = { selectedTab = 0 },
-                        selectedContentColor   = PGreen900,
-                        unselectedContentColor = PTextMuted,
-                        text = {
-                            Row(
-                                verticalAlignment     = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                modifier              = Modifier.padding(vertical = 4.dp)
-                            ) {
-                                Icon(Icons.Default.Feed, null, modifier = Modifier.size(15.dp))
-                                Text(
-                                    "Posts & Events",
-                                    fontWeight = if (selectedTab == 0) FontWeight.SemiBold else FontWeight.Normal,
-                                    fontSize   = 13.sp
-                                )
-                            }
-                        }
-                    )
-                    Tab(
-                        selected               = selectedTab == 1,
-                        onClick                = { selectedTab = 1 },
-                        selectedContentColor   = PGreen900,
-                        unselectedContentColor = PTextMuted,
-                        text = {
-                            Row(
-                                verticalAlignment     = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                modifier              = Modifier.padding(vertical = 4.dp)
-                            ) {
-                                Icon(Icons.AutoMirrored.Filled.DirectionsBike, null, modifier = Modifier.size(15.dp))
-                                Text(
-                                    "Saved Rides",
-                                    fontWeight = if (selectedTab == 1) FontWeight.SemiBold else FontWeight.Normal,
-                                    fontSize   = 13.sp
-                                )
-                            }
-                        }
-                    )
-                }
-                Spacer(Modifier.height(12.dp))
-            }
-
-            // ═════════════════════════════════════════════════════════════════
-            // TAB 0 — Posts + Events
-            // ═════════════════════════════════════════════════════════════════
-            if (selectedTab == 0) {
-                val loading = isLoadingPosts || isLoadingEvents
-                if (loading) {
-                    item {
-                        Box(
-                            modifier         = Modifier.fillMaxWidth().padding(vertical = 48.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            CircularProgressIndicator(
-                                color       = PGreen900,
-                                strokeWidth = 2.5.dp,
-                                modifier    = Modifier.size(32.dp)
-                            )
-                        }
-                    }
-                } else if (myPosts.isEmpty() && joinedEvents.isEmpty()) {
-                    item {
-                        PEmptyState(
-                            icon    = Icons.AutoMirrored.Filled.DirectionsBike,
-                            title   = "No activity yet",
-                            message = "Share a ride or join a group event to get started!"
-                        )
-                    }
-                } else {
-                    if (myPosts.isNotEmpty()) {
+                    } else if (myPosts.isEmpty()) {
                         item {
-                            PSectionHeader(
-                                icon  = Icons.Default.Feed,
-                                title = "Community Posts",
-                                count = "${myPosts.size}"
+                            PEmptyState(
+                                icon    = Icons.Default.Feed,
+                                title   = "No posts yet",
+                                message = "Share a ride to get started!"
                             )
                         }
+                    } else {
                         items(myPosts, key = { "post_${it.id}" }) { post ->
                             PostCard(post = post, formatTs = ::formatTs)
-                            Spacer(Modifier.height(8.dp))
-                        }
-                    }
-                    if (joinedEvents.isNotEmpty()) {
-                        item {
-                            Spacer(Modifier.height(8.dp))
-                            PSectionHeader(
-                                icon  = Icons.AutoMirrored.Filled.DirectionsBike,
-                                title = "Upcoming Ride Events",
-                                count = "${joinedEvents.size}"
-                            )
-                        }
-                        items(joinedEvents, key = { "event_${it.id}" }) { event ->
-                            EventCard(event = event, formatEventDate = ::formatEventDate)
-                            Spacer(Modifier.height(8.dp))
+                            Spacer(Modifier.height(12.dp))
                         }
                     }
                 }
-            }
 
-            // ═════════════════════════════════════════════════════════════════
-            // TAB 1 — Saved Rides
-            // ═════════════════════════════════════════════════════════════════
-            if (selectedTab == 1) {
-                if (isLoadingRides) {
-                    item {
+                // ── Ride Events (subTab 1) ────────────────────────────────────
+                if (subTab == 1) {
+                    if (isLoadingEvents) {
+                        item {
+                            Box(
+                                modifier         = Modifier.fillMaxWidth().padding(vertical = 48.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                CircularProgressIndicator(
+                                    color       = PGreen900,
+                                    strokeWidth = 2.5.dp,
+                                    modifier    = Modifier.size(32.dp)
+                                )
+                            }
+                        }
+                    } else if (joinedEvents.isEmpty()) {
+                        item {
+                            PEmptyState(
+                                icon    = Icons.AutoMirrored.Filled.DirectionsBike,
+                                title   = "No events yet",
+                                message = "Join a group ride event to see it here."
+                            )
+                        }
+                    } else {
+                        items(joinedEvents, key = { "event_${it.id}" }) { event ->
+                            EventCard(event = event, formatEventDate = ::formatEventDate)
+                            Spacer(Modifier.height(12.dp))
+                        }
+                    }
+                }
+            } // end LazyColumn
+        } // end Column
+
+        // ── Saved Rides bottom sheet ──────────────────────────────────────────
+        if (showRidesSheet) {
+            ModalBottomSheet(
+                onDismissRequest  = { showRidesSheet = false },
+                sheetState        = ridesSheetState,
+                containerColor    = PBgCanvas,
+                dragHandle        = {
+                    Box(
+                        modifier = Modifier
+                            .padding(top = 12.dp, bottom = 8.dp)
+                            .width(40.dp)
+                            .height(4.dp)
+                            .clip(RoundedCornerShape(2.dp))
+                            .background(PDivider)
+                    )
+                }
+            ) {
+                // Sheet header
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 20.dp)
+                        .padding(bottom = 16.dp),
+                    verticalAlignment     = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(
+                        verticalAlignment     = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
                         Box(
-                            modifier         = Modifier.fillMaxWidth().padding(vertical = 48.dp),
+                            modifier = Modifier
+                                .size(32.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(PGreen50),
                             contentAlignment = Alignment.Center
                         ) {
-                            CircularProgressIndicator(
-                                color       = PGreen900,
-                                strokeWidth = 2.5.dp,
-                                modifier    = Modifier.size(32.dp)
+                            Icon(
+                                Icons.Default.Bookmarks, null,
+                                tint     = PGreen900,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                        Text(
+                            "Saved Rides",
+                            fontSize   = 16.sp,
+                            fontWeight = FontWeight.Bold,
+                            color      = PTextPrimary
+                        )
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(20.dp))
+                                .background(PGreen100)
+                                .padding(horizontal = 8.dp, vertical = 3.dp)
+                        ) {
+                            Text(
+                                "${myRides.size}",
+                                fontSize   = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color      = PGreen900
                             )
                         }
                     }
-                } else if (myRides.isEmpty()) {
-                    item {
-                        PEmptyState(
-                            icon    = Icons.AutoMirrored.Filled.DirectionsBike,
-                            title   = "No saved rides yet",
-                            message = "Complete a ride and save the route to see it here."
+                    IconButton(onClick = { showRidesSheet = false }) {
+                        Icon(
+                            Icons.Default.Close, "Close",
+                            tint     = PTextMuted,
+                            modifier = Modifier.size(20.dp)
                         )
                     }
+                }
+
+                HorizontalDivider(color = PDivider, thickness = 1.dp)
+                Spacer(Modifier.height(8.dp))
+
+                // Sheet content
+                if (isLoadingRides) {
+                    Box(
+                        modifier         = Modifier.fillMaxWidth().padding(vertical = 48.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        CircularProgressIndicator(
+                            color       = PGreen900,
+                            strokeWidth = 2.5.dp,
+                            modifier    = Modifier.size(32.dp)
+                        )
+                    }
+                } else if (myRides.isEmpty()) {
+                    PEmptyState(
+                        icon    = Icons.AutoMirrored.Filled.DirectionsBike,
+                        title   = "No saved rides yet",
+                        message = "Complete a ride and save the route to see it here."
+                    )
                 } else {
-                    items(myRides, key = { it.id }) { ride ->
-                        RideCard(ride = ride, formatDuration = ::formatDuration)
-                        Spacer(Modifier.height(8.dp))
+                    LazyColumn(
+                        contentPadding = PaddingValues(
+                            start  = 0.dp,
+                            end    = 0.dp,
+                            top    = 0.dp,
+                            bottom = paddingValues.calculateBottomPadding() + 32.dp
+                        ),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        items(myRides, key = { it.id }) { ride ->
+                            RideCard(ride = ride, formatDuration = ::formatDuration)
+                        }
                     }
                 }
             }
@@ -779,8 +932,9 @@ private fun PSectionHeader(icon: ImageVector, title: String, count: String) {
 
 // ── Stat cell ─────────────────────────────────────────────────────────────────
 @Composable
-private fun PStatCell(icon: ImageVector, value: String, label: String) {
+private fun PStatCell(icon: ImageVector, value: String, label: String, modifier: Modifier = Modifier) {
     Column(
+        modifier            = modifier,
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
@@ -843,8 +997,8 @@ private fun PostCard(post: ProfilePost, formatTs: (Long) -> String) {
                 )
             }
             Column(
-                modifier = Modifier.fillMaxWidth().padding(14.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+                modifier = Modifier.fillMaxWidth().padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 Row(
                     modifier              = Modifier.fillMaxWidth(),
@@ -853,15 +1007,15 @@ private fun PostCard(post: ProfilePost, formatTs: (Long) -> String) {
                 ) {
                     Row(
                         verticalAlignment     = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
                         Box(
-                            modifier = Modifier.size(34.dp).clip(RoundedCornerShape(10.dp))
+                            modifier = Modifier.size(36.dp).clip(RoundedCornerShape(10.dp))
                                 .background(PGreen50),
                             contentAlignment = Alignment.Center
                         ) {
                             Icon(Icons.AutoMirrored.Filled.DirectionsBike, null,
-                                tint = PGreen900, modifier = Modifier.size(17.dp))
+                                tint = PGreen900, modifier = Modifier.size(18.dp))
                         }
                         Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                             Text(post.activity, fontWeight = FontWeight.SemiBold,
@@ -932,21 +1086,38 @@ private fun EventCard(event: JoinedEvent, formatEventDate: (Long) -> String) {
         else       -> Color(0xFFF3F4F6)
     }
 
+    // Determine if event is in the past
+    val isPast = event.date > 0L && event.date < System.currentTimeMillis() -
+            24 * 60 * 60 * 1000L
+
+    val cardBg    = if (isPast) Color(0xFFF3F4F6) else PBgSurface
+    val titleColor = if (isPast) PTextMuted else PTextPrimary
+    val accentColor = if (isPast) Color(0xFF9CA3AF) else diffFg
+
     Card(
         modifier  = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
         shape     = RoundedCornerShape(16.dp),
-        colors    = CardDefaults.cardColors(containerColor = PBgSurface),
-        elevation = CardDefaults.cardElevation(3.dp)
+        colors    = CardDefaults.cardColors(containerColor = cardBg),
+        elevation = CardDefaults.cardElevation(if (isPast) 0.dp else 3.dp)
     ) {
-        Column(modifier = Modifier.fillMaxWidth()) {
+        Row(modifier = Modifier.fillMaxWidth()) {
+            // Left accent bar
             Box(
-                modifier = Modifier.fillMaxWidth().height(3.dp)
-                    .background(diffFg, RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp))
+                modifier = Modifier
+                    .width(4.dp)
+                    .fillMaxHeight()
+                    .background(
+                        accentColor,
+                        RoundedCornerShape(topStart = 16.dp, bottomStart = 16.dp)
+                    )
             )
             Column(
-                modifier = Modifier.fillMaxWidth().padding(14.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(horizontal = 16.dp, vertical = 14.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
+                // Title + role badge row
                 Row(
                     modifier              = Modifier.fillMaxWidth(),
                     verticalAlignment     = Alignment.CenterVertically,
@@ -956,65 +1127,105 @@ private fun EventCard(event: JoinedEvent, formatEventDate: (Long) -> String) {
                         event.title,
                         fontWeight = FontWeight.Bold,
                         fontSize   = 14.sp,
-                        color      = PTextPrimary,
+                        color      = titleColor,
                         modifier   = Modifier.weight(1f),
                         maxLines   = 2,
                         overflow   = TextOverflow.Ellipsis
                     )
                     Spacer(Modifier.width(8.dp))
+                    // Role badge
                     val roleColor = if (event.isOrganizer) PGreen900 else Color(0xFF059669)
                     val roleBg    = if (event.isOrganizer) PGreen100 else Color(0xFFECFDF5)
                     Box(
-                        modifier = Modifier.clip(RoundedCornerShape(8.dp))
-                            .background(roleBg).padding(horizontal = 8.dp, vertical = 3.dp)
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(if (isPast) Color(0xFFE5E7EB) else roleBg)
+                            .padding(horizontal = 8.dp, vertical = 3.dp)
                     ) {
                         Text(
                             if (event.isOrganizer) "Organizer" else "Joined",
-                            fontSize = 10.sp, fontWeight = FontWeight.SemiBold, color = roleColor
+                            fontSize   = 10.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color      = if (isPast) PTextMuted else roleColor
                         )
                     }
                 }
 
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                // Badges row — difficulty + past/upcoming + distance
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment     = Alignment.CenterVertically
+                ) {
+                    // Difficulty badge
                     Box(
-                        modifier = Modifier.clip(RoundedCornerShape(6.dp))
-                            .background(diffBg).padding(horizontal = 7.dp, vertical = 3.dp)
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(if (isPast) Color(0xFFE5E7EB) else diffBg)
+                            .padding(horizontal = 7.dp, vertical = 3.dp)
                     ) {
-                        Text(event.difficulty, fontSize = 10.sp,
-                            fontWeight = FontWeight.SemiBold, color = diffFg)
+                        Text(
+                            event.difficulty,
+                            fontSize   = 10.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color      = if (isPast) PTextMuted else diffFg
+                        )
+                    }
+                    // Past / Upcoming badge
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(
+                                if (isPast) Color(0xFFF3F4F6)
+                                else Color(0xFFECFDF5)
+                            )
+                            .padding(horizontal = 7.dp, vertical = 3.dp)
+                    ) {
+                        Text(
+                            if (isPast) "Completed" else "Upcoming",
+                            fontSize   = 10.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color      = if (isPast) Color(0xFF6B7280) else Color(0xFF059669)
+                        )
                     }
                     if (event.distanceKm > 0) {
                         PChip(Icons.Default.Route, String.format("%.0f km", event.distanceKm))
                     }
                 }
 
+                // Date + time
                 Row(
                     verticalAlignment     = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     Icon(Icons.Default.CalendarMonth, null,
-                        tint = PGreen900, modifier = Modifier.size(13.dp))
+                        tint     = if (isPast) PTextMuted else PGreen900,
+                        modifier = Modifier.size(13.dp))
                     Text(
                         buildString {
                             append(formatEventDate(event.date))
                             if (event.time.isNotBlank()) append(" · ${event.time}")
                         },
-                        fontSize = 12.sp, color = PTextSecondary
+                        fontSize = 12.sp,
+                        color    = if (isPast) PTextMuted else PTextSecondary
                     )
                 }
 
+                // Route
                 if (event.route.isNotBlank()) {
                     Row(
                         verticalAlignment     = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         Icon(Icons.Default.LocationOn, null,
-                            tint = PTextMuted, modifier = Modifier.size(13.dp))
+                            tint     = PTextMuted,
+                            modifier = Modifier.size(13.dp))
                         Text(
                             event.route,
-                            fontSize = 12.sp, color = PTextMuted,
-                            maxLines = 1, overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f)
+                            fontSize  = 12.sp,
+                            color     = PTextMuted,
+                            maxLines  = 1,
+                            overflow  = TextOverflow.Ellipsis,
+                            modifier  = Modifier.weight(1f)
                         )
                     }
                 }
@@ -1030,11 +1241,11 @@ private fun RideCard(ride: SavedRide, formatDuration: (Long) -> String) {
         modifier  = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
         shape     = RoundedCornerShape(16.dp),
         colors    = CardDefaults.cardColors(containerColor = PBgSurface),
-        elevation = CardDefaults.cardElevation(3.dp)
+        elevation = CardDefaults.cardElevation(2.dp)
     ) {
         Column(
-            modifier = Modifier.fillMaxWidth().padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
+            modifier = Modifier.fillMaxWidth().padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             Row(
                 modifier              = Modifier.fillMaxWidth(),
@@ -1043,16 +1254,16 @@ private fun RideCard(ride: SavedRide, formatDuration: (Long) -> String) {
             ) {
                 Row(
                     verticalAlignment     = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
                     modifier              = Modifier.weight(1f)
                 ) {
                     Box(
-                        modifier = Modifier.size(38.dp).clip(RoundedCornerShape(10.dp))
+                        modifier = Modifier.size(40.dp).clip(RoundedCornerShape(12.dp))
                             .background(PGreen50),
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(Icons.AutoMirrored.Filled.DirectionsBike, null,
-                            tint = PGreen900, modifier = Modifier.size(19.dp))
+                            tint = PGreen900, modifier = Modifier.size(20.dp))
                     }
                     Column(modifier = Modifier.weight(1f)) {
                         Text(ride.name, fontWeight = FontWeight.SemiBold, fontSize = 14.sp,
@@ -1111,7 +1322,7 @@ private fun PChip(icon: ImageVector, text: String) {
 }
 
 @Composable
-private fun PMiniStat(label: String, value: String) {
+private fun PMiniStat(value: String, label: String) {
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(2.dp)

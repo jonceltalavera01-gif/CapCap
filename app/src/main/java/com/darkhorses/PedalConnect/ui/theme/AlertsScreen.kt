@@ -80,6 +80,7 @@ fun AlertsScreen(
     helperName       : String,
     onNavigateToHelp : (GeoPoint, String) -> Unit,
     onImOnMyWay      : (AlertItem) -> Unit,
+    isAdmin          : Boolean = false,
 ) {
     var isRefreshing    by remember { mutableStateOf(false) }
     var selectedFilter  by remember { mutableStateOf("All") }
@@ -541,6 +542,7 @@ fun AlertsScreen(
                             alert            = alert,
                             isExpanded       = expandedAlertId == alert.id,
                             helperName       = helperName,
+                            isAdmin          = isAdmin,
                             onShowDetails    = { expandedAlertId = if (expandedAlertId == alert.id) null else alert.id },
                             onNavigateToHelp = { handleNavigateToHelp(alert) },
                             onImOnMyWay      = { handleImOnMyWay(alert) },
@@ -802,6 +804,7 @@ fun AlertCard(
     alert            : AlertItem,
     isExpanded       : Boolean,
     helperName       : String,
+    isAdmin          : Boolean = false,
     onShowDetails    : () -> Unit,
     onNavigateToHelp : () -> Unit,
     onImOnMyWay      : () -> Unit,
@@ -1149,27 +1152,30 @@ fun AlertCard(
                 HorizontalDivider(color = Color(0xFFF0F0F0), thickness = 0.5.dp)
                 Spacer(Modifier.height(10.dp))
 
-                // ── Navigate button ───────────────────────────────────────────
-                Button(
-                    onClick  = onNavigateToHelp,
-                    modifier = Modifier.fillMaxWidth().height(50.dp),
-                    colors   = ButtonDefaults.buttonColors(containerColor = Green900, contentColor = Color.White),
-                    shape    = RoundedCornerShape(12.dp)
-                ) {
-                    Icon(Icons.Default.Directions, null, tint = Color.White, modifier = Modifier.size(18.dp))
-                    Spacer(Modifier.width(8.dp))
-                    Text("Navigate to Help", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                // ── Navigate button — hidden for admin ────────────────────────
+                if (!isAdmin) {
+                    Button(
+                        onClick  = onNavigateToHelp,
+                        modifier = Modifier.fillMaxWidth().height(50.dp),
+                        colors   = ButtonDefaults.buttonColors(containerColor = Green900, contentColor = Color.White),
+                        shape    = RoundedCornerShape(12.dp)
+                    ) {
+                        Icon(Icons.Default.Directions, null, tint = Color.White, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("Navigate to Help", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                    }
+                    Spacer(Modifier.height(8.dp))
                 }
-
-                Spacer(Modifier.height(8.dp))
 
                 // ── Side-by-side action buttons — equal weight, short labels ──
                 val isClaimedByOther = alert.status == "responding" &&
                         !alert.responderName.isNullOrBlank() &&
                         alert.responderName != helperName
 
-                if (isClaimedByOther) {
-                    // Alert is locked — show who claimed it, only navigate is allowed
+                if (isAdmin) {
+                    // Admin sees nothing here — force resolve is handled in AdminScreen
+                } else if (isClaimedByOther) {
+            // Alert is locked — show who claimed it, only navigate is allowed
                     Row(
                         modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp))
                             .background(Color(0xFFE3F2FD))

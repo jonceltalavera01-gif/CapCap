@@ -94,15 +94,17 @@ fun AdminScreen(paddingValues: PaddingValues) {
     var selectedSection by remember { mutableIntStateOf(0) }
     var drawerOpen      by remember { mutableStateOf(false) }
 
-    val pendingPosts   = remember { mutableStateListOf<AdminPost>() }
-    val pendingRides   = remember { mutableStateListOf<RideEvent>() }
-    val reportedImages = remember { mutableStateListOf<ReportedImage>() }
-    val activeAlerts   = remember { mutableStateListOf<AdminAlert>() }
+    val pendingPosts    = remember { mutableStateListOf<AdminPost>() }
+    val pendingRides    = remember { mutableStateListOf<RideEvent>() }
+    val reportedImages  = remember { mutableStateListOf<ReportedImage>() }
+    val reportedPosts   = remember { mutableStateListOf<AdminPost>() }
+    val activeAlerts    = remember { mutableStateListOf<AdminAlert>() }
 
-    var isLoadingPosts   by remember { mutableStateOf(true) }
-    var isLoadingRides   by remember { mutableStateOf(true) }
-    var isLoadingReports by remember { mutableStateOf(true) }
-    var isLoadingAlerts  by remember { mutableStateOf(true) }
+    var isLoadingPosts         by remember { mutableStateOf(true) }
+    var isLoadingRides         by remember { mutableStateOf(true) }
+    var isLoadingReports       by remember { mutableStateOf(true) }
+    var isLoadingReportedPosts by remember { mutableStateOf(true) }
+    var isLoadingAlerts        by remember { mutableStateOf(true) }
 
     var successMessage by remember { mutableStateOf<String?>(null) }
     var errorMessage   by remember { mutableStateOf<String?>(null) }
@@ -158,6 +160,92 @@ fun AdminScreen(paddingValues: PaddingValues) {
                     } catch (e: Exception) { }
                 }
                 isLoadingRides = false
+            }
+    }
+
+    LaunchedEffect(Unit) {
+        db.collection("reportedPosts")
+            .orderBy("timestamp", Query.Direction.DESCENDING)
+            .addSnapshotListener { snap, _ ->
+                if (snap == null) { isLoadingReportedPosts = false; return@addSnapshotListener }
+                val grouped = snap.documents
+                    .mapNotNull { doc ->
+                        val postId   = doc.getString("postId")   ?: return@mapNotNull null
+                        val userName = doc.getString("userName") ?: return@mapNotNull null
+                        postId to (userName to (doc.getLong("timestamp") ?: 0L))
+                    }
+                    .groupBy { it.first }
+                val postIds = grouped.keys.toList()
+                if (postIds.isEmpty()) { isLoadingReportedPosts = false; return@addSnapshotListener }
+                // Fetch the actual post documents
+                reportedPosts.clear()
+                var fetched = 0
+                postIds.forEach { postId ->
+                    db.collection("posts").document(postId).get()
+                        .addOnSuccessListener { doc ->
+                            if (doc.exists()) {
+                                reportedPosts.add(AdminPost(
+                                    id          = doc.id,
+                                    userName    = doc.getString("userName")    ?: "",
+                                    description = doc.getString("description") ?: "",
+                                    activity    = doc.getString("activity")    ?: "",
+                                    distance    = doc.getString("distance")    ?: "",
+                                    timestamp   = doc.getLong("timestamp")     ?: 0L,
+                                    status      = doc.getString("status")      ?: "",
+                                    imageUrl    = doc.getString("imageUrl")    ?: ""
+                                ))
+                            }
+                            fetched++
+                            if (fetched == postIds.size) isLoadingReportedPosts = false
+                        }
+                        .addOnFailureListener {
+                            fetched++
+                            if (fetched == postIds.size) isLoadingReportedPosts = false
+                        }
+                }
+            }
+    }
+
+    LaunchedEffect(Unit) {
+        db.collection("reportedPosts")
+            .orderBy("timestamp", Query.Direction.DESCENDING)
+            .addSnapshotListener { snap, _ ->
+                if (snap == null) { isLoadingReportedPosts = false; return@addSnapshotListener }
+                val grouped = snap.documents
+                    .mapNotNull { doc ->
+                        val postId   = doc.getString("postId")   ?: return@mapNotNull null
+                        val userName = doc.getString("userName") ?: return@mapNotNull null
+                        postId to (userName to (doc.getLong("timestamp") ?: 0L))
+                    }
+                    .groupBy { it.first }
+                val postIds = grouped.keys.toList()
+                if (postIds.isEmpty()) { isLoadingReportedPosts = false; return@addSnapshotListener }
+                // Fetch the actual post documents
+                reportedPosts.clear()
+                var fetched = 0
+                postIds.forEach { postId ->
+                    db.collection("posts").document(postId).get()
+                        .addOnSuccessListener { doc ->
+                            if (doc.exists()) {
+                                reportedPosts.add(AdminPost(
+                                    id          = doc.id,
+                                    userName    = doc.getString("userName")    ?: "",
+                                    description = doc.getString("description") ?: "",
+                                    activity    = doc.getString("activity")    ?: "",
+                                    distance    = doc.getString("distance")    ?: "",
+                                    timestamp   = doc.getLong("timestamp")     ?: 0L,
+                                    status      = doc.getString("status")      ?: "",
+                                    imageUrl    = doc.getString("imageUrl")    ?: ""
+                                ))
+                            }
+                            fetched++
+                            if (fetched == postIds.size) isLoadingReportedPosts = false
+                        }
+                        .addOnFailureListener {
+                            fetched++
+                            if (fetched == postIds.size) isLoadingReportedPosts = false
+                        }
+                }
             }
     }
 
@@ -346,10 +434,11 @@ fun AdminScreen(paddingValues: PaddingValues) {
         val badgeColor: Color
     )
     val sections = listOf(
-        NavSection("Posts",   Icons.Default.Article,        pendingPosts.size,   AAmber500),
-        NavSection("Rides",   Icons.Default.DirectionsBike, pendingRides.size,   Color(0xFF1976D2)),
-        NavSection("Reports", Icons.Default.Flag,           reportedImages.size, ARedColor),
-        NavSection("Alerts",  Icons.Default.Warning,        activeAlerts.size,   Color(0xFFEF4444))
+        NavSection("Posts",         Icons.Default.Article,        pendingPosts.size,   AAmber500),
+        NavSection("Rides",         Icons.Default.DirectionsBike, pendingRides.size,   Color(0xFF1976D2)),
+        NavSection("Post Reports",  Icons.Default.Flag,           reportedPosts.size,  ARedColor),
+        NavSection("Photo Reports", Icons.Default.Image,          reportedImages.size, Color(0xFFEA580C)),
+        NavSection("Alerts",        Icons.Default.Warning,        activeAlerts.size,   Color(0xFFEF4444))
     )
 
     // ── Drawer state ──────────────────────────────────────────────────────────
@@ -724,6 +813,64 @@ fun AdminScreen(paddingValues: PaddingValues) {
                             }
                         }
                         2 -> {
+                            if (isLoadingReportedPosts) {
+                                item { AdminLoadingState() }
+                            } else if (reportedPosts.isEmpty()) {
+                                item { AdminEmptyState(Icons.Default.CheckCircle, "No reported posts", "All posts have been reviewed.") }
+                            } else {
+                                item {
+                                    Text("${reportedPosts.size} reported post${if (reportedPosts.size != 1) "s" else ""}",
+                                        fontSize = 12.sp, color = AMuted,
+                                        modifier = Modifier.padding(start = 4.dp, bottom = 2.dp))
+                                }
+                                items(reportedPosts, key = { it.id }) { post ->
+                                    AdminPostCard(
+                                        post      = post,
+                                        onApprove = {
+                                            // "Approve" here means dismiss reports — restore post to accepted
+                                            db.collection("posts").document(post.id)
+                                                .update("status", "accepted")
+                                            db.collection("reportedPosts")
+                                                .whereEqualTo("postId", post.id)
+                                                .get()
+                                                .addOnSuccessListener { snap ->
+                                                    snap.documents.forEach { it.reference.delete() }
+                                                }
+                                            reportedPosts.remove(post)
+                                        },
+                                        onReject  = {
+                                            // "Reject" means remove the post entirely
+                                            db.collection("posts").document(post.id).delete()
+                                            db.collection("reportedPosts")
+                                                .whereEqualTo("postId", post.id)
+                                                .get()
+                                                .addOnSuccessListener { snap ->
+                                                    snap.documents.forEach { it.reference.delete() }
+                                                }
+                                            db.collection("notifications").add(hashMapOf(
+                                                "userName"  to post.userName,
+                                                "message"   to "❌ Your post was removed after being reported for violating community guidelines.",
+                                                "type"      to "rejected",
+                                                "timestamp" to System.currentTimeMillis(),
+                                                "read"      to false
+                                            ))
+                                            reportedPosts.remove(post)
+                                        },
+                                        onDelete  = {
+                                            db.collection("posts").document(post.id).delete()
+                                            db.collection("reportedPosts")
+                                                .whereEqualTo("postId", post.id)
+                                                .get()
+                                                .addOnSuccessListener { snap ->
+                                                    snap.documents.forEach { it.reference.delete() }
+                                                }
+                                            reportedPosts.remove(post)
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                        3 -> {
                             if (isLoadingReports) {
                                 item { AdminLoadingState() }
                             } else if (reportedImages.isEmpty()) {
@@ -743,7 +890,7 @@ fun AdminScreen(paddingValues: PaddingValues) {
                                 }
                             }
                         }
-                        3 -> {
+                        4 -> {
                             if (isLoadingAlerts) {
                                 item { AdminLoadingState() }
                             } else if (activeAlerts.isEmpty()) {

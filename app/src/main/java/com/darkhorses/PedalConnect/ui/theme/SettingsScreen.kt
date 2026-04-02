@@ -76,7 +76,7 @@ private val SKILL_LEVEL_OPTIONS = listOf("Beginner", "Intermediate", "Advanced",
 private data class UserSettings(
     val displayName: String                 = "",
     val bio: String                         = "",
-    val bikeType: String                    = "",
+    val bikeTypes: List<String>             = emptyList(),
     val skillLevel: String                  = "",
     val photoUrl: String                    = "",
     val notificationsEnabled: Boolean       = true,
@@ -100,19 +100,21 @@ fun SettingsScreen(navController: NavController) {
     var userDocId        by remember { mutableStateOf<String?>(null) }
     var isLoadingSettings by remember { mutableStateOf(true) }
     var settings          by remember { mutableStateOf(UserSettings()) }
+    var userName         by remember { mutableStateOf("") }
+    var isAdmin          by remember { mutableStateOf(false) }
 
     // ── Edit Profile draft state ──────────────────────────────────────────────
     var editProfileExpanded by remember { mutableStateOf(false) }
     var draftName           by remember { mutableStateOf("") }
     var draftBio            by remember { mutableStateOf("") }
-    var draftBikeType       by remember { mutableStateOf("") }
+    var draftBikeTypes      by remember { mutableStateOf<List<String>>(emptyList()) }
     var draftSkillLevel     by remember { mutableStateOf("") }
     var draftPhotoUrl       by remember { mutableStateOf("") }
     var isSavingProfile     by remember { mutableStateOf(false) }
     var isUploadingPhoto    by remember { mutableStateOf(false) }
     var profileSaveError    by remember { mutableStateOf<String?>(null) }
     var nameError           by remember { mutableStateOf<String?>(null) }
-    var bikeTypeExpanded    by remember { mutableStateOf(false) }
+    // bikeTypeExpanded removed — bike type now uses a checklist
     var skillLevelExpanded  by remember { mutableStateOf(false) }
 
     // ── Toggle save state ─────────────────────────────────────────────────────
@@ -135,11 +137,22 @@ fun SettingsScreen(navController: NavController) {
             val doc = snap.documents.firstOrNull()
             if (doc != null) {
                 userDocId = doc.id
+                userName  = doc.getString("username") ?: ""
+                isAdmin   = doc.getString("role") == "admin"
                 val prefs = doc.get("settings") as? Map<*, *>
+                // Graceful migration: bikeTypes may be an array (new) or a string (old)
+                val rawBikeTypes: List<String> = when (val raw = doc.get("bikeTypes")) {
+                    is List<*> -> raw.filterIsInstance<String>()
+                    else -> {
+                        // Legacy string field — wrap in list, will be overwritten on next save
+                        val legacy = doc.getString("bikeType") ?: ""
+                        if (legacy.isNotBlank()) listOf(legacy) else emptyList()
+                    }
+                }
                 settings = UserSettings(
                     displayName                = doc.getString("displayName") ?: currentUser.displayName ?: "",
                     bio                        = doc.getString("bio") ?: "",
-                    bikeType                   = doc.getString("bikeType") ?: "",
+                    bikeTypes                  = rawBikeTypes,
                     skillLevel                 = doc.getString("skillLevel") ?: "",
                     photoUrl                   = doc.getString("photoUrl") ?: "",
                     notificationsEnabled       = prefs?.get("notificationsEnabled") as? Boolean ?: true,
@@ -151,7 +164,7 @@ fun SettingsScreen(navController: NavController) {
                 // Seed draft with current values
                 draftName       = settings.displayName
                 draftBio        = settings.bio
-                draftBikeType   = settings.bikeType
+                draftBikeTypes  = settings.bikeTypes
                 draftSkillLevel = settings.skillLevel
                 draftPhotoUrl   = settings.photoUrl
             }
@@ -186,7 +199,7 @@ fun SettingsScreen(navController: NavController) {
         isUploadingPhoto = true
         scope.launch {
             try {
-                val imgBBApiKey = "697c37daa7aa4705b309befb3de1d384"
+                val imgBBApiKey = com.darkhorses.PedalConnect.BuildConfig.IMGBB_API_KEY
                 val uploadedUrl = withContext(Dispatchers.IO) {
                     val bytes  = context.contentResolver.openInputStream(uri)!!.readBytes()
                     val base64 = android.util.Base64.encodeToString(bytes, android.util.Base64.DEFAULT)
@@ -239,7 +252,7 @@ fun SettingsScreen(navController: NavController) {
                 val updates = buildMap<String, Any> {
                     put("displayName", trimmedName)
                     put("bio",         draftBio.trim())
-                    put("bikeType",    draftBikeType)
+                    put("bikeTypes",   draftBikeTypes)
                     put("skillLevel",  draftSkillLevel)
                     if (draftPhotoUrl.isNotBlank()) put("photoUrl", draftPhotoUrl)
                 }
@@ -250,7 +263,7 @@ fun SettingsScreen(navController: NavController) {
                 settings = settings.copy(
                     displayName = trimmedName,
                     bio         = draftBio.trim(),
-                    bikeType    = draftBikeType,
+                    bikeTypes   = draftBikeTypes,
                     skillLevel  = draftSkillLevel,
                     photoUrl    = if (draftPhotoUrl.isNotBlank()) draftPhotoUrl else settings.photoUrl
                 )
@@ -487,11 +500,11 @@ fun SettingsScreen(navController: NavController) {
                 modifier  = Modifier.fillMaxWidth().padding(bottom = 4.dp)
             ) {
                 Column {
-                    // Always-visible header row — tap to expand/collapse
+                    // Always-visible header row
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clickable { editProfileExpanded = !editProfileExpanded }
+                            .then(if (!isAdmin) Modifier.clickable { editProfileExpanded = !editProfileExpanded } else Modifier)
                             .padding(16.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
@@ -524,39 +537,29 @@ fun SettingsScreen(navController: NavController) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
                                 text = if (editProfileExpanded) draftName.ifBlank { "Your Name" }
-                                else settings.displayName.ifBlank { currentUser?.displayName ?: "Cyclist" },
+                                else settings.displayName.ifBlank { userName.ifBlank { "Cyclist" } },
                                 fontWeight = FontWeight.Bold, fontSize = 16.sp, color = TextPrimary
                             )
                             Text(currentUser?.email ?: "", fontSize = 13.sp, color = TextSecondary)
-                            // Show bike type / skill badge when collapsed
-                            if (!editProfileExpanded && (settings.bikeType.isNotBlank() || settings.skillLevel.isNotBlank())) {
-                                Spacer(Modifier.height(2.dp))
-                                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                    if (settings.bikeType.isNotBlank()) {
-                                        InfoBadge("🚲 ${settings.bikeType}")
-                                    }
-                                    if (settings.skillLevel.isNotBlank()) {
-                                        InfoBadge("⭐ ${settings.skillLevel}")
-                                    }
-                                }
-                            }
                         }
-                        // Edit / collapse icon
-                        Box(
-                            modifier = Modifier.size(32.dp).background(SettingsGreen100, CircleShape),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                imageVector = if (editProfileExpanded) Icons.Rounded.ExpandLess else Icons.Rounded.Edit,
-                                contentDescription = if (editProfileExpanded) "Collapse" else "Edit Profile",
-                                tint = SettingsGreen700, modifier = Modifier.size(18.dp)
-                            )
+                        // Edit / collapse icon — hidden for admin
+                        if (!isAdmin) {
+                            Box(
+                                modifier = Modifier.size(32.dp).background(SettingsGreen100, CircleShape),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = if (editProfileExpanded) Icons.Rounded.ExpandLess else Icons.Rounded.Edit,
+                                    contentDescription = if (editProfileExpanded) "Collapse" else "Edit Profile",
+                                    tint = SettingsGreen700, modifier = Modifier.size(18.dp)
+                                )
+                            }
                         }
                     }
 
-                    // ── Inline edit form ──────────────────────────────────────
+                    // ── Inline edit form — hidden for admin ───────────────────
                     AnimatedVisibility(
-                        visible = editProfileExpanded,
+                        visible = editProfileExpanded && !isAdmin,
                         enter   = expandVertically() + fadeIn(),
                         exit    = shrinkVertically() + fadeOut()
                     ) {
@@ -651,17 +654,10 @@ fun SettingsScreen(navController: NavController) {
                                 )
                             }
 
-                            // Bike Type
-                            DropdownField(
-                                label       = "Bike Type",
-                                icon        = Icons.Rounded.DirectionsBike,
-                                selected    = draftBikeType,
-                                placeholder = "Select your bike type",
-                                options     = BIKE_TYPE_OPTIONS,
-                                expanded    = bikeTypeExpanded,
-                                onExpand    = { bikeTypeExpanded = true },
-                                onDismiss   = { bikeTypeExpanded = false },
-                                onSelect    = { draftBikeType = it; bikeTypeExpanded = false }
+                            // Bike Types (multi-select, max 3)
+                            BikeTypePills(
+                                selected = draftBikeTypes,
+                                onChange = { draftBikeTypes = it }
                             )
 
                             // Skill Level
@@ -705,7 +701,7 @@ fun SettingsScreen(navController: NavController) {
                                         // Reset draft back to last saved values
                                         draftName       = settings.displayName
                                         draftBio        = settings.bio
-                                        draftBikeType   = settings.bikeType
+                                        draftBikeTypes  = settings.bikeTypes
                                         draftSkillLevel = settings.skillLevel
                                         draftPhotoUrl   = settings.photoUrl
                                         nameError = null; profileSaveError = null
@@ -927,19 +923,6 @@ fun SettingsScreen(navController: NavController) {
 // Edit profile sub-components
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Small pill badge shown on the profile card when collapsed */
-@Composable
-private fun InfoBadge(text: String) {
-    Box(
-        modifier = Modifier
-            .clip(RoundedCornerShape(20.dp))
-            .background(SettingsGreen100)
-            .padding(horizontal = 7.dp, vertical = 2.dp)
-    ) {
-        Text(text, fontSize = 10.sp, color = SettingsGreen700, fontWeight = FontWeight.Medium)
-    }
-}
-
 /** Labelled OutlinedTextField with leading icon, optional error, and ImeAction */
 @Composable
 private fun ProfileTextField(
@@ -982,13 +965,97 @@ private fun ProfileTextField(
             keyboardActions = KeyboardActions(onNext = { onNext?.invoke() }),
             shape  = RoundedCornerShape(12.dp),
             colors = OutlinedTextFieldDefaults.colors(
-                focusedBorderColor   = SettingsGreen700,
-                unfocusedBorderColor = DividerColor,
-                errorBorderColor     = ErrorRed,
-                focusedLabelColor    = SettingsGreen700
+                focusedBorderColor    = SettingsGreen700,
+                unfocusedBorderColor  = DividerColor,
+                errorBorderColor      = ErrorRed,
+                focusedLabelColor     = SettingsGreen700,
+                focusedTextColor      = TextPrimary,
+                unfocusedTextColor    = TextPrimary,
+                disabledTextColor     = TextSecondary
             ),
             modifier = Modifier.fillMaxWidth()
         )
+    }
+}
+
+/** Multi-select bike type pill toggles, capped at 3 */
+@Composable
+private fun BikeTypePills(
+    selected : List<String>,
+    onChange : (List<String>) -> Unit
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(
+            modifier              = Modifier.fillMaxWidth(),
+            verticalAlignment     = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(
+                "Bike Type",
+                fontSize   = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+                color      = TextSecondary
+            )
+            Text(
+                "${selected.size}/3",
+                fontSize = 11.sp,
+                color    = if (selected.size >= 3) AmberWarning else TextSecondary
+            )
+        }
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement   = Arrangement.spacedBy(8.dp),
+            modifier              = Modifier.fillMaxWidth()
+        ) {
+            BIKE_TYPE_OPTIONS.forEach { option ->
+                val isChecked  = option in selected
+                val isDisabled = !isChecked && selected.size >= 3
+                val bgColor    = if (isChecked) SettingsGreen700 else DividerColor.copy(alpha = 0.5f)
+                val textColor  = when {
+                    isChecked  -> Color.White
+                    isDisabled -> TextSecondary.copy(alpha = 0.35f)
+                    else       -> TextSecondary
+                }
+                Row(
+                    modifier = Modifier
+                        .wrapContentWidth()
+                        .clip(RoundedCornerShape(20.dp))
+                        .background(bgColor)
+                        .clickable(enabled = !isDisabled) {
+                            onChange(
+                                if (isChecked) selected - option
+                                else (selected + option).takeLast(3)
+                            )
+                        }
+                        .padding(horizontal = 12.dp, vertical = 7.dp),
+                    verticalAlignment     = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(5.dp)
+                ) {
+                    if (isChecked) {
+                        Icon(
+                            Icons.Rounded.Check,
+                            contentDescription = null,
+                            tint     = Color.White,
+                            modifier = Modifier.size(11.dp)
+                        )
+                    }
+                    Text(
+                        option,
+                        fontSize   = 12.sp,
+                        fontWeight = if (isChecked) FontWeight.SemiBold else FontWeight.Normal,
+                        color      = textColor,
+                        softWrap   = false
+                    )
+                }
+            }
+        }
+        if (selected.size >= 3) {
+            Text(
+                "Maximum 3 bike types selected",
+                fontSize = 11.sp,
+                color    = AmberWarning
+            )
+        }
     }
 }
 
@@ -1025,10 +1092,13 @@ private fun DropdownField(
                     fontSize = 14.sp
                 ),
                 colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor          = SettingsGreen700,
-                    unfocusedBorderColor        = DividerColor,
-                    focusedTrailingIconColor    = SettingsGreen700,
-                    unfocusedTrailingIconColor  = TextSecondary
+                    focusedBorderColor         = SettingsGreen700,
+                    unfocusedBorderColor       = DividerColor,
+                    focusedTrailingIconColor   = SettingsGreen700,
+                    unfocusedTrailingIconColor = TextSecondary,
+                    focusedTextColor           = TextPrimary,
+                    unfocusedTextColor         = TextPrimary,
+                    disabledTextColor          = TextPrimary
                 ),
                 shape    = RoundedCornerShape(12.dp),
                 modifier = Modifier.fillMaxWidth().menuAnchor()
