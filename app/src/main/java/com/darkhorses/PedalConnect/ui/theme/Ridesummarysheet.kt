@@ -190,7 +190,7 @@ fun RideSummarySheet(
                         Text("Save this route", fontWeight = FontWeight.SemiBold,
                             fontSize = 13.sp,
                             color = if (saveRoute) RSGreen900 else Color(0xFF1A1A1A))
-                        Text("Add to your Directions for quick re-use",
+                        Text("Add to your Directions",
                             fontSize = 11.sp, color = Color(0xFF7A8F7A))
                     }
                 }

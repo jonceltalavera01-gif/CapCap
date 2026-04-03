@@ -700,7 +700,7 @@ fun ProfileScreen(navController: NavController, userName: String, paddingValues:
                         ) {
                             Icon(
                                 Icons.Default.Bookmarks,
-                                contentDescription = "Saved Rides",
+                                contentDescription = "Saved Routes",
                                 tint     = Color.White,
                                 modifier = Modifier.size(20.dp)
                             )
@@ -838,7 +838,7 @@ fun ProfileScreen(navController: NavController, userName: String, paddingValues:
                             )
                         }
                         Text(
-                            "Saved Rides",
+                            "Saved Routes",
                             fontSize   = 16.sp,
                             fontWeight = FontWeight.Bold,
                             color      = PTextPrimary

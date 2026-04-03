@@ -1469,30 +1469,106 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
                         }
 
                         // ── Start Ride button — hidden for Admin and when tracking ──
-                        if (!isAdmin && !isTracking) Button(
-                            onClick = {
-                                resetRide(); isTracking = true; isPaused = false
-                                rideStartPoint = userGeoPoint ?: myLocationOverlay?.myLocation
-                            },
-                            modifier = Modifier.fillMaxWidth().height(52.dp)
-                                .shadow(8.dp, RoundedCornerShape(16.dp)),
-                            shape = RoundedCornerShape(16.dp),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = Color(0xFFFFD600), contentColor = Color(0xFF1A1A1A)
-                            ),
-                            elevation = ButtonDefaults.buttonElevation(defaultElevation = 0.dp)
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                                Box(modifier = Modifier.size(30.dp).clip(CircleShape)
-                                    .background(Color(0xFF1A1A1A).copy(alpha = 0.12f)),
-                                    contentAlignment = Alignment.Center) {
-                                    Icon(Icons.Default.PlayArrow, null, modifier = Modifier.size(16.dp))
+                        if (!isAdmin) {
+                            AnimatedVisibility(
+                                visible = !isTracking,
+                                enter   = fadeIn(animationSpec = tween(200)) + expandVertically(),
+                                exit    = fadeOut(animationSpec = tween(150)) + shrinkVertically()
+                            ) {
+                                Button(
+                                    onClick = {
+                                        resetRide(); isTracking = true; isPaused = false
+                                        rideStartPoint = userGeoPoint ?: myLocationOverlay?.myLocation
+                                    },
+                                    modifier  = Modifier.fillMaxWidth().height(52.dp)
+                                        .shadow(8.dp, RoundedCornerShape(16.dp)),
+                                    shape     = RoundedCornerShape(16.dp),
+                                    colors    = ButtonDefaults.buttonColors(
+                                        containerColor = Color(0xFFFFD600),
+                                        contentColor   = Color(0xFF1A1A1A)
+                                    ),
+                                    elevation = ButtonDefaults.buttonElevation(defaultElevation = 0.dp)
+                                ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                        Box(modifier = Modifier.size(30.dp).clip(CircleShape)
+                                            .background(Color(0xFF1A1A1A).copy(alpha = 0.12f)),
+                                            contentAlignment = Alignment.Center) {
+                                            Icon(Icons.Default.PlayArrow, null, modifier = Modifier.size(16.dp))
+                                        }
+                                        Text("Start Ride", fontWeight = FontWeight.ExtraBold, fontSize = 15.sp, letterSpacing = 0.3.sp)
+                                    }
                                 }
-                                Text("Start Ride", fontWeight = FontWeight.ExtraBold, fontSize = 15.sp, letterSpacing = 0.3.sp)
                             }
-                        }
-                    }
 
+                            // ── Compact stats strip — replaces Start Ride slot when tracking ──
+                            AnimatedVisibility(
+                                visible = isTracking,
+                                enter   = fadeIn(animationSpec = tween(200)) + expandVertically(),
+                                exit    = fadeOut(animationSpec = tween(150)) + shrinkVertically()
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(60.dp)
+                                        .shadow(6.dp, RoundedCornerShape(18.dp))
+                                        .clip(RoundedCornerShape(18.dp))
+                                        .background(Green900),
+                                    verticalAlignment     = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceEvenly
+                                ) {
+                                    // Time
+                                    Column(
+                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                        verticalArrangement = Arrangement.spacedBy(1.dp)
+                                    ) {
+                                        Text(
+                                            formatTime(elapsedSeconds),
+                                            fontSize = 17.sp, fontWeight = FontWeight.ExtraBold, color = Color.White
+                                        )
+                                        Text("Time", fontSize = 9.sp, color = Color.White.copy(alpha = 0.6f))
+                                    }
+                                    Box(Modifier.width(1.dp).height(28.dp).background(Color.White.copy(alpha = 0.2f)))
+                                    // Speed
+                                    Column(
+                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                        verticalArrangement = Arrangement.spacedBy(1.dp)
+                                    ) {
+                                        Row(
+                                            verticalAlignment     = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(2.dp)
+                                        ) {
+                                            Text(
+                                                String.format(Locale.getDefault(), "%.1f", currentSpeedKmh),
+                                                fontSize = 17.sp, fontWeight = FontWeight.ExtraBold, color = Color.White
+                                            )
+                                            Text("km/h", fontSize = 9.sp, color = Color.White.copy(alpha = 0.6f))
+                                        }
+                                        Text("Speed", fontSize = 9.sp, color = Color.White.copy(alpha = 0.6f))
+                                    }
+                                    Box(Modifier.width(1.dp).height(28.dp).background(Color.White.copy(alpha = 0.2f)))
+                                    // Distance
+                                    Column(
+                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                        verticalArrangement = Arrangement.spacedBy(1.dp)
+                                    ) {
+                                        Row(
+                                            verticalAlignment     = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(2.dp)
+                                        ) {
+                                            Box(modifier = Modifier.size(7.dp).clip(CircleShape)
+                                                .background(if (isPaused) Color(0xFFFF9800) else Color(0xFF4CAF50)))
+                                            Text(
+                                                String.format(Locale.getDefault(), "%.2f", totalDistance / 1000.0),
+                                                fontSize = 17.sp, fontWeight = FontWeight.ExtraBold, color = Color.White
+                                            )
+                                            Text("km", fontSize = 9.sp, color = Color.White.copy(alpha = 0.6f))
+                                        }
+                                        Text("Distance", fontSize = 9.sp, color = Color.White.copy(alpha = 0.6f))
+                                    }
+                                }       // end outer stats strip Row
+                            }           // end AnimatedVisibility (isTracking strip)
+                        }               // end if (!isAdmin)
+                    }                   // end top Column
 
                     // ── Full-screen search overlay — animated drop down ────────
                     AnimatedVisibility(
@@ -1539,7 +1615,7 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
                         exit  = fadeOut() + slideOutVertically(targetOffsetY = { -it }),
                         modifier = Modifier.align(Alignment.TopCenter).fillMaxWidth()
                             .windowInsetsPadding(WindowInsets.statusBars).padding(
-                                top   = if (isTracking) 135.dp else 135.dp,
+                                top = if (isTracking) 120.dp else 135.dp,
                                 start = 16.dp,
                                 end   = 16.dp
                             )
@@ -1661,151 +1737,130 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
                         AnimatedVisibility(visible = !isAdmin && (isTracking || totalDistance > 0),
                             enter = fadeIn() + slideInVertically(initialOffsetY = { it }),
                             exit  = fadeOut() + slideOutVertically(targetOffsetY = { it })) {
+                            val nearbyHospitalsCard = nearbyShops.count { it.type == ShopType.HOSPITAL }
+                            val nearbyBikeShopsCard = nearbyShops.count { it.type == ShopType.BIKE_SHOP }
                             var cardExpanded by remember { mutableStateOf(false) }
-                            LaunchedEffect(isTracking) { cardExpanded = !isTracking }
+                            LaunchedEffect(isTracking) { if (!isTracking) cardExpanded = true }
                             Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(20.dp),
                                 colors = CardDefaults.cardColors(containerColor = Color.White.copy(alpha = 0.97f)), elevation = CardDefaults.cardElevation(8.dp)) {
                                 Column(modifier = Modifier.fillMaxWidth()) {
-                                    // ── Compact tracker header — single tap to expand ──
-                                    Column(
-                                        modifier = Modifier.fillMaxWidth()
+                                    // ── Always-visible controls row: pills (left) + pause/stop (right) ──
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
                                             .clickable { cardExpanded = !cardExpanded }
-                                            .padding(horizontal = 14.dp, vertical = 10.dp),
-                                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                                            .padding(horizontal = 20.dp, vertical = 10.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.SpaceBetween
                                     ) {
-                                        val nearbyHospitals = nearbyShops.count { it.type == ShopType.HOSPITAL }
-                                        val nearbyBikeShops = nearbyShops.count { it.type == ShopType.BIKE_SHOP }
-                                        // Row 1 — distance + status dot + timer + chevron
-                                        Row(
-                                            modifier = Modifier.fillMaxWidth(),
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.SpaceBetween
-                                        ) {
+                                        // Pills — only shown when tracking
+                                        if (isTracking) {
+                                            Row(
+                                                horizontalArrangement = Arrangement.spacedBy(7.dp),
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                // Cyclists pill
+                                                Row(
+                                                    modifier = Modifier
+                                                        .clip(RoundedCornerShape(20.dp))
+                                                        .background(Green100)
+                                                        .padding(horizontal = 7.dp, vertical = 4.dp),
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                    horizontalArrangement = Arrangement.spacedBy(3.dp)
+                                                ) {
+                                                    Box(modifier = Modifier.size(5.dp).clip(CircleShape).background(Color(0xFF4CAF50)))
+                                                    Icon(Icons.AutoMirrored.Filled.DirectionsBike, null, tint = Green900, modifier = Modifier.size(11.dp))
+                                                    Text("${nearbyUsers.size}", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = Green900)
+                                                }
+                                                // Hospitals pill
+                                                Row(
+                                                    modifier = Modifier
+                                                        .clip(RoundedCornerShape(20.dp))
+                                                        .background(Color(0xFFD32F2F))
+                                                        .padding(horizontal = 7.dp, vertical = 4.dp),
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                    horizontalArrangement = Arrangement.spacedBy(3.dp)
+                                                ) {
+                                                    Icon(Icons.Default.LocalHospital, null, tint = Color.White, modifier = Modifier.size(11.dp))
+                                                    Text("$nearbyHospitalsCard", fontSize = 11.sp, fontWeight = FontWeight.ExtraBold, color = Color.White)
+                                                }
+                                                // Shops pill
+                                                Row(
+                                                    modifier = Modifier
+                                                        .clip(RoundedCornerShape(20.dp))
+                                                        .background(Color(0xFFE0F2F1))
+                                                        .padding(horizontal = 7.dp, vertical = 4.dp),
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                    horizontalArrangement = Arrangement.spacedBy(3.dp)
+                                                ) {
+                                                    Icon(Icons.Default.HomeRepairService, null, tint = Color(0xFF00796B), modifier = Modifier.size(11.dp))
+                                                    Text("$nearbyBikeShopsCard", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFF00796B))
+                                                }
+                                            }
+                                        } else {
+                                            // Not tracking — show status label instead
                                             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                                Box(modifier = Modifier.size(8.dp).clip(CircleShape)
-                                                    .background(when { isPaused -> Color(0xFFFF9800); isTracking -> Color(0xFF4CAF50); else -> Color(0xFF9E9E9E) }))
-                                                Text(
-                                                    String.format(Locale.getDefault(), "%.2f km", totalDistance / 1000.0),
-                                                    fontSize = 20.sp, fontWeight = FontWeight.ExtraBold, color = Green900
-                                                )
-                                                Text(
-                                                    when { isPaused -> "· Paused"; isTracking -> "· Active"; else -> "· Done" },
-                                                    fontSize = 12.sp, fontWeight = FontWeight.Medium,
-                                                    color = when { isPaused -> Color(0xFFFF9800); isTracking -> Color(0xFF4CAF50); else -> Color(0xFF9E9E9E) }
-                                                )
-                                            }
-                                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                                if (isTracking || elapsedSeconds > 0)
-                                                    Text(formatTime(elapsedSeconds), fontSize = 16.sp, fontWeight = FontWeight.ExtraBold, color = Green900)
-                                                Icon(
-                                                    if (cardExpanded) Icons.Default.ExpandMore else Icons.Default.ExpandLess,
-                                                    null, tint = Color(0xFFBBBBBB), modifier = Modifier.size(18.dp)
-                                                )
+                                                Box(modifier = Modifier.size(8.dp).clip(CircleShape).background(Color(0xFF9E9E9E)))
+                                                Text("Ride Complete", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFF9E9E9E))
                                             }
                                         }
-                                        // Row 2 — stat pills (cyclists · hospitals · shops)
-                                        Row(
-                                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                            verticalAlignment = Alignment.CenterVertically
-                                        ) {
-                                            // Cyclists pill
+                                        // Pause + Stop buttons (tracking only) or chevron (post-ride)
+                                        if (isTracking) {
                                             Row(
-                                                modifier = Modifier.clip(RoundedCornerShape(20.dp))
-                                                    .background(Green100)
-                                                    .padding(horizontal = 8.dp, vertical = 4.dp),
                                                 verticalAlignment = Alignment.CenterVertically,
-                                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                                horizontalArrangement = Arrangement.spacedBy(16.dp)
                                             ) {
-                                                Box(modifier = Modifier.size(5.dp).clip(CircleShape).background(Color(0xFF4CAF50)))
-                                                Icon(Icons.AutoMirrored.Filled.DirectionsBike, null, tint = Green900, modifier = Modifier.size(11.dp))
-                                                Text("${nearbyUsers.size}", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = Green900)
-                                            }
-                                            // Hospitals pill
-                                            Row(
-                                                modifier = Modifier.clip(RoundedCornerShape(20.dp))
-                                                    .background(Color(0xFFD32F2F))
-                                                    .padding(horizontal = 8.dp, vertical = 4.dp),
-                                                verticalAlignment = Alignment.CenterVertically,
-                                                horizontalArrangement = Arrangement.spacedBy(4.dp)
-                                            ) {
-                                                Icon(Icons.Default.LocalHospital, null, tint = Color.White, modifier = Modifier.size(11.dp))
-                                                Text("$nearbyHospitals hosp.", fontSize = 11.sp, fontWeight = FontWeight.ExtraBold, color = Color.White)
-                                            }
-                                            // Shops pill
-                                            Row(
-                                                modifier = Modifier.clip(RoundedCornerShape(20.dp))
-                                                    .background(Color(0xFFE0F2F1))
-                                                    .padding(horizontal = 8.dp, vertical = 4.dp),
-                                                verticalAlignment = Alignment.CenterVertically,
-                                                horizontalArrangement = Arrangement.spacedBy(4.dp)
-                                            ) {
-                                                Icon(Icons.Default.HomeRepairService, null, tint = Color(0xFF00796B), modifier = Modifier.size(11.dp))
-                                                Text("$nearbyBikeShops shops", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFF00796B))
-                                            }
-                                        }
-                                    }
-                                    if (isTracking) {
-                                        HorizontalDivider(color = Color(0xFFE8EDE8))
-                                        Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                            OutlinedButton(onClick = { isPaused = !isPaused; if (isPaused) currentSpeedKmh = 0f },
-                                                modifier = Modifier.weight(1f).height(42.dp), shape = RoundedCornerShape(12.dp),
-                                                border = androidx.compose.foundation.BorderStroke(2.dp, if (isPaused) Color(0xFF2E7D32) else Color(0xFFFF9800)),
-                                                colors = ButtonDefaults.outlinedButtonColors(contentColor = if (isPaused) Color(0xFF2E7D32) else Color(0xFFFF9800))) {
-                                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                                                    Icon(if (isPaused) Icons.Default.PlayArrow else Icons.Default.Pause, null, modifier = Modifier.size(16.dp))
-                                                    Text(if (isPaused) "Resume" else "Pause", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                                IconButton(
+                                                    onClick  = { isPaused = !isPaused; if (isPaused) currentSpeedKmh = 0f },
+                                                    modifier = Modifier.size(42.dp)
+                                                        .clip(RoundedCornerShape(12.dp))
+                                                        .background(Color(0xFFF5F5F5))
+                                                ) {
+                                                    Icon(
+                                                        if (isPaused) Icons.Default.PlayArrow else Icons.Default.Pause,
+                                                        null,
+                                                        tint     = if (isPaused) Color(0xFF4CAF50) else Color(0xFFFF9800),
+                                                        modifier = Modifier.size(20.dp)
+                                                    )
+                                                }
+                                                IconButton(
+                                                    onClick  = {
+                                                        summaryDistance  = totalDistance
+                                                        summarySeconds   = elapsedSeconds
+                                                        summaryMaxSpeed  = maxSpeedKmh
+                                                        summaryElevation = elevationGainMeters
+                                                        isTracking       = false
+                                                        isPaused         = false
+                                                        currentSpeedKmh  = 0f
+                                                        showRideSummary  = true
+                                                    },
+                                                    modifier = Modifier.size(42.dp)
+                                                        .clip(RoundedCornerShape(12.dp))
+                                                        .background(Color(0xFFD32F2F).copy(alpha = 0.85f))
+                                                ) {
+                                                    Icon(Icons.Default.Stop, null, tint = Color.White, modifier = Modifier.size(20.dp))
                                                 }
                                             }
-                                            Button(onClick = {
-                                                summaryDistance = totalDistance; summarySeconds = elapsedSeconds
-                                                summaryMaxSpeed = maxSpeedKmh; summaryElevation = elevationGainMeters
-                                                isTracking = false; isPaused = false; currentSpeedKmh = 0f; showRideSummary = true
-                                            }, modifier = Modifier.weight(1f).height(42.dp), shape = RoundedCornerShape(12.dp),
-                                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD32F2F)),
-                                                elevation = ButtonDefaults.buttonElevation(2.dp)) {
-                                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                                                    Icon(Icons.Default.Stop, null, modifier = Modifier.size(16.dp))
-                                                    Text("Stop", fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                                                }
-                                            }
+                                        } else {
+                                            Icon(
+                                                if (cardExpanded) Icons.Default.ExpandMore else Icons.Default.ExpandLess,
+                                                null, tint = Color(0xFFBBBBBB), modifier = Modifier.size(18.dp)
+                                            )
                                         }
                                     }
-                                    AnimatedVisibility(visible = cardExpanded, enter = fadeIn() + expandVertically(), exit = fadeOut() + shrinkVertically()) {
+                                    // ── Expandable stats — always auto-expanded post-ride, hidden during tracking ──
+                                    AnimatedVisibility(visible = cardExpanded && !isTracking && totalDistance > 0, enter = fadeIn() + expandVertically(), exit = fadeOut() + shrinkVertically()) {
                                         Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                                             HorizontalDivider(color = Color(0xFFE8EDE8))
-                                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-                                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                                    Text(String.format(Locale.getDefault(), "%.1f", currentSpeedKmh), fontSize = 20.sp, fontWeight = FontWeight.ExtraBold, color = Green900)
-                                                    Text("km/h", fontSize = 10.sp, color = Color(0xFF9E9E9E)); Text("Speed", fontSize = 10.sp, color = Color(0xFF7A8F7A), fontWeight = FontWeight.Medium)
-                                                }
-                                                Box(modifier = Modifier.width(1.dp).height(44.dp).background(Color(0xFFE8EDE8)))
-                                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                                    Text(String.format(Locale.getDefault(), "%.1f", avgSpeedKmh), fontSize = 20.sp, fontWeight = FontWeight.ExtraBold, color = Green900)
-                                                    Text("km/h", fontSize = 10.sp, color = Color(0xFF9E9E9E)); Text("Avg", fontSize = 10.sp, color = Color(0xFF7A8F7A), fontWeight = FontWeight.Medium)
-                                                }
-                                                Box(modifier = Modifier.width(1.dp).height(44.dp).background(Color(0xFFE8EDE8)))
-                                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                                    Text(String.format(Locale.getDefault(), "%.0f", elevationGainMeters), fontSize = 20.sp, fontWeight = FontWeight.ExtraBold, color = Green900)
-                                                    Text("m", fontSize = 10.sp, color = Color(0xFF9E9E9E)); Text("Elev ↑", fontSize = 10.sp, color = Color(0xFF7A8F7A), fontWeight = FontWeight.Medium)
-                                                }
-                                                Box(modifier = Modifier.width(1.dp).height(44.dp).background(Color(0xFFE8EDE8)))
-                                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                                    Text("${nearbyUsers.size}", fontSize = 20.sp, fontWeight = FontWeight.ExtraBold, color = Green900)
-                                                    Icon(Icons.AutoMirrored.Filled.DirectionsBike, null, tint = Color(0xFF9E9E9E), modifier = Modifier.size(10.dp))
-                                                    Text("Nearby", fontSize = 10.sp, color = Color(0xFF7A8F7A), fontWeight = FontWeight.Medium)
-                                                }
-                                            }
-                                            if (!isTracking && totalDistance > 0) {
-                                                HorizontalDivider(color = Color(0xFFE8EDE8))
-                                                TextButton(onClick = { resetRide() }, modifier = Modifier.fillMaxWidth()) {
-                                                    Text("Clear & Reset", color = Color(0xFF7A8F7A), fontWeight = FontWeight.Medium, fontSize = 13.sp)
-                                                }
+                                            TextButton(onClick = { resetRide() }, modifier = Modifier.fillMaxWidth()) {
+                                                Text("Clear & Reset", color = Color(0xFF7A8F7A), fontWeight = FontWeight.Medium, fontSize = 13.sp)
                                             }
                                         }
                                     }
                                 }
                             }
                         }
+
 
                         if (!isTracking && totalDistance == 0.0 || isTracking) {
                             val nearbyHospitals2 = nearbyShops.count { it.type == ShopType.HOSPITAL }
@@ -1871,15 +1926,6 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
                                             fontWeight = FontWeight.Bold,
                                             color      = Color(0xFF00796B))
                                     }
-                                }
-                            }
-
-                            if (!isAdmin) {
-                                AnimatedVisibility(
-                                    visible = !showSearchOverlay,
-                                    enter   = fadeIn(animationSpec  = tween(200)),
-                                    exit    = fadeOut(animationSpec = tween(150))
-                                ) {
                                 }
                             }
 
