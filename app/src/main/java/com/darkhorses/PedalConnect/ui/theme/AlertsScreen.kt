@@ -57,6 +57,7 @@ private val LowBg     = Color(0xFFE8F5E9)
 data class AlertItem(
     val id: String = "",
     val riderName: String,
+    val riderDisplayName: String = "",
     val riderNameLower: String = "",
     val emergencyType: String,
     val locationName: String,
@@ -111,9 +112,11 @@ fun AlertsScreen(
                             } catch (_: Exception) { AlertSeverity.HIGH }
                             val riderName = doc.getString("riderName") ?: "Unknown Rider"
                             unsorted.add(AlertItem(
-                                id                     = doc.id,
-                                riderName              = riderName,
-                                riderNameLower         = doc.getString("riderNameLower")
+                                id                  = doc.id,
+                                riderName           = riderName,
+                                riderDisplayName    = doc.getString("riderDisplayName")
+                                    ?.takeIf { it.isNotBlank() } ?: riderName,
+                                riderNameLower      = doc.getString("riderNameLower")
                                     ?: riderName.trim().lowercase(),
                                 emergencyType          = doc.getString("emergencyType") ?: "Emergency",
                                 locationName           = doc.getString("locationName") ?: "Unknown Location",
@@ -896,12 +899,12 @@ fun AlertCard(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(modifier = Modifier.size(40.dp).clip(CircleShape).background(severityBg),
                         contentAlignment = Alignment.Center) {
-                        Text(alert.riderName.take(1).uppercase(),
+                        Text(alert.riderDisplayName.ifBlank { alert.riderName }.take(1).uppercase(),
                             fontWeight = FontWeight.ExtraBold, fontSize = 16.sp, color = severityColor)
                     }
                     Spacer(Modifier.width(10.dp))
                     Column {
-                        Text(alert.riderName, fontWeight = FontWeight.Bold, fontSize = 16.sp, color = OnSurface)
+                        Text(alert.riderDisplayName.ifBlank { alert.riderName }, fontWeight = FontWeight.Bold, fontSize = 16.sp, color = OnSurface)
                         if (!alert.contactNumber.isNullOrEmpty()) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Icon(Icons.Default.Phone, null, tint = Color.Gray, modifier = Modifier.size(12.dp))

@@ -243,10 +243,10 @@ fun ProfileScreen(navController: NavController, userName: String, paddingValues:
             .whereArrayContains("participants", userName)
             .addSnapshotListener { snap, _ ->
                 if (snap == null) { isLoadingEvents = false; return@addSnapshotListener }
-                joinedEvents.clear()
+                val loaded = mutableListOf<JoinedEvent>()
                 for (doc in snap.documents) {
                     if (doc.getString("status") == "rejected") continue
-                    joinedEvents.add(JoinedEvent(
+                    loaded.add(JoinedEvent(
                         id          = doc.id,
                         title       = doc.getString("title")       ?: "Unnamed Ride",
                         route       = doc.getString("route")       ?: "",
@@ -258,6 +258,12 @@ fun ProfileScreen(navController: NavController, userName: String, paddingValues:
                         status      = doc.getString("status")      ?: "approved"
                     ))
                 }
+                // Upcoming events first, then past — within each group newest date first
+                val now = System.currentTimeMillis()
+                joinedEvents.clear()
+                joinedEvents.addAll(
+                    loaded.sortedWith(compareBy<JoinedEvent> { it.date < now }.thenByDescending { it.date })
+                )
                 isLoadingEvents = false
             }
     }
@@ -1086,9 +1092,19 @@ private fun EventCard(event: JoinedEvent, formatEventDate: (Long) -> String) {
         else       -> Color(0xFFF3F4F6)
     }
 
-    // Determine if event is in the past
-    val isPast = event.date > 0L && event.date < System.currentTimeMillis() -
-            24 * 60 * 60 * 1000L
+    // Determine event timing status
+    val rideEvent = RideEvent(
+        id           = event.id,
+        title        = event.title,
+        route        = event.route,
+        date         = event.date,
+        time         = event.time,
+        difficulty   = event.difficulty,
+        distanceKm   = event.distanceKm,
+        status       = event.status
+    )
+    val timeStatus = getEventTimeStatus(rideEvent)
+    val isPast     = timeStatus == EventStatus.ENDED
 
     val cardBg    = if (isPast) Color(0xFFF3F4F6) else PBgSurface
     val titleColor = if (isPast) PTextMuted else PTextPrimary
@@ -1175,16 +1191,27 @@ private fun EventCard(event: JoinedEvent, formatEventDate: (Long) -> String) {
                         modifier = Modifier
                             .clip(RoundedCornerShape(6.dp))
                             .background(
-                                if (isPast) Color(0xFFF3F4F6)
-                                else Color(0xFFECFDF5)
+                                when (timeStatus) {
+                                    EventStatus.ENDED         -> Color(0xFFF3F4F6)
+                                    EventStatus.HAPPENING_NOW -> Color(0xFFFEF3C7)
+                                    EventStatus.UPCOMING      -> Color(0xFFECFDF5)
+                                }
                             )
                             .padding(horizontal = 7.dp, vertical = 3.dp)
                     ) {
                         Text(
-                            if (isPast) "Completed" else "Upcoming",
+                            when (timeStatus) {
+                                EventStatus.ENDED         -> "Completed"
+                                EventStatus.HAPPENING_NOW -> "Happening Now"
+                                EventStatus.UPCOMING      -> "Upcoming"
+                            },
                             fontSize   = 10.sp,
                             fontWeight = FontWeight.SemiBold,
-                            color      = if (isPast) Color(0xFF6B7280) else Color(0xFF059669)
+                            color      = when (timeStatus) {
+                                EventStatus.ENDED         -> Color(0xFF6B7280)
+                                EventStatus.HAPPENING_NOW -> Color(0xFF92400E)
+                                EventStatus.UPCOMING      -> Color(0xFF059669)
+                            }
                         )
                     }
                     if (event.distanceKm > 0) {

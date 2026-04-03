@@ -1,6 +1,7 @@
 package com.darkhorses.PedalConnect.ui.theme
 
 import android.Manifest
+import android.R.attr.fontWeight
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -88,6 +89,8 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.ui.graphics.graphicsLayer
 
 // ── Colour tokens ─────────────────────────────────────────────────────────────
 private val Green900 = Color(0xFF06402B)
@@ -1197,6 +1200,16 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
                                     val alertBitmap = makeMarkerBitmap(view.context, android.graphics.Color.argb(255, 211, 47, 47), false, 80, true)
                                     icon = android.graphics.drawable.BitmapDrawable(view.context.resources, alertBitmap)
                                     view.overlays.add(this)
+                                    // Fetch display name and update marker title asynchronously
+                                    // Falls back to riderName (username) if displayName is blank
+                                    scope.launch {
+                                        val displayName = try {
+                                            fetchUserProfile(alert.riderName, db).displayName
+                                                .takeIf { it.isNotBlank() } ?: alert.riderName
+                                        } catch (e: Exception) { alert.riderName }
+                                        title = "🆘 $displayName: ${alert.emergencyType}"
+                                        view.invalidate()
+                                    }
                                 }
                             }
                             nearbyUsers.forEach { user ->
@@ -1205,6 +1218,12 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
                                     title    = "🚴 ${user.userName}"
                                     snippet  = "${user.distanceKm} km away"
                                     setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+                                    // Fetch display name and update marker title asynchronously
+                                    scope.launch {
+                                        val displayName = fetchUserProfile(user.userName, db).displayName
+                                        title = "🚴 $displayName"
+                                        view.invalidate()
+                                    }
                                     // Default to bike icon marker while photo loads
                                     icon = android.graphics.drawable.BitmapDrawable(
                                         view.context.resources,
@@ -1449,28 +1468,27 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
                             }
                         }
 
-                        // ── Start Ride button — hidden for Admin ──────────────
-                        if (!isAdmin) Button(
+                        // ── Start Ride button — hidden for Admin and when tracking ──
+                        if (!isAdmin && !isTracking) Button(
                             onClick = {
-                                if (!isTracking) { resetRide(); isTracking = true; isPaused = false
-                                    rideStartPoint = userGeoPoint ?: myLocationOverlay?.myLocation }
+                                resetRide(); isTracking = true; isPaused = false
+                                rideStartPoint = userGeoPoint ?: myLocationOverlay?.myLocation
                             },
-                            enabled = !isTracking,
-                            modifier = Modifier.fillMaxWidth().height(52.dp).shadow(if (!isTracking) 8.dp else 0.dp, RoundedCornerShape(16.dp)),
+                            modifier = Modifier.fillMaxWidth().height(52.dp)
+                                .shadow(8.dp, RoundedCornerShape(16.dp)),
                             shape = RoundedCornerShape(16.dp),
                             colors = ButtonDefaults.buttonColors(
-                                containerColor = Color(0xFFFFD600), contentColor = Color(0xFF1A1A1A),
-                                disabledContainerColor = Green900.copy(alpha = 0.55f), disabledContentColor = Color.White.copy(alpha = 0.85f)
+                                containerColor = Color(0xFFFFD600), contentColor = Color(0xFF1A1A1A)
                             ),
                             elevation = ButtonDefaults.buttonElevation(defaultElevation = 0.dp)
                         ) {
                             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                                 Box(modifier = Modifier.size(30.dp).clip(CircleShape)
-                                    .background(if (!isTracking) Color(0xFF1A1A1A).copy(alpha = 0.12f) else Color.White.copy(alpha = 0.15f)),
+                                    .background(Color(0xFF1A1A1A).copy(alpha = 0.12f)),
                                     contentAlignment = Alignment.Center) {
-                                    Icon(if (isTracking) Icons.AutoMirrored.Filled.DirectionsBike else Icons.Default.PlayArrow, null, modifier = Modifier.size(16.dp))
+                                    Icon(Icons.Default.PlayArrow, null, modifier = Modifier.size(16.dp))
                                 }
-                                Text(if (isTracking) "Ride in Progress…" else "Start Ride", fontWeight = FontWeight.ExtraBold, fontSize = 15.sp, letterSpacing = 0.3.sp)
+                                Text("Start Ride", fontWeight = FontWeight.ExtraBold, fontSize = 15.sp, letterSpacing = 0.3.sp)
                             }
                         }
                     }
@@ -1521,7 +1539,7 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
                         exit  = fadeOut() + slideOutVertically(targetOffsetY = { -it }),
                         modifier = Modifier.align(Alignment.TopCenter).fillMaxWidth()
                             .windowInsetsPadding(WindowInsets.statusBars).padding(
-                                top   = if (isTracking) 120.dp else 135.dp,
+                                top   = if (isTracking) 135.dp else 135.dp,
                                 start = 16.dp,
                                 end   = 16.dp
                             )
@@ -1559,11 +1577,14 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
                             if (step != null) {
                                 Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp),
                                     colors = CardDefaults.cardColors(containerColor = Color.White.copy(alpha = 0.97f)), elevation = CardDefaults.cardElevation(8.dp)) {
-                                    Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
-                                        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                                        Box(modifier = Modifier.size(40.dp).clip(RoundedCornerShape(12.dp)).background(Green100), contentAlignment = Alignment.Center) {
-                                            Icon(Icons.Default.Navigation, null, tint = Green900, modifier = Modifier.size(22.dp))
-                                        }
+                                    Row(modifier = Modifier.fillMaxWidth().height(IntrinsicSize.Min)) {
+                                        Box(modifier = Modifier.width(4.dp).fillMaxHeight()
+                                            .background(Green900, RoundedCornerShape(topStart = 16.dp, bottomStart = 16.dp)))
+                                        Row(modifier = Modifier.weight(1f).padding(horizontal = 14.dp, vertical = 12.dp),
+                                            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                            Box(modifier = Modifier.size(40.dp).clip(RoundedCornerShape(12.dp)).background(Green100), contentAlignment = Alignment.Center) {
+                                                Icon(Icons.Default.Navigation, null, tint = Green900, modifier = Modifier.size(22.dp))
+                                            }
                                         Column(modifier = Modifier.weight(1f)) {
                                             Text(step.instruction, fontWeight = FontWeight.Bold, fontSize = 14.sp, color = Color(0xFF1A1A1A), maxLines = 2)
                                             if (step.distanceM > 0)
@@ -1571,10 +1592,11 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
                                                     fontSize = 12.sp, color = Color(0xFF7A8F7A), fontWeight = FontWeight.Medium)
                                         }
                                         Text("${currentStepIdx + 1}/${turnSteps.size}", fontSize = 11.sp, color = Color(0xFF9E9E9E), fontWeight = FontWeight.Medium)
-                                        IconButton(onClick = { showTurnPanel = false }, modifier = Modifier.size(28.dp)) {
-                                            Icon(Icons.Default.Close, null, tint = Color.LightGray, modifier = Modifier.size(16.dp))
-                                        }
-                                    }
+                                            IconButton(onClick = { showTurnPanel = false }, modifier = Modifier.size(28.dp)) {
+                                                Icon(Icons.Default.Close, null, tint = Color.LightGray, modifier = Modifier.size(16.dp))
+                                            }
+                                        } // end inner Row
+                                    } // end outer Row with accent bar
                                 }
                             }
                         }
@@ -1644,30 +1666,82 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
                             Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(20.dp),
                                 colors = CardDefaults.cardColors(containerColor = Color.White.copy(alpha = 0.97f)), elevation = CardDefaults.cardElevation(8.dp)) {
                                 Column(modifier = Modifier.fillMaxWidth()) {
-                                    Row(modifier = Modifier.fillMaxWidth().clickable { cardExpanded = !cardExpanded }.padding(horizontal = 14.dp, vertical = 10.dp),
-                                        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
-                                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                            Box(modifier = Modifier.size(8.dp).clip(CircleShape).background(when { isPaused -> Color(0xFFFF9800); isTracking -> Color(0xFF4CAF50); else -> Color(0xFF9E9E9E) }))
-                                            Text(String.format(Locale.getDefault(), "%.2f km", totalDistance / 1000.0), fontSize = 18.sp, fontWeight = FontWeight.ExtraBold, color = Green900)
-                                            Text(when { isPaused -> "· Paused"; isTracking -> "· Active"; else -> "· Done" },
-                                                fontSize = 12.sp, fontWeight = FontWeight.Medium,
-                                                color = when { isPaused -> Color(0xFFFF9800); isTracking -> Color(0xFF4CAF50); else -> Color(0xFF9E9E9E) })
+                                    // ── Compact tracker header — single tap to expand ──
+                                    Column(
+                                        modifier = Modifier.fillMaxWidth()
+                                            .clickable { cardExpanded = !cardExpanded }
+                                            .padding(horizontal = 14.dp, vertical = 10.dp),
+                                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        val nearbyHospitals = nearbyShops.count { it.type == ShopType.HOSPITAL }
+                                        val nearbyBikeShops = nearbyShops.count { it.type == ShopType.BIKE_SHOP }
+                                        // Row 1 — distance + status dot + timer + chevron
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.SpaceBetween
+                                        ) {
+                                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                                Box(modifier = Modifier.size(8.dp).clip(CircleShape)
+                                                    .background(when { isPaused -> Color(0xFFFF9800); isTracking -> Color(0xFF4CAF50); else -> Color(0xFF9E9E9E) }))
+                                                Text(
+                                                    String.format(Locale.getDefault(), "%.2f km", totalDistance / 1000.0),
+                                                    fontSize = 20.sp, fontWeight = FontWeight.ExtraBold, color = Green900
+                                                )
+                                                Text(
+                                                    when { isPaused -> "· Paused"; isTracking -> "· Active"; else -> "· Done" },
+                                                    fontSize = 12.sp, fontWeight = FontWeight.Medium,
+                                                    color = when { isPaused -> Color(0xFFFF9800); isTracking -> Color(0xFF4CAF50); else -> Color(0xFF9E9E9E) }
+                                                )
+                                            }
+                                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                                if (isTracking || elapsedSeconds > 0)
+                                                    Text(formatTime(elapsedSeconds), fontSize = 16.sp, fontWeight = FontWeight.ExtraBold, color = Green900)
+                                                Icon(
+                                                    if (cardExpanded) Icons.Default.ExpandMore else Icons.Default.ExpandLess,
+                                                    null, tint = Color(0xFFBBBBBB), modifier = Modifier.size(18.dp)
+                                                )
+                                            }
                                         }
-                                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                            val nearbyHospitals = nearbyShops.count { it.type == ShopType.HOSPITAL }
-                                            val nearbyBikeShops = nearbyShops.count { it.type == ShopType.BIKE_SHOP }
-                                            if (isTracking || elapsedSeconds > 0) Text(formatTime(elapsedSeconds), fontSize = 14.sp, fontWeight = FontWeight.ExtraBold, color = Green900)
-                                            Row(modifier = Modifier.clip(RoundedCornerShape(20.dp)).background(Color(0xFFD32F2F)).padding(horizontal = 6.dp, vertical = 3.dp),
-                                                verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                                                Icon(Icons.Default.LocalHospital, null, tint = Color.White, modifier = Modifier.size(10.dp))
-                                                Text("$nearbyHospitals", fontSize = 10.sp, fontWeight = FontWeight.ExtraBold, color = Color.White)
+                                        // Row 2 — stat pills (cyclists · hospitals · shops)
+                                        Row(
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            // Cyclists pill
+                                            Row(
+                                                modifier = Modifier.clip(RoundedCornerShape(20.dp))
+                                                    .background(Green100)
+                                                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                            ) {
+                                                Box(modifier = Modifier.size(5.dp).clip(CircleShape).background(Color(0xFF4CAF50)))
+                                                Icon(Icons.AutoMirrored.Filled.DirectionsBike, null, tint = Green900, modifier = Modifier.size(11.dp))
+                                                Text("${nearbyUsers.size}", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = Green900)
                                             }
-                                            Row(modifier = Modifier.clip(RoundedCornerShape(20.dp)).background(Color(0xFFE0F2F1)).padding(horizontal = 6.dp, vertical = 3.dp),
-                                                verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                                                Icon(Icons.Default.HomeRepairService, null, tint = Color(0xFF00796B), modifier = Modifier.size(10.dp))
-                                                Text("$nearbyBikeShops shops", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color(0xFF00796B))
+                                            // Hospitals pill
+                                            Row(
+                                                modifier = Modifier.clip(RoundedCornerShape(20.dp))
+                                                    .background(Color(0xFFD32F2F))
+                                                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                            ) {
+                                                Icon(Icons.Default.LocalHospital, null, tint = Color.White, modifier = Modifier.size(11.dp))
+                                                Text("$nearbyHospitals hosp.", fontSize = 11.sp, fontWeight = FontWeight.ExtraBold, color = Color.White)
                                             }
-                                            Icon(if (cardExpanded) Icons.Default.ExpandMore else Icons.Default.ExpandLess, null, tint = Color(0xFFBBBBBB), modifier = Modifier.size(18.dp))
+                                            // Shops pill
+                                            Row(
+                                                modifier = Modifier.clip(RoundedCornerShape(20.dp))
+                                                    .background(Color(0xFFE0F2F1))
+                                                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                            ) {
+                                                Icon(Icons.Default.HomeRepairService, null, tint = Color(0xFF00796B), modifier = Modifier.size(11.dp))
+                                                Text("$nearbyBikeShops shops", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFF00796B))
+                                            }
                                         }
                                     }
                                     if (isTracking) {
@@ -1733,7 +1807,7 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
                             }
                         }
 
-                        if (!isTracking && totalDistance == 0.0) {
+                        if (!isTracking && totalDistance == 0.0 || isTracking) {
                             val nearbyHospitals2 = nearbyShops.count { it.type == ShopType.HOSPITAL }
                             val nearbyBikeShops2 = nearbyShops.count { it.type == ShopType.BIKE_SHOP }
                             val myActiveSosAlert = alerts.firstOrNull {
@@ -1742,7 +1816,7 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
                             val hasActiveAlert = myActiveSosAlert != null
 
                             AnimatedVisibility(
-                                visible = !showSearchOverlay,
+                                visible = !showSearchOverlay && !isTracking,
                                 enter   = fadeIn(animationSpec = tween(200)),
                                 exit    = fadeOut(animationSpec = tween(150))
                             ) {
@@ -1750,7 +1824,6 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
                                     verticalAlignment     = Alignment.CenterVertically,
                                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                                 ) {
-                                    // Nearby cyclists pill
                                     Row(
                                         modifier = Modifier
                                             .clip(RoundedCornerShape(20.dp))
@@ -1768,8 +1841,6 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
                                             fontWeight = FontWeight.SemiBold,
                                             color      = Green900)
                                     }
-
-                                    // Hospitals pill
                                     Row(
                                         modifier = Modifier
                                             .clip(RoundedCornerShape(20.dp))
@@ -1785,8 +1856,6 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
                                             fontWeight = FontWeight.ExtraBold,
                                             color      = Color.White)
                                     }
-
-                                    // Shops pill
                                     Row(
                                         modifier = Modifier
                                             .clip(RoundedCornerShape(20.dp))
@@ -1811,6 +1880,15 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
                                     enter   = fadeIn(animationSpec  = tween(200)),
                                     exit    = fadeOut(animationSpec = tween(150))
                                 ) {
+                                }
+                            }
+
+                            if (!isAdmin) {
+                                AnimatedVisibility(
+                                    visible = !showSearchOverlay,
+                                    enter   = fadeIn(animationSpec  = tween(200)),
+                                    exit    = fadeOut(animationSpec = tween(150))
+                                ) {
                                 Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
                                     Box(
                                         modifier = Modifier.fillMaxWidth().height(72.dp)
@@ -1819,6 +1897,12 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
                                                 if (hasActiveAlert) Color(0xFF2E7D32).copy(alpha = 0.18f)
                                                 else Color(0xFFD32F2F).copy(alpha = 0.18f)
                                             )
+                                    )
+                                    val sosPulse = rememberInfiniteTransition(label = "sos")
+                                    val sosScale by sosPulse.animateFloat(
+                                        initialValue = 1f, targetValue = if (!hasActiveAlert) 1.03f else 1f,
+                                        animationSpec = infiniteRepeatable(tween(900), RepeatMode.Reverse),
+                                        label = "sosScale"
                                     )
                                     Button(
                                         onClick = {
@@ -1829,6 +1913,7 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
                                             .fillMaxWidth()
                                             .padding(horizontal = 4.dp, vertical = 4.dp)
                                             .height(64.dp)
+                                            .graphicsLayer { scaleX = sosScale; scaleY = sosScale }
                                             .shadow(16.dp, RoundedCornerShape(20.dp)),
                                         shape  = RoundedCornerShape(20.dp),
                                         colors = ButtonDefaults.buttonColors(

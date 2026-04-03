@@ -206,10 +206,21 @@ fun SosSheet(
                     }
                 }
 
+                // ── Fetch display name for human-readable identification ───────
+                val displayName = try {
+                    val snap = db.collection("users")
+                        .whereEqualTo("username", userName)
+                        .limit(1).get().await()
+                    snap.documents.firstOrNull()
+                        ?.getString("displayName")
+                        ?.takeIf { it.isNotBlank() } ?: userName
+                } catch (e: Exception) { userName }
+
                 // ── Build alert payload ───────────────────────────────────────
                 val alert = hashMapOf<String, Any>(
-                    "riderName"      to userName,
-                    "riderNameLower" to userName.trim().lowercase(),
+                    "riderName"        to userName,
+                    "riderNameLower"   to userName.trim().lowercase(),
+                    "riderDisplayName" to displayName,
                     "emergencyType"  to type,
                     "latitude"       to (userGeoPoint?.latitude  ?: 0.0),
                     "longitude"      to (userGeoPoint?.longitude ?: 0.0),

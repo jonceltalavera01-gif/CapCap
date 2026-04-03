@@ -60,6 +60,7 @@ import java.text.SimpleDateFormat
 import java.util.*
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.statusBarsPadding
+import kotlinx.coroutines.tasks.await
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Design Tokens
@@ -944,8 +945,8 @@ private fun HeroBanner(upcomingCount: Int) {
             Spacer(Modifier.height(2.dp))
             Text(when {
                 upcomingCount == 0 -> "No upcoming rides yet — be the first!"
-                upcomingCount == 1 -> "1 upcoming ride near you"
-                else               -> "$upcomingCount upcoming rides near you"
+                upcomingCount == 1 -> "1 upcoming ride"
+                else               -> "$upcomingCount upcoming rides"
             }, fontSize = 14.sp, color = Color.White.copy(alpha = 0.72f), lineHeight = 20.sp)
             Spacer(Modifier.height(12.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1174,17 +1175,51 @@ private fun StatusChip(label: String, textColor: Color, bgColor: Color) {
 
 @Composable
 private fun AvatarStack(participants: List<String>, maxParticipants: Int) {
+    val db = FirebaseFirestore.getInstance()
+    // Load profiles for the first 4 participants
+    val profiles = remember(participants) {
+        mutableStateMapOf<String, UserProfile>()
+    }
+    LaunchedEffect(participants) {
+        participants.take(4).forEach { username ->
+            if (!profiles.containsKey(username)) {
+                val profile = fetchUserProfile(username, db)
+                profiles[username] = profile
+            }
+        }
+    }
+
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        Box {
+        Box(Modifier.width((minOf(participants.size, 4) * 18 + 10).dp)) {
             participants.take(4).forEachIndexed { i, name ->
-                Box(Modifier.padding(start = (i * 18).dp).size(28.dp).clip(CircleShape)
-                    .background(Color.White).padding(1.dp).clip(CircleShape)
-                    .background(Brush.linearGradient(listOf(Green800, Green500))), Alignment.Center) {
-                    Text(name.take(1).uppercase(), fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                val profile = profiles[name]
+                Box(
+                    Modifier
+                        .padding(start = (i * 18).dp)
+                        .size(28.dp)
+                        .clip(CircleShape)
+                        .background(Color.White)
+                        .padding(1.dp)
+                        .clip(CircleShape)
+                        .background(Brush.linearGradient(listOf(Green800, Green500))),
+                    Alignment.Center
+                ) {
+                    if (!profile?.photoUrl.isNullOrBlank()) {
+                        coil.compose.AsyncImage(
+                            model              = profile!!.photoUrl,
+                            contentDescription = profile.displayName,
+                            contentScale       = androidx.compose.ui.layout.ContentScale.Crop,
+                            modifier           = Modifier.fillMaxSize().clip(CircleShape)
+                        )
+                    } else {
+                        Text(
+                            (profile?.displayName ?: name).take(1).uppercase(),
+                            fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color.White
+                        )
+                    }
                 }
             }
         }
-        Spacer(Modifier.width((minOf(participants.size, 4) * 18).dp))
         Text(buildString {
             append("${participants.size}")
             if (maxParticipants > 0) append("/$maxParticipants")
@@ -1192,7 +1227,6 @@ private fun AvatarStack(participants: List<String>, maxParticipants: Int) {
         }, fontSize = 12.sp, color = TextSecondary)
     }
 }
-
 // ─────────────────────────────────────────────────────────────────────────────
 // Event Detail Sheet
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1433,21 +1467,53 @@ private fun EventDetailSheet(
                 else event.participants.take(4)
 
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    val participantProfiles = remember(event.participants) {
+                        mutableStateMapOf<String, UserProfile>()
+                    }
+                    LaunchedEffect(event.participants) {
+                        event.participants.forEach { username ->
+                            if (!participantProfiles.containsKey(username)) {
+                                val profile = fetchUserProfile(username, db)
+                                participantProfiles[username] = profile
+                            }
+                        }
+                    }
+
                     visible.forEach { p ->
                         val attended = event.attendees.contains(p)
+                        val profile  = participantProfiles[p]
                         Row(verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                            Box(Modifier.size(38.dp).clip(CircleShape).background(
-                                if (attended) Brush.linearGradient(listOf(Color(0xFF166534), Color(0xFF15803D)))
-                                else Brush.linearGradient(listOf(Green900, Green700))), Alignment.Center) {
-                                Text(p.take(1).uppercase(), fontSize = 14.sp,
-                                    fontWeight = FontWeight.SemiBold, color = Color.White)
+                            Box(
+                                Modifier.size(38.dp).clip(CircleShape).background(
+                                    if (attended) Brush.linearGradient(listOf(Color(0xFF166534), Color(0xFF15803D)))
+                                    else Brush.linearGradient(listOf(Green900, Green700))
+                                ),
+                                Alignment.Center
+                            ) {
+                                if (!profile?.photoUrl.isNullOrBlank()) {
+                                    coil.compose.AsyncImage(
+                                        model              = profile!!.photoUrl,
+                                        contentDescription = profile.displayName,
+                                        contentScale       = androidx.compose.ui.layout.ContentScale.Crop,
+                                        modifier           = Modifier.fillMaxSize().clip(CircleShape)
+                                    )
+                                } else {
+                                    Text(
+                                        (profile?.displayName ?: p).take(1).uppercase(),
+                                        fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = Color.White
+                                    )
+                                }
                             }
                             Column(Modifier.weight(1f)) {
-                                Text(p, fontSize = 14.sp, color = TextPrimary, fontWeight = FontWeight.Medium)
+                                Text(
+                                    profile?.displayName ?: p,
+                                    fontSize = 14.sp, color = TextPrimary, fontWeight = FontWeight.Medium
+                                )
                                 if (attended) Text("Checked in ✓", fontSize = 12.sp,
                                     color = Green700, fontWeight = FontWeight.Medium)
                             }
+                            // ... rest of the row (organizer chip / attendance toggle)
                             when {
                                 p == event.organizer -> StatusChip("Organizer", Green900, Green100)
                                 isOrganizer -> IconButton(onClick = { onToggleAttendance(p) },
@@ -1862,6 +1928,10 @@ private fun CreateEventSheet(
                         modifier = Modifier.clickable {
                             title = ""; description = ""; route = ""; time = ""
                             distanceText = ""; maxPaxText = ""; difficulty = "Easy"; selectedDate = 0L
+                            routeOrigin = ""; routeDestination = ""
+                            originConfirmed = false; destConfirmed = false
+                            routeError = ""; crossIslandError = ""
+                            routeDistanceKm = null
                         })
                 }
             }
@@ -1881,7 +1951,7 @@ private fun CreateEventSheet(
                 val firstOrigin = routeOrigin.trim().lowercase().split(",").firstOrNull()?.trim() ?: ""
                 val firstDest   = routeDestination.trim().lowercase().split(",").firstOrNull()?.trim() ?: ""
                 if (firstOrigin.isNotBlank() && firstDest.isNotBlank() && firstOrigin == firstDest) {
-                    routeError      = "Invalid! The input cannot be the same location"
+                    routeError      = "Invalid! The location cannot be the same"
                     originConfirmed = false
                     destConfirmed   = false
                 } else {
@@ -2576,6 +2646,34 @@ private suspend fun nominatimThrottle() {
         lastNominatimRequestMs = System.currentTimeMillis()
     } finally {
         nominatimMutex.unlock()
+    }
+}
+
+// ── User profile cache (username → displayName + photoUrl) ────────────────
+data class UserProfile(val displayName: String, val photoUrl: String)
+private val userProfileCache = mutableMapOf<String, UserProfile>()
+
+fun invalidateUserProfileCache(username: String) {
+    userProfileCache.remove(username)
+}
+
+suspend fun fetchUserProfile(username: String, db: FirebaseFirestore): UserProfile {
+    userProfileCache[username]?.let { return it }
+    return try {
+        val snap = db.collection("users")
+            .whereEqualTo("username", username)
+            .limit(1)
+            .get()
+            .await()
+        val doc = snap.documents.firstOrNull()
+        val profile = UserProfile(
+            displayName = doc?.getString("displayName")?.takeIf { it.isNotBlank() } ?: username,
+            photoUrl    = doc?.getString("photoUrl") ?: ""
+        )
+        userProfileCache[username] = profile
+        profile
+    } catch (e: Exception) {
+        UserProfile(displayName = username, photoUrl = "")
     }
 }
 

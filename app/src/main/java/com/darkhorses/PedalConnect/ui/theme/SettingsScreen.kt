@@ -150,7 +150,9 @@ fun SettingsScreen(navController: NavController) {
                     }
                 }
                 settings = UserSettings(
-                    displayName                = doc.getString("displayName") ?: currentUser.displayName ?: "",
+                    displayName                = doc.getString("displayName")?.takeIf { it.isNotBlank() }
+                        ?: currentUser.displayName?.takeIf { it.isNotBlank() }
+                        ?: userName,
                     bio                        = doc.getString("bio") ?: "",
                     bikeTypes                  = rawBikeTypes,
                     skillLevel                 = doc.getString("skillLevel") ?: "",
@@ -161,8 +163,8 @@ fun SettingsScreen(navController: NavController) {
                     locationSharingEnabled     = prefs?.get("locationSharingEnabled") as? Boolean ?: true,
                     darkModeEnabled            = prefs?.get("darkModeEnabled") as? Boolean ?: false
                 )
-                // Seed draft with current values
-                draftName       = settings.displayName
+                // Seed draft with current values — fall back to username so field is never blank
+                draftName       = settings.displayName.takeIf { it.isNotBlank() } ?: userName
                 draftBio        = settings.bio
                 draftBikeTypes  = settings.bikeTypes
                 draftSkillLevel = settings.skillLevel
@@ -267,7 +269,17 @@ fun SettingsScreen(navController: NavController) {
                     skillLevel  = draftSkillLevel,
                     photoUrl    = if (draftPhotoUrl.isNotBlank()) draftPhotoUrl else settings.photoUrl
                 )
+                // Backfill displayName on all existing posts by this user
+                db.collection("posts")
+                    .whereEqualTo("userName", userName)
+                    .get()
+                    .await()
+                    .documents.forEach { doc ->
+                        doc.reference.update("displayName", trimmedName).await()
+                    }
+
                 editProfileExpanded = false
+                invalidateUserProfileCache(userName)
                 Toast.makeText(context, "Profile updated ✅", Toast.LENGTH_SHORT).show()
             } catch (e: Exception) {
                 profileSaveError = "Save failed: ${e.message?.take(80)}"
