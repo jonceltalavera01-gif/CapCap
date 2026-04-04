@@ -668,26 +668,32 @@ fun RidingEventsScreen(
             ref.update("participants", FieldValue.arrayUnion(userName))
                 .addOnSuccessListener {
                     Toast.makeText(context, "Joined! 🚴", Toast.LENGTH_SHORT).show()
-                    // Send join confirmation to the joining user
-                    db.collection("notifications").add(hashMapOf(
-                        "userName"  to userName,
-                        "message"   to "You joined \"${event.title}\" on ${formatEventDate(event.date)}${if (event.time.isNotBlank()) " at ${event.time}" else ""}. See you on the road! 🚴",
-                        "type"      to "ride",
-                        "eventId"   to event.id,
-                        "timestamp" to System.currentTimeMillis(),
-                        "read"      to false
-                    ))
-                    // Notify the organizer that someone joined their ride
-                    if (event.organizer != userName) {
-                        db.collection("notifications").add(hashMapOf(
-                            "userName"  to event.organizer,
-                            "message"   to "$userName joined your ride \"${event.title}\" — ${event.participants.size + 1} rider${if (event.participants.size + 1 != 1) "s" else ""} so far.",
-                            "type"      to "ride",
-                            "eventId"   to event.id,
-                            "timestamp" to System.currentTimeMillis(),
-                            "read"      to false
-                        ))
-                    }
+                    db.collection("users").whereEqualTo("username", userName)
+                        .limit(1).get()
+                        .addOnSuccessListener { snap ->
+                            val joinerDisplay = snap.documents.firstOrNull()
+                                ?.getString("displayName")?.takeIf { it.isNotBlank() } ?: userName
+                            // Send join confirmation to the joining user
+                            db.collection("notifications").add(hashMapOf(
+                                "userName"  to userName,
+                                "message"   to "You joined \"${event.title}\" on ${formatEventDate(event.date)}${if (event.time.isNotBlank()) " at ${event.time}" else ""}. See you on the road! 🚴",
+                                "type"      to "ride",
+                                "eventId"   to event.id,
+                                "timestamp" to System.currentTimeMillis(),
+                                "read"      to false
+                            ))
+                            // Notify the organizer that someone joined their ride
+                            if (event.organizer != userName) {
+                                db.collection("notifications").add(hashMapOf(
+                                    "userName"  to event.organizer,
+                                    "message"   to "$joinerDisplay joined your ride \"${event.title}\" — ${event.participants.size + 1} rider${if (event.participants.size + 1 != 1) "s" else ""} so far.",
+                                    "type"      to "ride",
+                                    "eventId"   to event.id,
+                                    "timestamp" to System.currentTimeMillis(),
+                                    "read"      to false
+                                ))
+                            }
+                        }
                 }
         }
     }
@@ -1403,7 +1409,18 @@ private fun EventDetailSheet(
 
                 if (event.distanceKm > 0)
                     DetailTile(Icons.Default.Route, "Distance", String.format("%.1f km", event.distanceKm))
-                DetailTile(Icons.Default.Person, "Organizer", event.organizer)
+                var organizerDisplayName by remember(event.organizer) { mutableStateOf(event.organizer) }
+                LaunchedEffect(event.organizer) {
+                    val db = FirebaseFirestore.getInstance()
+                    db.collection("users").whereEqualTo("username", event.organizer)
+                        .limit(1).get()
+                        .addOnSuccessListener { snap ->
+                            val display = snap.documents.firstOrNull()?.getString("displayName")
+                                ?.takeIf { it.isNotBlank() } ?: event.organizer
+                            organizerDisplayName = display
+                        }
+                }
+                DetailTile(Icons.Default.Person, "Organizer", organizerDisplayName)
                 DetailTile(Icons.Default.Groups, "Riders", buildString {
                     append("${event.participants.size}")
                     if (event.maxParticipants > 0) append(" / ${event.maxParticipants}")
@@ -1889,7 +1906,8 @@ private fun CreateEventSheet(
                 showDatePicker = false; dateError = ""
             }) { Text("Confirm", color = Green900, fontWeight = FontWeight.SemiBold) } },
             dismissButton = { TextButton(onClick = { showDatePicker = false }) {
-                Text("Cancel", color = TextSecondary) } }
+                Text("Cancel", color = TextSecondary) } },
+            colors = DatePickerDefaults.colors(containerColor = Color.White)
         ) { DatePicker(state = datePickerState) }
     }
 
@@ -2142,7 +2160,8 @@ private fun CreateEventSheet(
                         TextButton(onClick = { showTimePicker = false }) {
                             Text("Cancel", color = TextSecondary)
                         }
-                    }
+                    },
+                    colors = DatePickerDefaults.colors(containerColor = Color.White)
                 ) { TimePicker(state = timePickerState) }
             }
             FormFieldLabel("Start time (optional)"); Spacer(Modifier.height(6.dp))
@@ -2490,7 +2509,8 @@ private fun EditEventSheet(event: RideEvent, onDismiss: () -> Unit, onSave: (Rid
                         TextButton(onClick = { showTimePickerEdit = false }) {
                             Text("Cancel", color = TextSecondary)
                         }
-                    }
+                    },
+                    colors = DatePickerDefaults.colors(containerColor = Color.White)
                 ) { TimePicker(state = timePickerStateEdit) }
             }
             FormFieldLabel("Start time (optional)"); Spacer(Modifier.height(6.dp))

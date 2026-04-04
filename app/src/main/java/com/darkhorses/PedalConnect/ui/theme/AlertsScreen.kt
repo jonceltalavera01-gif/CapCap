@@ -115,7 +115,7 @@ fun AlertsScreen(
                                 id                  = doc.id,
                                 riderName           = riderName,
                                 riderDisplayName    = doc.getString("riderDisplayName")
-                                    ?.takeIf { it.isNotBlank() } ?: riderName,
+                                    ?.takeIf { s -> s.isNotBlank() } ?: riderName,
                                 riderNameLower      = doc.getString("riderNameLower")
                                     ?: riderName.trim().lowercase(),
                                 emergencyType          = doc.getString("emergencyType") ?: "Emergency",
@@ -209,12 +209,25 @@ fun AlertsScreen(
         ))
     }
 
+    fun fetchDisplayName(username: String, onResult: (String) -> Unit) {
+        FirebaseFirestore.getInstance().collection("users")
+            .whereEqualTo("username", username).limit(1).get()
+            .addOnSuccessListener { snap ->
+                val display = snap.documents.firstOrNull()?.getString("displayName")
+                    ?.takeIf { it.isNotBlank() } ?: username
+                onResult(display)
+            }
+            .addOnFailureListener { onResult(username) }
+    }
+
     fun handleNavigateToHelp(alert: AlertItem) {
         scope.launch {
             try {
-                sendHelpNotification(alert.riderName, "$helperName is navigating to your location!")
+                fetchDisplayName(helperName) { helperDisplay ->
+                    sendHelpNotification(alert.riderName, "$helperDisplay is navigating to your location!")
+                }
                 onNavigateToHelp(alert.coordinates, alert.emergencyType)
-                successMessage = "Navigating to ${alert.riderName}"
+                successMessage = "Navigating to ${alert.riderDisplayName.ifBlank { alert.riderName }}"
             } catch (e: Exception) { errorMessage = "Failed: ${e.message}" }
         }
     }
@@ -242,12 +255,14 @@ fun AlertsScreen(
                         "responderName" to helperName
                     ))
                 }.addOnSuccessListener {
-                    sendHelpNotification(
-                        alert.riderName,
-                        "$helperName is on the way to help you! Stay calm and stay visible."
-                    )
+                    fetchDisplayName(helperName) { helperDisplay ->
+                        sendHelpNotification(
+                            alert.riderName,
+                            "$helperDisplay is on the way to help you! Stay calm and stay visible."
+                        )
+                    }
                     onImOnMyWay(alert)
-                    successMessage = "Notified ${alert.riderName} you're on your way"
+                    successMessage = "Notified ${alert.riderDisplayName.ifBlank { alert.riderName }} you're on your way"
                 }.addOnFailureListener { e ->
                     errorMessage = e.message ?: "Someone else already claimed this alert."
                 }
@@ -266,11 +281,13 @@ fun AlertsScreen(
                     ))
                     .addOnSuccessListener {
                         alertToConfirm = null
-                        sendHelpNotification(
-                            alert.riderName,
-                            "$helperName has marked your ${alert.emergencyType} as resolved. Stay safe!"
-                        )
-                        successMessage = "Alert resolved. Thank you for helping ${alert.riderName}!"
+                        fetchDisplayName(helperName) { helperDisplay ->
+                            sendHelpNotification(
+                                alert.riderName,
+                                "$helperDisplay has marked your ${alert.emergencyType} as resolved. Stay safe!"
+                            )
+                        }
+                        successMessage = "Alert resolved. Thank you for helping ${alert.riderDisplayName.ifBlank { alert.riderName }}!"
                     }
                     .addOnFailureListener { e ->
                         errorMessage   = "Failed: ${e.message}"
@@ -291,10 +308,12 @@ fun AlertsScreen(
                         successMessage = "Alert closed. Stay safe out there!"
                         // Notify responder if one was assigned
                         if (!alert.responderName.isNullOrEmpty()) {
-                            sendHelpNotification(
-                                alert.responderName,
-                                "${alert.riderName} has resolved their ${alert.emergencyType} alert. Thank you for helping!"
-                            )
+                            fetchDisplayName(alert.riderName) { riderDisplay ->
+                                sendHelpNotification(
+                                    alert.responderName,
+                                    "$riderDisplay has resolved their ${alert.emergencyType} alert. Thank you for helping!"
+                                )
+                            }
                         }
                         // Also delete any pending resolve_requested notifications for this alert
                         FirebaseFirestore.getInstance()
@@ -605,7 +624,7 @@ fun AlertsScreen(
             },
             text = {
                 Text(
-                    "This will close ${alert.riderName}'s ${alert.emergencyType} alert and notify them it has been resolved.",
+                    "This will close ${alert.riderDisplayName.ifBlank { alert.riderName }}'s ${alert.emergencyType} alert and notify them it has been resolved.",
                     fontSize  = 14.sp, color = Color.Gray, lineHeight = 20.sp,
                     textAlign = androidx.compose.ui.text.style.TextAlign.Center
                 )
@@ -672,9 +691,23 @@ private fun OwnAlertCard(
                             alert.createdAt > 0L &&
                             (System.currentTimeMillis() - alert.createdAt) > 5 * 60 * 1000L
 
+                    var responderDisplayName by remember(alert.responderName) {
+                        mutableStateOf(alert.responderName ?: "Someone")
+                    }
+                    LaunchedEffect(alert.responderName) {
+                        if (!alert.responderName.isNullOrBlank()) {
+                            FirebaseFirestore.getInstance().collection("users")
+                                .whereEqualTo("username", alert.responderName).limit(1).get()
+                                .addOnSuccessListener { snap ->
+                                    val d = snap.documents.firstOrNull()?.getString("displayName")
+                                        ?.takeIf { it.isNotBlank() } ?: alert.responderName
+                                    responderDisplayName = d
+                                }
+                        }
+                    }
                     Text(
                         when (alert.status) {
-                            "responding" -> "${alert.responderName ?: "Someone"} is on the way to help you"
+                            "responding" -> "$responderDisplayName is on the way to help you"
                             else         -> if (waitingTooLong)
                                 "⚠️ No one nearby yet — consider calling emergency services"
                             else

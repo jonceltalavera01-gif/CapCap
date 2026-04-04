@@ -278,6 +278,24 @@ fun SettingsScreen(navController: NavController) {
                         doc.reference.update("displayName", trimmedName).await()
                     }
 
+                // Backfill displayName on all comments by this user
+                db.collection("comments")
+                    .whereEqualTo("userName", userName)
+                    .get()
+                    .await()
+                    .documents.forEach { doc ->
+                        doc.reference.update("displayName", trimmedName).await()
+                    }
+
+                // Backfill displayName on ride events organised by this user
+                db.collection("rideEvents")
+                    .whereEqualTo("organizer", userName)
+                    .get()
+                    .await()
+                    .documents.forEach { doc ->
+                        doc.reference.update("organizerDisplayName", trimmedName).await()
+                    }
+
                 editProfileExpanded = false
                 invalidateUserProfileCache(userName)
                 Toast.makeText(context, "Profile updated ✅", Toast.LENGTH_SHORT).show()

@@ -311,11 +311,27 @@ fun AdminScreen(paddingValues: PaddingValues) {
         pendingPosts.remove(post)  // optimistic removal
         db.collection("posts").document(post.id).update("status", "accepted")
             .addOnSuccessListener {
-                db.collection("notifications").add(hashMapOf(
-                    "userName"  to post.userName,
-                    "message"   to "✅ Your post has been approved and is now live!",
-                    "type"      to "accepted",
-                    "timestamp" to System.currentTimeMillis(), "read" to false))
+                db.collection("users")
+                    .whereEqualTo("username", post.userName)
+                    .limit(1).get()
+                    .addOnSuccessListener { snap ->
+                        val displayName = snap.documents.firstOrNull()
+                            ?.getString("displayName")
+                            ?.takeIf { it.isNotBlank() } ?: post.userName
+                        db.collection("notifications").add(hashMapOf(
+                            "userName"  to post.userName,
+                            "message"   to "✅ Hey $displayName, your post has been approved and is now live!",
+                            "type"      to "accepted",
+                            "timestamp" to System.currentTimeMillis(), "read" to false))
+                    }
+                    .addOnFailureListener {
+                        // Fallback — send notification without display name
+                        db.collection("notifications").add(hashMapOf(
+                            "userName"  to post.userName,
+                            "message"   to "✅ Your post has been approved and is now live!",
+                            "type"      to "accepted",
+                            "timestamp" to System.currentTimeMillis(), "read" to false))
+                    }
                 toast("Post approved!")
             }.addOnFailureListener {
                 pendingPosts.add(post)  // restore on failure
@@ -327,11 +343,26 @@ fun AdminScreen(paddingValues: PaddingValues) {
         pendingPosts.remove(post)  // optimistic removal
         db.collection("posts").document(post.id).update("status", "rejected")
             .addOnSuccessListener {
-                db.collection("notifications").add(hashMapOf(
-                    "userName"  to post.userName,
-                    "message"   to "❌ Your post was not approved. Please follow community guidelines.",
-                    "type"      to "rejected",
-                    "timestamp" to System.currentTimeMillis(), "read" to false))
+                db.collection("users")
+                    .whereEqualTo("username", post.userName)
+                    .limit(1).get()
+                    .addOnSuccessListener { snap ->
+                        val displayName = snap.documents.firstOrNull()
+                            ?.getString("displayName")
+                            ?.takeIf { it.isNotBlank() } ?: post.userName
+                        db.collection("notifications").add(hashMapOf(
+                            "userName"  to post.userName,
+                            "message"   to "❌ Sorry $displayName, your post was not approved. Please follow community guidelines.",
+                            "type"      to "rejected",
+                            "timestamp" to System.currentTimeMillis(), "read" to false))
+                    }
+                    .addOnFailureListener {
+                        db.collection("notifications").add(hashMapOf(
+                            "userName"  to post.userName,
+                            "message"   to "❌ Your post was not approved. Please follow community guidelines.",
+                            "type"      to "rejected",
+                            "timestamp" to System.currentTimeMillis(), "read" to false))
+                    }
                 toast("Post rejected.")
             }.addOnFailureListener {
                 pendingPosts.add(post)  // restore on failure
@@ -362,11 +393,26 @@ fun AdminScreen(paddingValues: PaddingValues) {
         pendingRides.remove(ride)  // optimistic removal
         db.collection("rideEvents").document(ride.id).update("status", "approved")
             .addOnSuccessListener {
-                db.collection("notifications").add(hashMapOf(
-                    "userName"  to ride.organizer,
-                    "message"   to "✅ Your ride \"${ride.title}\" is approved and now visible!",
-                    "type"      to "ride", "eventId" to ride.id,
-                    "timestamp" to System.currentTimeMillis(), "read" to false))
+                db.collection("users")
+                    .whereEqualTo("username", ride.organizer)
+                    .limit(1).get()
+                    .addOnSuccessListener { snap ->
+                        val displayName = snap.documents.firstOrNull()
+                            ?.getString("displayName")
+                            ?.takeIf { it.isNotBlank() } ?: ride.organizer
+                        db.collection("notifications").add(hashMapOf(
+                            "userName"  to ride.organizer,
+                            "message"   to "✅ Hey $displayName, your ride \"${ride.title}\" is approved and now visible!",
+                            "type"      to "ride", "eventId" to ride.id,
+                            "timestamp" to System.currentTimeMillis(), "read" to false))
+                    }
+                    .addOnFailureListener {
+                        db.collection("notifications").add(hashMapOf(
+                            "userName"  to ride.organizer,
+                            "message"   to "✅ Your ride \"${ride.title}\" is approved and now visible!",
+                            "type"      to "ride", "eventId" to ride.id,
+                            "timestamp" to System.currentTimeMillis(), "read" to false))
+                    }
                 toast("Ride approved!")
             }.addOnFailureListener {
                 pendingRides.add(ride)  // restore on failure
@@ -378,11 +424,26 @@ fun AdminScreen(paddingValues: PaddingValues) {
         pendingRides.remove(ride)  // optimistic removal
         db.collection("rideEvents").document(ride.id).update("status", "rejected")
             .addOnSuccessListener {
-                db.collection("notifications").add(hashMapOf(
-                    "userName"  to ride.organizer,
-                    "message"   to "❌ Your ride \"${ride.title}\" was not approved. Please review and resubmit.",
-                    "type"      to "ride", "eventId" to ride.id,
-                    "timestamp" to System.currentTimeMillis(), "read" to false))
+                db.collection("users")
+                    .whereEqualTo("username", ride.organizer)
+                    .limit(1).get()
+                    .addOnSuccessListener { snap ->
+                        val displayName = snap.documents.firstOrNull()
+                            ?.getString("displayName")
+                            ?.takeIf { it.isNotBlank() } ?: ride.organizer
+                        db.collection("notifications").add(hashMapOf(
+                            "userName"  to ride.organizer,
+                            "message"   to "❌ Sorry $displayName, your ride \"${ride.title}\" was not approved. Please review and resubmit.",
+                            "type"      to "ride", "eventId" to ride.id,
+                            "timestamp" to System.currentTimeMillis(), "read" to false))
+                    }
+                    .addOnFailureListener {
+                        db.collection("notifications").add(hashMapOf(
+                            "userName"  to ride.organizer,
+                            "message"   to "❌ Your ride \"${ride.title}\" was not approved. Please review and resubmit.",
+                            "type"      to "ride", "eventId" to ride.id,
+                            "timestamp" to System.currentTimeMillis(), "read" to false))
+                    }
                 toast("Ride rejected.")
             }.addOnFailureListener {
                 pendingRides.add(ride)  // restore on failure
@@ -410,11 +471,26 @@ fun AdminScreen(paddingValues: PaddingValues) {
     fun forceResolveAlert(alert: AdminAlert) {
         db.collection("alerts").document(alert.id).update("status", "resolved")
             .addOnSuccessListener {
-                db.collection("notifications").add(hashMapOf(
-                    "userName" to alert.riderName,
-                    "message"  to "ℹ️ Your ${alert.emergencyType} alert was closed by an admin.",
-                    "type"     to "alert",
-                    "timestamp" to System.currentTimeMillis(), "read" to false))
+                db.collection("users")
+                    .whereEqualTo("username", alert.riderName)
+                    .limit(1).get()
+                    .addOnSuccessListener { snap ->
+                        val displayName = snap.documents.firstOrNull()
+                            ?.getString("displayName")
+                            ?.takeIf { it.isNotBlank() } ?: alert.riderName
+                        db.collection("notifications").add(hashMapOf(
+                            "userName"  to alert.riderName,
+                            "message"   to "ℹ️ Hey $displayName, your ${alert.emergencyType} alert was closed by an admin.",
+                            "type"      to "alert",
+                            "timestamp" to System.currentTimeMillis(), "read" to false))
+                    }
+                    .addOnFailureListener {
+                        db.collection("notifications").add(hashMapOf(
+                            "userName"  to alert.riderName,
+                            "message"   to "ℹ️ Your ${alert.emergencyType} alert was closed by an admin.",
+                            "type"      to "alert",
+                            "timestamp" to System.currentTimeMillis(), "read" to false))
+                    }
                 toast("Alert resolved.")
             }.addOnFailureListener { toast("Failed to resolve.", false) }
     }
@@ -826,6 +902,16 @@ fun AdminScreen(paddingValues: PaddingValues) {
                                 items(reportedPosts, key = { it.id }) { post ->
                                     AdminPostCard(
                                         post      = post,
+                                        onDelete  = {
+                                            db.collection("posts").document(post.id).delete()
+                                            db.collection("reportedPosts")
+                                                .whereEqualTo("postId", post.id)
+                                                .get()
+                                                .addOnSuccessListener { snap ->
+                                                    snap.documents.forEach { it.reference.delete() }
+                                                }
+                                            reportedPosts.remove(post)
+                                        },
                                         onApprove = {
                                             // "Approve" here means dismiss reports — restore post to accepted
                                             db.collection("posts").document(post.id)
@@ -847,25 +933,32 @@ fun AdminScreen(paddingValues: PaddingValues) {
                                                 .addOnSuccessListener { snap ->
                                                     snap.documents.forEach { it.reference.delete() }
                                                 }
-                                            db.collection("notifications").add(hashMapOf(
-                                                "userName"  to post.userName,
-                                                "message"   to "❌ Your post was removed after being reported for violating community guidelines.",
-                                                "type"      to "rejected",
-                                                "timestamp" to System.currentTimeMillis(),
-                                                "read"      to false
-                                            ))
-                                            reportedPosts.remove(post)
-                                        },
-                                        onDelete  = {
-                                            db.collection("posts").document(post.id).delete()
-                                            db.collection("reportedPosts")
-                                                .whereEqualTo("postId", post.id)
-                                                .get()
+                                            db.collection("users")
+                                                .whereEqualTo("username", post.userName)
+                                                .limit(1).get()
                                                 .addOnSuccessListener { snap ->
-                                                    snap.documents.forEach { it.reference.delete() }
+                                                    val displayName = snap.documents.firstOrNull()
+                                                        ?.getString("displayName")
+                                                        ?.takeIf { it.isNotBlank() } ?: post.userName
+                                                    db.collection("notifications").add(hashMapOf(
+                                                        "userName"  to post.userName,
+                                                        "message"   to "❌ Sorry $displayName, your post was removed after being reported for violating community guidelines.",
+                                                        "type"      to "rejected",
+                                                        "timestamp" to System.currentTimeMillis(),
+                                                        "read"      to false
+                                                    ))
+                                                }
+                                                .addOnFailureListener {
+                                                    db.collection("notifications").add(hashMapOf(
+                                                        "userName"  to post.userName,
+                                                        "message"   to "❌ Your post was removed after being reported for violating community guidelines.",
+                                                        "type"      to "rejected",
+                                                        "timestamp" to System.currentTimeMillis(),
+                                                        "read"      to false
+                                                    ))
                                                 }
                                             reportedPosts.remove(post)
-                                        }
+                                        },
                                     )
                                 }
                             }
@@ -950,6 +1043,16 @@ private fun AdminPostCard(
 ) {
     var showDeleteDialog by remember { mutableStateOf(false) }
     var showRejectDialog by remember { mutableStateOf(false) }
+    var postDisplayName by remember(post.userName) { mutableStateOf(post.userName) }
+    LaunchedEffect(post.userName) {
+        FirebaseFirestore.getInstance().collection("users")
+            .whereEqualTo("username", post.userName).limit(1).get()
+            .addOnSuccessListener { snap ->
+                val d = snap.documents.firstOrNull()?.getString("displayName")
+                    ?.takeIf { it.isNotBlank() } ?: post.userName
+                postDisplayName = d
+            }
+    }
 
     if (showDeleteDialog) {
         AlertDialog(
@@ -992,7 +1095,7 @@ private fun AdminPostCard(
                             .padding(horizontal = 12.dp, vertical = 10.dp)
                     ) {
                         Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                            Text("by ${post.userName}", fontSize = 13.sp,
+                            Text("by $postDisplayName", fontSize = 13.sp,
                                 fontWeight = FontWeight.SemiBold, color = AOnSurface)
                             if (post.description.isNotBlank()) {
                                 Text(post.description, fontSize = 12.sp, color = AMuted,
@@ -1036,10 +1139,10 @@ private fun AdminPostCard(
                         horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Box(Modifier.size(36.dp).clip(CircleShape)
                             .background(Brush.linearGradient(listOf(AGreen900, AGreen700))), Alignment.Center) {
-                            Text(post.userName.take(1).uppercase(), fontSize = 14.sp,
+                            Text(postDisplayName.take(1).uppercase(), fontSize = 14.sp,
                                 fontWeight = FontWeight.Bold, color = Color.White) }
                         Column {
-                            Text(post.userName, fontWeight = FontWeight.SemiBold, fontSize = 13.sp, color = AOnSurface)
+                            Text(postDisplayName, fontWeight = FontWeight.SemiBold, fontSize = 13.sp, color = AOnSurface)
                             Text(formatAdminTime(post.timestamp), fontSize = 11.sp, color = AMuted)
                         }
                     }
@@ -1091,6 +1194,16 @@ private fun AdminReportCard(
     var imageRevealed     by remember { mutableStateOf(false) }
     var showDeleteDialog  by remember { mutableStateOf(false) }
     var showDismissDialog by remember { mutableStateOf(false) }
+    var reportedByDisplay by remember(report.reportedBy) { mutableStateOf(report.reportedBy) }
+    LaunchedEffect(report.reportedBy) {
+        FirebaseFirestore.getInstance().collection("users")
+            .whereEqualTo("username", report.reportedBy).limit(1).get()
+            .addOnSuccessListener { snap ->
+                val d = snap.documents.firstOrNull()?.getString("displayName")
+                    ?.takeIf { it.isNotBlank() } ?: report.reportedBy
+                reportedByDisplay = d
+            }
+    }
 
     if (showDeleteDialog) {
         AlertDialog(
@@ -1161,7 +1274,7 @@ private fun AdminReportCard(
                                 color = Color.White, letterSpacing = 0.5.sp) } } }
                 Text(formatAdminTime(report.timestamp), fontSize = 11.sp, color = AMuted)
             }
-            Text("Reported by: ${report.reportedBy}", fontSize = 12.sp, color = AMuted)
+            Text("Reported by: $reportedByDisplay", fontSize = 12.sp, color = AMuted)
             if (report.photoUrl.isNotBlank()) {
                 Box(modifier = Modifier.fillMaxWidth().height(180.dp)
                     .clip(RoundedCornerShape(12.dp)).background(Color(0xFFF3F4F6))) {
@@ -1184,7 +1297,7 @@ private fun AdminReportCard(
                     colors = ButtonDefaults.buttonColors(containerColor = ARedColor, contentColor = Color.White)) {
                     Icon(Icons.Default.Delete, null, modifier = Modifier.size(14.dp))
                     Spacer(Modifier.width(4.dp))
-                    Text("Remove Photo", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color.White) }
+                    Text("Remove", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color.White) }
                 OutlinedButton(onClick = { showDismissDialog = true }, modifier = Modifier.weight(1f).height(40.dp),
                     shape = RoundedCornerShape(10.dp),
                     colors = ButtonDefaults.outlinedButtonColors(contentColor = AGreen900),
@@ -1201,6 +1314,16 @@ private fun AdminReportCard(
 @Composable
 private fun AdminAlertCard(alert: AdminAlert, onForceResolve: () -> Unit) {
     var showResolveDialog by remember { mutableStateOf(false) }
+    var alertRiderDisplayName by remember(alert.riderName) { mutableStateOf(alert.riderName) }
+    LaunchedEffect(alert.riderName) {
+        FirebaseFirestore.getInstance().collection("users")
+            .whereEqualTo("username", alert.riderName).limit(1).get()
+            .addOnSuccessListener { snap ->
+                val d = snap.documents.firstOrNull()?.getString("displayName")
+                    ?.takeIf { it.isNotBlank() } ?: alert.riderName
+                alertRiderDisplayName = d
+            }
+    }
 
     val severityColor = when (alert.severity.uppercase()) {
         "HIGH"   -> Color(0xFFD32F2F)
@@ -1221,7 +1344,7 @@ private fun AdminAlertCard(alert: AdminAlert, onForceResolve: () -> Unit) {
                 Icon(Icons.Default.CheckCircle, null, tint = AGreen900, modifier = Modifier.size(26.dp)) } },
             title = { Text("Force Resolve?", fontWeight = FontWeight.ExtraBold, fontSize = 17.sp,
                 color = AOnSurface, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth()) },
-            text  = { Text("This will close ${alert.riderName}'s alert and notify them it was resolved by admin.",
+            text  = { Text("This will close $alertRiderDisplayName's alert and notify them it was resolved by admin.",
                 fontSize = 13.sp, color = AMuted, textAlign = TextAlign.Center) },
             confirmButton = {
                 Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1260,10 +1383,10 @@ private fun AdminAlertCard(alert: AdminAlert, onForceResolve: () -> Unit) {
             Column(modifier = Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     Box(Modifier.size(38.dp).clip(CircleShape).background(severityBg), Alignment.Center) {
-                        Text(alert.riderName.take(1).uppercase(), fontWeight = FontWeight.ExtraBold,
+                        Text(alertRiderDisplayName.take(1).uppercase(), fontWeight = FontWeight.ExtraBold,
                             fontSize = 16.sp, color = severityColor) }
                     Column {
-                        Text(alert.riderName, fontWeight = FontWeight.Bold, fontSize = 14.sp, color = AOnSurface)
+                        Text(alertRiderDisplayName, fontWeight = FontWeight.Bold, fontSize = 14.sp, color = AOnSurface)
                         if (!alert.responderName.isNullOrBlank()) {
                             Text("Responder: ${alert.responderName}", fontSize = 11.sp,
                                 color = Color(0xFF1565C0), fontWeight = FontWeight.Medium) } } }
@@ -1291,6 +1414,16 @@ private fun AdminRideCard(
     onReject: () -> Unit
 ) {
     var showRejectDialog by remember { mutableStateOf(false) }
+    var organizerDisplayName by remember(ride.organizer) { mutableStateOf(ride.organizer) }
+    LaunchedEffect(ride.organizer) {
+        FirebaseFirestore.getInstance().collection("users")
+            .whereEqualTo("username", ride.organizer).limit(1).get()
+            .addOnSuccessListener { snap ->
+                val d = snap.documents.firstOrNull()?.getString("displayName")
+                    ?.takeIf { it.isNotBlank() } ?: ride.organizer
+                organizerDisplayName = d
+            }
+    }
 
     val diffColor = when (ride.difficulty) {
         "Easy"     -> Color(0xFF166534)
@@ -1330,7 +1463,7 @@ private fun AdminRideCard(
                                 fontWeight = FontWeight.SemiBold, color = AOnSurface,
                                 maxLines = 2,
                                 overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
-                            Text("by ${ride.organizer}", fontSize = 12.sp, color = AMuted)
+                            Text("by $organizerDisplayName", fontSize = 12.sp, color = AMuted)
                             if (ride.route.isNotBlank()) {
                                 Row(verticalAlignment = Alignment.CenterVertically,
                                     horizontalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -1420,10 +1553,10 @@ private fun AdminRideCard(
                     Box(Modifier.size(22.dp).clip(CircleShape)
                         .background(Brush.linearGradient(listOf(AGreen900, AGreen700))),
                         contentAlignment = Alignment.Center) {
-                        Text(ride.organizer.take(1).uppercase(),
+                        Text(organizerDisplayName.take(1).uppercase(),
                             fontSize = 9.sp, fontWeight = FontWeight.Bold, color = Color.White)
                     }
-                    Text(ride.organizer, fontSize = 12.sp,
+                    Text(organizerDisplayName, fontSize = 12.sp,
                         color = AMuted, fontWeight = FontWeight.Medium)
                     Text("·", fontSize = 12.sp, color = AMuted)
                     Text(formatAdminTime(ride.timestamp), fontSize = 11.sp, color = AMuted)

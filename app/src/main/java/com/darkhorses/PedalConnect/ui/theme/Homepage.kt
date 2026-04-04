@@ -4,6 +4,7 @@
     import androidx.compose.animation.core.animateFloat
     import androidx.compose.animation.core.rememberInfiniteTransition
     import androidx.compose.foundation.background
+    import androidx.compose.foundation.border
     import androidx.compose.foundation.clickable
     import androidx.compose.foundation.horizontalScroll
     import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -23,6 +24,7 @@
     import androidx.compose.animation.core.rememberInfiniteTransition
     import androidx.compose.animation.core.animateFloat
     import androidx.compose.animation.core.RepeatMode
+    import androidx.compose.foundation.border
     import androidx.compose.ui.Alignment
     import androidx.compose.ui.Modifier
     import androidx.compose.ui.draw.clip
@@ -134,7 +136,10 @@
         val likedBy: List<String> = emptyList(),
         val status: String        = "",
         val imageUrl: String      = "",
-        val imageDeleteUrl: String = ""
+        val imageDeleteUrl: String = "",
+        val polyline: List<Map<String, Double>> = emptyList(),
+        val routeImageUrl: String = "",
+        val editedAt: Long = 0L
     )
     
     data class NotificationItem(
@@ -347,9 +352,14 @@
                     }
                     val accepted = snapshot?.documents
                         ?.mapNotNull { doc ->
+                            @Suppress("UNCHECKED_CAST")
+                            val poly = (doc.get("polyline") as? List<Map<String, Double>>) ?: emptyList()
                             doc.toObject(PostItem::class.java)?.copy(
-                                id          = doc.id,
-                                displayName = doc.getString("displayName") ?: ""
+                                id            = doc.id,
+                                displayName   = doc.getString("displayName") ?: "",
+                                polyline      = poly,
+                                routeImageUrl = doc.getString("routeImageUrl") ?: "",
+                                editedAt      = doc.getLong("editedAt") ?: 0L
                             )
                         }
                         ?: emptyList()
@@ -369,9 +379,13 @@
                     if (e != null) return@addSnapshotListener
                     val pending = snapshot?.documents
                         ?.mapNotNull { doc ->
+                            @Suppress("UNCHECKED_CAST")
+                            val poly = (doc.get("polyline") as? List<Map<String, Double>>) ?: emptyList()
                             doc.toObject(PostItem::class.java)?.copy(
                                 id          = doc.id,
-                                displayName = doc.getString("displayName") ?: ""
+                                displayName = doc.getString("displayName") ?: "",
+                                polyline    = poly,
+                                editedAt    = doc.getLong("editedAt") ?: 0L
                             )
                         }
                         ?: emptyList()
@@ -489,7 +503,10 @@
             val post = editingPost ?: return
             if (editDescription.isBlank()) return
             isSavingEdit = true
-            db.collection("posts").document(post.id).update("description", editDescription.trim())
+            db.collection("posts").document(post.id).update(
+                "description", editDescription.trim(),
+                "editedAt", System.currentTimeMillis()
+            )
                 .addOnSuccessListener {
                     isSavingEdit = false; showEditDialog = false; editingPost = null
                     Toast.makeText(context, "Post updated!", Toast.LENGTH_SHORT).show()
@@ -577,7 +594,8 @@
                             shape = RoundedCornerShape(12.dp), maxLines = 6,
                             colors = OutlinedTextFieldDefaults.colors(
                                 focusedBorderColor = Green700, unfocusedBorderColor = BorderDefault,
-                                focusedLabelColor = Green700, cursorColor = Green700),
+                                focusedLabelColor = Green700, cursorColor = Green700,
+                                focusedTextColor = TextPrimary, unfocusedTextColor = TextPrimary),
                             supportingText = {
                                 Text("${editDescription.length}/300",
                                     color = if (editDescription.length > 280) Red600 else TextMuted,
@@ -1288,26 +1306,40 @@
                         ) {
                             Text(post.displayName.ifBlank { post.userName }, fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = TextPrimary)
                         }
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
                             // Activity badge
                             Box(
                                 Modifier.clip(RoundedCornerShape(6.dp)).background(Green50)
                                     .padding(horizontal = 6.dp, vertical = 2.dp)
                             ) {
-                                Text(post.activity, fontSize = 11.sp, color = Green800, fontWeight = FontWeight.Medium)
+                                Text(post.activity, fontSize = 11.sp, color = Green800, fontWeight = FontWeight.Medium, maxLines = 1)
                             }
                             // Distance
                             if (post.distance.isNotEmpty()) {
                                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
                                     Icon(Icons.Default.Route, null, tint = TextMuted, modifier = Modifier.size(11.dp))
                                     val cleanDist = post.distance.trim().removeSuffix("km").removeSuffix("KM").trim()
-                                    Text("$cleanDist km", fontSize = 11.sp, color = TextMuted)
+                                    Text("$cleanDist km", fontSize = 11.sp, color = TextMuted, maxLines = 1)
                                 }
                             }
                             // Timestamp
-                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                modifier = Modifier.weight(1f)
+                            ) {
                                 Icon(Icons.Default.Schedule, null, tint = TextMuted, modifier = Modifier.size(11.dp))
-                                Text(formatTimestamp(post.timestamp), fontSize = 11.sp, color = TextMuted)
+                                Text(
+                                    formatTimestamp(post.timestamp),
+                                    fontSize = 11.sp,
+                                    color = TextMuted,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
                             }
                         }
                         // Pending badge
@@ -1315,6 +1347,17 @@
                             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                                 Icon(Icons.Default.HourglassTop, null, tint = Amber500, modifier = Modifier.size(12.dp))
                                 Text("Pending approval", color = Amber500, fontSize = 11.sp, fontWeight = FontWeight.Medium)
+                            }
+                        }
+                        // Edited label
+                        if (post.editedAt > 0L) {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                                Icon(Icons.Default.Edit, null, tint = TextMuted, modifier = Modifier.size(10.dp))
+                                Text(
+                                    "(Edited)",
+                                    fontSize = 10.sp,
+                                    color = TextMuted
+                                )
                             }
                         }
                     }
@@ -1517,9 +1560,88 @@
                         }
                     }
                 }
-    
+
+                // ── Route preview — static image if available, canvas fallback ──
+                if (post.routeImageUrl.isNotBlank()) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(160.dp)
+                            .padding(horizontal = 14.dp, vertical = 6.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .border(1.dp, DividerColor, RoundedCornerShape(12.dp))
+                    ) {
+                        coil.compose.AsyncImage(
+                            model              = post.routeImageUrl,
+                            contentDescription = "Route preview",
+                            contentScale       = androidx.compose.ui.layout.ContentScale.Crop,
+                            modifier           = Modifier.fillMaxSize()
+                        )
+                    }
+                } else if (post.polyline.size >= 2) {
+                    val points = post.polyline.mapNotNull { pt ->
+                        val lat = pt["lat"] ?: return@mapNotNull null
+                        val lon = pt["lon"] ?: return@mapNotNull null
+                        Pair(lat, lon)
+                    }
+                    if (points.size >= 2) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(140.dp)
+                                .padding(horizontal = 14.dp, vertical = 6.dp)
+                                .clip(RoundedCornerShape(12.dp))
+                                .border(1.dp, DividerColor, RoundedCornerShape(12.dp))
+                                .background(Color(0xFFF0F4F0))
+                        ) {
+                            androidx.compose.foundation.Canvas(modifier = Modifier.fillMaxSize()) {
+                                val minLat = points.minOf { it.first }
+                                val maxLat = points.maxOf { it.first }
+                                val minLon = points.minOf { it.second }
+                                val maxLon = points.maxOf { it.second }
+                                val latRange = (maxLat - minLat).takeIf { it > 0 } ?: 0.0001
+                                val lonRange = (maxLon - minLon).takeIf { it > 0 } ?: 0.0001
+                                val padding  = 36f
+
+                                fun toX(lon: Double) = (padding + ((lon - minLon) / lonRange) * (size.width  - padding * 2)).toFloat()
+                                fun toY(lat: Double) = (padding + ((maxLat - lat) / latRange) * (size.height - padding * 2)).toFloat()
+
+                                // Draw polyline path
+                                val path = androidx.compose.ui.graphics.Path()
+                                points.forEachIndexed { i, (lat, lon) ->
+                                    if (i == 0) path.moveTo(toX(lon), toY(lat))
+                                    else        path.lineTo(toX(lon), toY(lat))
+                                }
+                                drawPath(
+                                    path  = path,
+                                    color = Color(0xFF00B464),
+                                    style = androidx.compose.ui.graphics.drawscope.Stroke(
+                                        width     = 6f,
+                                        cap       = androidx.compose.ui.graphics.StrokeCap.Round,
+                                        join      = androidx.compose.ui.graphics.StrokeJoin.Round
+                                    )
+                                )
+
+                                // Start dot — yellow
+                                points.firstOrNull()?.let { (lat, lon) ->
+                                    drawCircle(color = Color(0xFFFFD600), radius = 10f, center = androidx.compose.ui.geometry.Offset(toX(lon), toY(lat)))
+                                    drawCircle(color = Color.White,       radius = 5f,  center = androidx.compose.ui.geometry.Offset(toX(lon), toY(lat)))
+                                }
+
+                                // End dot — red
+                                points.lastOrNull()?.let { (lat, lon) ->
+                                    drawCircle(color = Color(0xFFD32F2F), radius = 10f, center = androidx.compose.ui.geometry.Offset(toX(lon), toY(lat)))
+                                    drawCircle(color = Color.White,       radius = 5f,  center = androidx.compose.ui.geometry.Offset(toX(lon), toY(lat)))
+                                }
+                            }
+
+
+                        }
+                    }
+                }
+
                 HorizontalDivider(Modifier.padding(horizontal = 14.dp), thickness = 0.5.dp, color = DividerColor)
-    
+
                 // ── Action bar ────────────────────────────────────────────────────
                 val isAdminViewing = isAdmin
                 val canLike = !isAdminViewing && post.status != "pending" && post.userName != currentUser

@@ -5,6 +5,8 @@ import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -22,9 +24,27 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.util.Base64
 import com.google.firebase.firestore.FirebaseFirestore
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
+import java.io.ByteArrayOutputStream
+import java.net.HttpURLConnection
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
+import org.osmdroid.config.Configuration
+import org.osmdroid.tileprovider.tilesource.TileSourceFactory
+import org.osmdroid.util.BoundingBox
 import org.osmdroid.util.GeoPoint
+import org.osmdroid.views.MapView
+import org.osmdroid.views.overlay.Polyline
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.platform.LocalContext
 import java.util.Locale
 
 private val RSGreen900 = Color(0xFF06402B)
@@ -63,6 +83,18 @@ fun RideSummarySheet(
     val db         = FirebaseFirestore.getInstance()
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
+    var displayName by remember { mutableStateOf(userName) }
+    LaunchedEffect(userName) {
+        db.collection("users")
+            .whereEqualTo("username", userName)
+            .limit(1)
+            .get()
+            .addOnSuccessListener { snap ->
+                val fetched = snap.documents.firstOrNull()?.getString("displayName")
+                if (!fetched.isNullOrBlank()) displayName = fetched
+            }
+    }
+
     val avgSpeedKmh = if (durationSeconds > 0)
         (distanceM / 1000.0) / (durationSeconds / 3600.0) else 0.0
 
@@ -77,6 +109,98 @@ fun RideSummarySheet(
     var saveRoute  by remember { mutableStateOf(false) }
     var routeName  by remember { mutableStateOf("") }
 
+    // Renders the route polyline + markers to a bitmap and uploads to ImgBB.
+    // Returns the image URL or null if it fails.
+    suspend fun renderAndUploadRouteImage(
+        ctx: Context,
+        points: List<GeoPoint>
+    ): String? = withContext(Dispatchers.IO) {
+        try {
+            val width  = 800
+            val height = 500
+            val bmp    = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+            val canvas = Canvas(bmp)
+
+            // Background
+            canvas.drawColor(android.graphics.Color.parseColor("#F0F4F0"))
+
+            // Coordinate mapping
+            val minLat = points.minOf { it.latitude }
+            val maxLat = points.maxOf { it.latitude }
+            val minLon = points.minOf { it.longitude }
+            val maxLon = points.maxOf { it.longitude }
+            val latRange = (maxLat - minLat).takeIf { it > 0 } ?: 0.0001
+            val lonRange = (maxLon - minLon).takeIf { it > 0 } ?: 0.0001
+            val pad = 60f
+
+            fun toX(lon: Double) = (pad + ((lon - minLon) / lonRange) * (width  - pad * 2)).toFloat()
+            fun toY(lat: Double) = (pad + ((maxLat - lat) / latRange) * (height - pad * 2)).toFloat()
+
+            // Draw route line
+            val routePaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+                color       = android.graphics.Color.argb(220, 0, 180, 100)
+                strokeWidth = 10f
+                strokeCap   = android.graphics.Paint.Cap.ROUND
+                strokeJoin  = android.graphics.Paint.Join.ROUND
+                style       = android.graphics.Paint.Style.STROKE
+            }
+            val path = android.graphics.Path()
+            points.forEachIndexed { i, pt ->
+                if (i == 0) path.moveTo(toX(pt.longitude), toY(pt.latitude))
+                else        path.lineTo(toX(pt.longitude), toY(pt.latitude))
+            }
+            canvas.drawPath(path, routePaint)
+
+            // Draw start dot — yellow
+            val dotPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG)
+            points.firstOrNull()?.let { pt ->
+                dotPaint.color = android.graphics.Color.parseColor("#FFD600")
+                canvas.drawCircle(toX(pt.longitude), toY(pt.latitude), 18f, dotPaint)
+                dotPaint.color = android.graphics.Color.WHITE
+                canvas.drawCircle(toX(pt.longitude), toY(pt.latitude), 8f, dotPaint)
+            }
+
+            // Draw end dot — red
+            points.lastOrNull()?.let { pt ->
+                dotPaint.color = android.graphics.Color.parseColor("#D32F2F")
+                canvas.drawCircle(toX(pt.longitude), toY(pt.latitude), 18f, dotPaint)
+                dotPaint.color = android.graphics.Color.WHITE
+                canvas.drawCircle(toX(pt.longitude), toY(pt.latitude), 8f, dotPaint)
+            }
+
+            // Compress to JPEG
+            val output = ByteArrayOutputStream()
+            bmp.compress(Bitmap.CompressFormat.JPEG, 85, output)
+            bmp.recycle()
+            val bytes      = output.toByteArray()
+            val base64Data = Base64.encodeToString(bytes, Base64.NO_WRAP)
+
+            // Upload to ImgBB
+            val apiKey = com.darkhorses.PedalConnect.BuildConfig.IMGBB_API_KEY
+            val conn   = java.net.URL("https://api.imgbb.com/1/upload")
+                .openConnection() as HttpURLConnection
+            conn.requestMethod = "POST"
+            conn.doOutput      = true
+            conn.connectTimeout = 30_000
+            conn.readTimeout    = 30_000
+            conn.setRequestProperty("Content-Type", "application/x-www-form-urlencoded")
+            val body = "key=$apiKey&image=${java.net.URLEncoder.encode(base64Data, "UTF-8")}"
+            conn.outputStream.write(body.toByteArray())
+            conn.outputStream.flush()
+            val response = if (conn.responseCode == 200)
+                conn.inputStream.bufferedReader().readText()
+            else null
+            conn.disconnect()
+            if (response == null) return@withContext null
+            val json = org.json.JSONObject(response)
+            if (!json.getBoolean("success")) return@withContext null
+            json.getJSONObject("data").getString("url")
+        } catch (e: Exception) {
+            e.printStackTrace()
+            null
+        }
+    }
+
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState       = sheetState,
@@ -86,8 +210,9 @@ fun RideSummarySheet(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
                 .padding(horizontal = 20.dp)
-                .padding(top = 4.dp, bottom = 32.dp),
+                .padding(top = 4.dp, bottom = 48.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
             // ── Header ────────────────────────────────────────────────────────
@@ -106,7 +231,7 @@ fun RideSummarySheet(
                 Column {
                     Text("Ride Complete! 🎉", fontWeight = FontWeight.ExtraBold,
                         fontSize = 19.sp, color = RSGreen900)
-                    Text("Great effort, $userName!", fontSize = 13.sp,
+                    Text("Great effort, $displayName!", fontSize = 13.sp,
                         color = Color(0xFF7A8F7A))
                 }
             }
@@ -159,6 +284,124 @@ fun RideSummarySheet(
                 }
             }
 
+            HorizontalDivider(color = Color(0xFFE8EDE8))
+
+            Spacer(Modifier.height(4.dp))
+            // ── Mini map — ridden route preview ───────────────────────────────
+            if (locationPoints.size >= 2) {
+                val mapContext = LocalContext.current
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(200.dp)
+                        .clip(RoundedCornerShape(16.dp))
+                        .border(1.dp, Color(0xFFE8EDE8), RoundedCornerShape(16.dp))
+                ) {
+                    AndroidView(
+                        modifier = Modifier.fillMaxSize(),
+                        factory  = { ctx ->
+                            Configuration.getInstance().load(
+                                ctx, ctx.getSharedPreferences("osmdroid", Context.MODE_PRIVATE)
+                            )
+                            Configuration.getInstance().userAgentValue = ctx.packageName
+                            MapView(ctx).apply {
+                                setTileSource(TileSourceFactory.MAPNIK)
+                                setMultiTouchControls(false)
+                                isClickable  = false
+                                isFocusable  = false
+                                overlayManager.tilesOverlay.isEnabled = true
+                                // Draw the trail polyline
+                                val trail = Polyline().apply {
+                                    setPoints(locationPoints)
+                                    outlinePaint.color       = android.graphics.Color.argb(220, 0, 180, 100)
+                                    outlinePaint.strokeWidth = 10f
+                                    outlinePaint.strokeCap   = android.graphics.Paint.Cap.ROUND
+                                    outlinePaint.strokeJoin  = android.graphics.Paint.Join.ROUND
+                                }
+                                overlays.add(trail)
+                                // Start marker — yellow flag pin (matches live ride start marker)
+                                locationPoints.firstOrNull()?.let { start ->
+                                    org.osmdroid.views.overlay.Marker(this).apply {
+                                        position = start
+                                        title    = "Start"
+                                        setAnchor(
+                                            org.osmdroid.views.overlay.Marker.ANCHOR_CENTER,
+                                            org.osmdroid.views.overlay.Marker.ANCHOR_BOTTOM
+                                        )
+                                        icon = android.graphics.drawable.BitmapDrawable(
+                                            ctx.resources,
+                                            makeMarkerBitmap(
+                                                context    = ctx,
+                                                bgColor    = android.graphics.Color.argb(255, 255, 214, 0),
+                                                isHospital = false,
+                                                sizePx     = 64,
+                                                isAlert    = false,
+                                                isCyclist  = false,
+                                                isFlag     = true
+                                            )
+                                        )
+                                        overlays.add(this)
+                                    }
+                                }
+
+                                // End marker — red hospital-style pin (solid red dot)
+                                locationPoints.lastOrNull()?.let { end ->
+                                    org.osmdroid.views.overlay.Marker(this).apply {
+                                        position = end
+                                        title    = "End"
+                                        setAnchor(
+                                            org.osmdroid.views.overlay.Marker.ANCHOR_CENTER,
+                                            org.osmdroid.views.overlay.Marker.ANCHOR_BOTTOM
+                                        )
+                                        icon = android.graphics.drawable.BitmapDrawable(
+                                            ctx.resources,
+                                            makeMarkerBitmap(
+                                                context         = ctx,
+                                                bgColor         = android.graphics.Color.argb(255, 211, 47, 47),
+                                                isHospital      = false,
+                                                sizePx          = 64,
+                                                isAlert         = false,
+                                                isCyclist       = false,
+                                                isFlag          = false,
+                                                isCheckeredFlag = true
+                                            )
+                                        )
+                                        overlays.add(this)
+                                    }
+                                }
+                                // Zoom to fit the whole route
+                                post {
+                                    try {
+                                        val box = BoundingBox.fromGeoPoints(locationPoints)
+                                        zoomToBoundingBox(box.increaseByScale(1.3f), false, 32)
+                                    } catch (_: Exception) {
+                                        controller.setCenter(locationPoints.first())
+                                        controller.setZoom(15.0)
+                                    }
+                                }
+                            }
+                        }
+                    )
+                    // Overlay label
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.TopStart)
+                            .padding(8.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(RSGreen900.copy(alpha = 0.85f))
+                            .padding(horizontal = 8.dp, vertical = 4.dp)
+                    ) {
+                        Text(
+                            "Your Route",
+                            fontSize   = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            color      = Color.White
+                        )
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(4.dp))
             HorizontalDivider(color = Color(0xFFE8EDE8))
 
             // ── Save route toggle ─────────────────────────────────────────────
@@ -241,8 +484,10 @@ fun RideSummarySheet(
                 onValueChange = { if (it.length <= 200) postCaption = it },
                 placeholder   = { Text("Add a caption for your ride…",
                     color = Color.LightGray, fontSize = 13.sp) },
-                modifier      = Modifier.fillMaxWidth().height(90.dp),
+                modifier      = Modifier.fillMaxWidth(),
                 shape         = RoundedCornerShape(12.dp),
+                minLines      = 3,
+                maxLines      = 5,
                 colors        = OutlinedTextFieldDefaults.colors(
                     focusedBorderColor      = RSGreen900,
                     unfocusedBorderColor    = Color(0xFFCDD8CD),
@@ -251,12 +496,14 @@ fun RideSummarySheet(
                     cursorColor             = RSGreen900,
                     focusedTextColor        = Color(0xFF1A1A1A),
                     unfocusedTextColor      = Color(0xFF1A1A1A)
-                ),
-                supportingText = {
-                    Text("${postCaption.length}/200", fontSize = 11.sp,
-                        color = if (postCaption.length > 180) Color(0xFFD32F2F) else Color.Gray,
-                        modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.End)
-                }
+                )
+            )
+            Text(
+                text      = "${postCaption.length}/200",
+                fontSize  = 11.sp,
+                color     = if (postCaption.length > 180) Color(0xFFD32F2F) else Color.Gray,
+                modifier  = Modifier.fillMaxWidth(),
+                textAlign = TextAlign.End
             )
 
             // ── Action buttons ────────────────────────────────────────────────
@@ -282,29 +529,44 @@ fun RideSummarySheet(
                     onClick = {
                         if (!isPosting) {
                             isPosting = true
-                            val post = hashMapOf(
-                                "userName"    to userName,
-                                "description" to postCaption.trim(),
-                                "activity"    to "Cycling Ride",
-                                "distance"    to String.format(Locale.getDefault(), "%.2f", distanceM / 1000.0),
-                                "timestamp"   to System.currentTimeMillis(),
-                                "likes"       to 0,
-                                "comments"    to 0,
-                                "likedBy"     to emptyList<String>(),
-                                "status"      to "pending",
-                                "rideStats"   to hashMapOf(
-                                    "distanceKm"  to distanceM / 1000.0,
-                                    "durationSec" to durationSeconds,
-                                    "avgSpeedKmh" to avgSpeedKmh,
-                                    "maxSpeedKmh" to maxSpeedKmh.toDouble(),
-                                    "elevationM"  to elevationM
+                            scope.launch {
+                                try {
+                                    // Render route to image and upload if we have points
+                                    val routeImageUrl = if (locationPoints.size >= 2)
+                                    renderAndUploadRouteImage(context, locationPoints)
+                                else null
+
+                                val post = hashMapOf(
+                                    "userName"       to userName,
+                                    "displayName"    to displayName,
+                                    "description"    to postCaption.trim(),
+                                    "activity"       to "Cycling Ride",
+                                    "distance"       to String.format(Locale.getDefault(), "%.2f", distanceM / 1000.0),
+                                    "timestamp"      to System.currentTimeMillis(),
+                                    "likes"          to 0,
+                                    "comments"       to 0,
+                                    "likedBy"        to emptyList<String>(),
+                                    "status"         to "accepted",
+                                    "routeImageUrl"  to (routeImageUrl ?: ""),
+                                    "rideStats"      to hashMapOf(
+                                        "distanceKm"  to distanceM / 1000.0,
+                                        "durationSec" to durationSeconds,
+                                        "avgSpeedKmh" to avgSpeedKmh,
+                                        "maxSpeedKmh" to maxSpeedKmh.toDouble(),
+                                        "elevationM"  to elevationM
+                                    ),
+                                    "polyline"       to locationPoints.map {
+                                        mapOf("lat" to it.latitude, "lon" to it.longitude)
+                                    }
                                 )
-                            )
-                            db.collection("posts").add(post)
-                                .addOnSuccessListener {
-                                    isPosting = false
-                                    // Save route if toggle is on and name is filled
-                                    if (saveRoute && routeName.isNotBlank()) {
+                                suspendCancellableCoroutine<Unit> { cont ->
+                                    db.collection("posts").add(post)
+                                        .addOnSuccessListener { cont.resume(Unit) }
+                                        .addOnFailureListener { cont.resumeWithException(it) }
+                                }
+                                isPosting = false
+                                // Save route if toggle is on and name is filled
+                                if (saveRoute && routeName.isNotBlank()) {
                                         val today    = java.text.SimpleDateFormat(
                                             "MMM d, yyyy", java.util.Locale.getDefault()
                                         ).format(java.util.Date())
@@ -331,21 +593,21 @@ fun RideSummarySheet(
                                             "timestamp"   to System.currentTimeMillis()
                                         ))
                                     }
-                                    Toast.makeText(
-                                        context,
-                                        if (saveRoute && routeName.isNotBlank())
-                                            "Ride shared & route saved! 🚴"
-                                        else "Ride shared to feed! 🚴",
-                                        Toast.LENGTH_SHORT
-                                    ).show()
+                                Toast.makeText(
+                                    context,
+                                    if (saveRoute && routeName.isNotBlank())
+                                        "Ride shared & route saved! 🚴"
+                                    else "Ride shared to feed! 🚴",
+                                    Toast.LENGTH_SHORT
+                                ).show()
                                     scope.launch { sheetState.hide() }
                                         .invokeOnCompletion { onDismiss() }
-                                }
-                                .addOnFailureListener {
+                                } catch (e: Exception) {
                                     isPosting = false
                                     Toast.makeText(context, "Failed to share. Try again.",
                                         Toast.LENGTH_SHORT).show()
                                 }
+                            }
                         }
                     },
                     modifier = Modifier.weight(2f).height(52.dp),

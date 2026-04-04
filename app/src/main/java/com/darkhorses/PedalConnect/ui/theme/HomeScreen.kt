@@ -163,13 +163,15 @@ data class NearbyUser(
     val lastSeen:   Long = 0L
 )
 
-private fun makeMarkerBitmap(
-    context:    android.content.Context,
-    bgColor:    Int,
-    isHospital: Boolean,
-    sizePx:     Int     = 72,
-    isAlert:    Boolean = false,
-    isCyclist:  Boolean = false
+internal fun makeMarkerBitmap(
+    context:          android.content.Context,
+    bgColor:          Int,
+    isHospital:       Boolean,
+    sizePx:           Int     = 72,
+    isAlert:          Boolean = false,
+    isCyclist:        Boolean = false,
+    isFlag:           Boolean = false,
+    isCheckeredFlag:  Boolean = false
 ): android.graphics.Bitmap {
     val w      = sizePx
     val h      = (sizePx * 1.35f).toInt()
@@ -243,6 +245,55 @@ private fun makeMarkerBitmap(
         // Legs
         canvas.drawLine(cx, cy + r * 0.22f, cx - r * 0.18f, cy + r * 0.44f, iconPaint)
         canvas.drawLine(cx, cy + r * 0.22f, cx + r * 0.18f, cy + r * 0.44f, iconPaint)
+    } else if (isFlag) {
+        // Flag icon — ride start marker
+        iconPaint.style       = Paint.Style.STROKE
+        iconPaint.color       = android.graphics.Color.WHITE
+        iconPaint.strokeWidth = r * 0.10f
+        iconPaint.strokeCap   = Paint.Cap.ROUND
+        val poleX = cx - r * 0.18f
+        // Pole
+        canvas.drawLine(poleX, cy - r * 0.50f, poleX, cy + r * 0.42f, iconPaint)
+        // Flag triangle
+        iconPaint.style = Paint.Style.FILL
+        val flagPath = android.graphics.Path().apply {
+            moveTo(poleX, cy - r * 0.50f)
+            lineTo(poleX + r * 0.52f, cy - r * 0.22f)
+            lineTo(poleX, cy + r * 0.06f)
+            close()
+        }
+        canvas.drawPath(flagPath, iconPaint)
+    } else if (isCheckeredFlag) {
+        // Checkered flag icon — ride end marker
+        iconPaint.style       = Paint.Style.STROKE
+        iconPaint.color       = android.graphics.Color.WHITE
+        iconPaint.strokeWidth = r * 0.10f
+        iconPaint.strokeCap   = Paint.Cap.ROUND
+        val poleX = cx - r * 0.18f
+        // Pole
+        canvas.drawLine(poleX, cy - r * 0.50f, poleX, cy + r * 0.42f, iconPaint)
+        // Checkered flag — 2x2 grid of alternating squares
+        val flagW  = r * 0.52f
+        val flagH  = r * 0.56f
+        val flagX  = poleX
+        val flagY  = cy - r * 0.50f
+        val cellW  = flagW / 2f
+        val cellH  = flagH / 2f
+        // Row 0: white | black
+        iconPaint.style = Paint.Style.FILL
+        iconPaint.color = android.graphics.Color.WHITE
+        canvas.drawRect(flagX, flagY, flagX + cellW, flagY + cellH, iconPaint)
+        iconPaint.color = android.graphics.Color.BLACK
+        canvas.drawRect(flagX + cellW, flagY, flagX + flagW, flagY + cellH, iconPaint)
+        // Row 1: black | white
+        canvas.drawRect(flagX, flagY + cellH, flagX + cellW, flagY + flagH, iconPaint)
+        iconPaint.color = android.graphics.Color.WHITE
+        canvas.drawRect(flagX + cellW, flagY + cellH, flagX + flagW, flagY + flagH, iconPaint)
+        // Flag outline
+        iconPaint.style       = Paint.Style.STROKE
+        iconPaint.color       = android.graphics.Color.WHITE
+        iconPaint.strokeWidth = r * 0.08f
+        canvas.drawRect(flagX, flagY, flagX + flagW, flagY + flagH, iconPaint)
     } else {
         // Gear/cog icon — bike shop marker
         iconPaint.style = Paint.Style.FILL
@@ -266,9 +317,9 @@ private fun makeMarkerBitmap(
         canvas.drawCircle(cx, cy, innerR, iconPaint)
         iconPaint.color = android.graphics.Color.WHITE
         canvas.drawCircle(cx, cy, innerR * 0.4f, iconPaint)
-        }
-      return bmp
     }
+    return bmp
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -375,6 +426,7 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
     var lastAltitude        by remember { mutableDoubleStateOf(Double.MIN_VALUE) }
     var locationPoints      by remember { mutableStateOf(listOf<GeoPoint>()) }
     var rideStartPoint      by remember { mutableStateOf<GeoPoint?>(null) }
+    var rideTrailPolyline   by remember { mutableStateOf<Polyline?>(null) }
 
     var showRideSummary  by remember { mutableStateOf(false) }
     var summaryDistance  by remember { mutableDoubleStateOf(0.0) }
@@ -417,6 +469,8 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
         totalDistance = 0.0; elapsedSeconds = 0L; currentSpeedKmh = 0f
         maxSpeedKmh = 0f; elevationGainMeters = 0.0; lastAltitude = Double.MIN_VALUE
         lastTrackedLocation = null; locationPoints = listOf(); rideStartPoint = null
+        rideTrailPolyline?.let { mapViewRef?.overlays?.remove(it) }
+        rideTrailPolyline = null
     }
 
     fun checkLocationStatus() {
@@ -954,6 +1008,11 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
         val locationManager  = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
         val locationListener = object : LocationListener {
             override fun onLocationChanged(location: Location) {
+                // ── GPS spike filter ──────────────────────────────────────────
+                // Reject points with poor accuracy or impossible speed
+                val accuracyM = location.accuracy
+                if (accuracyM > 35f) return  // too inaccurate — skip entirely
+
                 val gp = GeoPoint(location.latitude, location.longitude)
                 publishLocation(gp)
                 if (showTurnPanel && routeOptions.isNotEmpty()) {
@@ -970,22 +1029,55 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
                         }
                     }
                 }
-                if (location.hasSpeed()) {
-                    val speedKmh   = location.speed * 3.6f
-                    val targetZoom = when { speedKmh >= 25f -> 14.0; speedKmh >= 10f -> 15.5; speedKmh >= 3f -> 17.0; else -> 17.5 }
-                    mapViewRef?.controller?.animateTo(gp, targetZoom, 800L)
+                val instantSpeedKmh = if (location.hasSpeed() && location.speed > 0f) {
+                    (location.speed * 3.6f).coerceAtMost(80f)
+                } else {
+                    lastTrackedLocation?.let { last ->
+                        val distM    = last.distanceTo(location)
+                        val timeDiff = (location.time - last.time) / 1000f
+                        if (timeDiff > 0f && distM > 1f)
+                            ((distM / timeDiff) * 3.6f).coerceAtMost(80f)
+                        else null
+                    } ?: 0f
                 }
+                // Smooth speed using simple rolling average with previous reading
+                // This kills single-frame spikes while keeping real acceleration visible
+                val rawSpeedKmh = if (currentSpeedKmh > 0f)
+                    (currentSpeedKmh * 0.6f + instantSpeedKmh * 0.4f)
+                else
+                    instantSpeedKmh
+                val targetZoom = when {
+                    rawSpeedKmh >= 25f -> 14.0; rawSpeedKmh >= 10f -> 15.5
+                    rawSpeedKmh >= 3f  -> 17.0; else -> 17.5
+                }
+                mapViewRef?.controller?.animateTo(gp, targetZoom, 800L)
                 if (isTracking && !isPaused) {
                     lastTrackedLocation?.let { last ->
-                        val d = last.distanceTo(location)
-                        if (d > 2.0) { totalDistance += d; locationPoints = locationPoints + gp }
+                        val d        = last.distanceTo(location)
+                        val timeDiff = (location.time - last.time) / 1000f // seconds
+                        // Implied speed from displacement — reject if physically impossible
+                        // 20 m/s = 72 km/h, generous upper bound for a cyclist
+                        val impliedSpeedMs = if (timeDiff > 0) d / timeDiff else Float.MAX_VALUE
+                        val isSpike = impliedSpeedMs > 20f || d > 100f  // >100m jump in 1s = bad GPS
+                        if (d > 2.0 && !isSpike) {
+                            totalDistance  += d
+                            locationPoints  = locationPoints + gp
+                            // Update live trail polyline
+                            val trail = rideTrailPolyline ?: Polyline().also { rideTrailPolyline = it }
+                            trail.setPoints(locationPoints)
+                            trail.outlinePaint.color       = android.graphics.Color.argb(220, 0, 180, 100)
+                            trail.outlinePaint.strokeWidth = 10f
+                            trail.outlinePaint.strokeCap   = android.graphics.Paint.Cap.ROUND
+                            trail.outlinePaint.strokeJoin  = android.graphics.Paint.Join.ROUND
+                            mapViewRef?.let { mv ->
+                                if (!mv.overlays.contains(trail)) mv.overlays.add(trail)
+                                mv.invalidate()
+                            }
+                        }
                     }
                     lastTrackedLocation = location
-                    if (location.hasSpeed()) {
-                        val speedKmh = location.speed * 3.6f
-                        currentSpeedKmh = speedKmh
-                        if (speedKmh > maxSpeedKmh) maxSpeedKmh = speedKmh
-                    }
+                    currentSpeedKmh = rawSpeedKmh
+                    if (rawSpeedKmh > maxSpeedKmh) maxSpeedKmh = rawSpeedKmh
                     if (location.hasAltitude()) {
                         val alt = location.altitude
                         if (lastAltitude != Double.MIN_VALUE) { val diff = alt - lastAltitude; if (diff > 0.5) elevationGainMeters += diff }
@@ -1001,8 +1093,8 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION)
             == PackageManager.PERMISSION_GRANTED
         ) {
-            locationManager.requestLocationUpdates(LocationManager.GPS_PROVIDER,   5000L, 5f, locationListener)
-            locationManager.requestLocationUpdates(LocationManager.NETWORK_PROVIDER, 5000L, 5f, locationListener)
+            locationManager.requestLocationUpdates(LocationManager.GPS_PROVIDER,   1000L, 1f, locationListener)
+            locationManager.requestLocationUpdates(LocationManager.NETWORK_PROVIDER, 1000L, 1f, locationListener)
         }
         onDispose { if (!isTracking) currentSpeedKmh = 0f; locationManager.removeUpdates(locationListener) }
     }
@@ -1310,7 +1402,15 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
                                 }
                             }
                             rideStartPoint?.let { start ->
-                                val startBitmap = makeMarkerBitmap(view.context, android.graphics.Color.argb(255, 255, 214, 0), false, 64)
+                                val startBitmap = makeMarkerBitmap(
+                                    view.context,
+                                    android.graphics.Color.argb(255, 255, 214, 0),
+                                    isHospital = false,
+                                    sizePx     = 64,
+                                    isAlert    = false,
+                                    isCyclist  = false,
+                                    isFlag     = true
+                                )
                                 Marker(view).apply {
                                     position = start; title = "🚩 Ride Start"; snippet = "Your starting point"
                                     setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
@@ -1567,7 +1667,59 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
                                     }
                                 }       // end outer stats strip Row
                             }           // end AnimatedVisibility (isTracking strip)
-                        }               // end if (!isAdmin)
+                            // ── Active alert banner — sits below search/stats, never overlaps ──
+                            val myActiveAlertInline = alerts.firstOrNull {
+                                it.riderName.trim().lowercase() == userName.trim().lowercase()
+                            }
+                            AnimatedVisibility(
+                                visible = myActiveAlertInline != null && !showSearchOverlay,
+                                enter   = fadeIn() + expandVertically(),
+                                exit    = fadeOut() + shrinkVertically()
+                            ) {
+                                if (myActiveAlertInline != null) {
+                                    val bannerColor = when (myActiveAlertInline.status) {
+                                        "responding" -> Color(0xFF1565C0)
+                                        else         -> Color(0xFFD32F2F)
+                                    }
+                                    val bannerText = when (myActiveAlertInline.status) {
+                                        "responding" -> "🚴 ${myActiveAlertInline.responderName ?: "Someone"} is on the way!"
+                                        else         -> "🆘 Your ${myActiveAlertInline.emergencyType} alert is active"
+                                    }
+                                    Card(
+                                        onClick   = { selectedItem = 3 },
+                                        modifier  = Modifier.fillMaxWidth(),
+                                        shape     = RoundedCornerShape(16.dp),
+                                        colors    = CardDefaults.cardColors(containerColor = bannerColor),
+                                        elevation = CardDefaults.cardElevation(6.dp)
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
+                                            verticalAlignment     = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                        ) {
+                                            Box(
+                                                modifier = Modifier.size(36.dp).clip(CircleShape)
+                                                    .background(Color.White.copy(alpha = 0.18f)),
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                Icon(
+                                                    when (myActiveAlertInline.status) {
+                                                        "responding" -> Icons.AutoMirrored.Filled.DirectionsBike
+                                                        else         -> Icons.Default.Warning
+                                                    },
+                                                    null, tint = Color.White, modifier = Modifier.size(18.dp)
+                                                )
+                                            }
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                Text(bannerText, fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color.White, maxLines = 1)
+                                                Text("Tap to open Alerts tab", fontSize = 10.sp, color = Color.White.copy(alpha = 0.75f))
+                                            }
+                                            Icon(Icons.Default.ChevronRight, null, tint = Color.White.copy(alpha = 0.7f), modifier = Modifier.size(18.dp))
+                                        }
+                                    }
+                                }
+                            }
+                        }                   // end if (!isAdmin)
                     }                   // end top Column
 
                     // ── Full-screen search overlay — animated drop down ────────
@@ -1608,38 +1760,6 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
                         )
                     }
 
-                    val myActiveAlert = alerts.firstOrNull { it.riderName.trim().lowercase() == userName.trim().lowercase() } // Your active alert banner position
-                    AnimatedVisibility(
-                        visible = myActiveAlert != null,
-                        enter = fadeIn() + slideInVertically(initialOffsetY = { -it }),
-                        exit  = fadeOut() + slideOutVertically(targetOffsetY = { -it }),
-                        modifier = Modifier.align(Alignment.TopCenter).fillMaxWidth()
-                            .windowInsetsPadding(WindowInsets.statusBars).padding(
-                                top = if (isTracking) 120.dp else 135.dp,
-                                start = 16.dp,
-                                end   = 16.dp
-                            )
-                    ) {
-                        if (myActiveAlert != null) {
-                            val bannerColor = when (myActiveAlert.status) { "responding" -> Color(0xFF1565C0); else -> Color(0xFFD32F2F) }
-                            val bannerText  = when (myActiveAlert.status) { "responding" -> "🚴 ${myActiveAlert.responderName ?: "Someone"} is on the way!"; else -> "🆘 Your ${myActiveAlert.emergencyType} alert is active" }
-                            Card(onClick = { selectedItem = 3 }, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp),
-                                colors = CardDefaults.cardColors(containerColor = bannerColor), elevation = CardDefaults.cardElevation(6.dp)) {
-                                Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
-                                    verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                                    Box(modifier = Modifier.size(36.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.18f)), contentAlignment = Alignment.Center) {
-                                        Icon(when (myActiveAlert.status) { "responding" -> Icons.AutoMirrored.Filled.DirectionsBike; else -> Icons.Default.Warning },
-                                            null, tint = Color.White, modifier = Modifier.size(18.dp))
-                                    }
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        Text(bannerText, fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color.White, maxLines = 1)
-                                        Text("Tap to open Alerts tab", fontSize = 10.sp, color = Color.White.copy(alpha = 0.75f))
-                                    }
-                                    Icon(Icons.Default.ChevronRight, null, tint = Color.White.copy(alpha = 0.7f), modifier = Modifier.size(18.dp))
-                                }
-                            }
-                        }
-                    }
 
                     Column(
                         modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth()
@@ -1734,7 +1854,7 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
                             }
                         }
 
-                        AnimatedVisibility(visible = !isAdmin && (isTracking || totalDistance > 0),
+                        AnimatedVisibility(visible = !isAdmin && (isTracking || totalDistance > 0) && !showSearchOverlay,
                             enter = fadeIn() + slideInVertically(initialOffsetY = { it }),
                             exit  = fadeOut() + slideOutVertically(targetOffsetY = { it })) {
                             val nearbyHospitalsCard = nearbyShops.count { it.type == ShopType.HOSPITAL }

@@ -433,16 +433,36 @@ private fun NotificationCard(
                 val responder = doc.getString("responderName") ?: return@addOnSuccessListener
                 val riderName = doc.getString("riderName") ?: ""
                 val eType     = doc.getString("emergencyType") ?: "alert"
-                db.collection("notifications").add(hashMapOf(
-                    "userName"  to responder,
-                    "message"   to if (confirmed)
-                        "$riderName confirmed the $eType has been resolved. Thank you!"
-                    else
-                        "$riderName still needs help with $eType.",
-                    "type"      to if (confirmed) "accepted" else "alert",
-                    "timestamp" to System.currentTimeMillis(),
-                    "read"      to false
-                ))
+                // Fetch display names for both rider and responder
+                db.collection("users").whereEqualTo("username", riderName)
+                    .limit(1).get()
+                    .addOnSuccessListener { riderSnap ->
+                        val riderDisplay = riderSnap.documents.firstOrNull()
+                            ?.getString("displayName")?.takeIf { it.isNotBlank() } ?: riderName
+                        db.collection("notifications").add(hashMapOf(
+                            "userName"  to responder,
+                            "message"   to if (confirmed)
+                                "$riderDisplay confirmed the $eType has been resolved. Thank you!"
+                            else
+                                "$riderDisplay still needs help with $eType.",
+                            "type"      to if (confirmed) "accepted" else "alert",
+                            "timestamp" to System.currentTimeMillis(),
+                            "read"      to false
+                        ))
+                    }
+                    .addOnFailureListener {
+                        // Fallback to username if fetch fails
+                        db.collection("notifications").add(hashMapOf(
+                            "userName"  to responder,
+                            "message"   to if (confirmed)
+                                "$riderName confirmed the $eType has been resolved. Thank you!"
+                            else
+                                "$riderName still needs help with $eType.",
+                            "type"      to if (confirmed) "accepted" else "alert",
+                            "timestamp" to System.currentTimeMillis(),
+                            "read"      to false
+                        ))
+                    }
             }
     }
 
