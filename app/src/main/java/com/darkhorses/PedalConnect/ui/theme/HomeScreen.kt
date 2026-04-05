@@ -326,6 +326,7 @@ internal fun makeMarkerBitmap(
 fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Boolean = false) {
     val context        = LocalContext.current
     val scope          = rememberCoroutineScope()
+
     val db             = FirebaseFirestore.getInstance()
     val lifecycleOwner = LocalLifecycleOwner.current
 
@@ -402,6 +403,7 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
     var selectedRouteIdx by remember { mutableIntStateOf(0) }
     var showRoutePanel   by remember { mutableStateOf(false) }
     var routeDismissed   by remember { mutableStateOf(false) }  // true once user taps Navigate
+    var pendingRouteIdx  by remember { mutableIntStateOf(-1) }  // -1 = nothing previewed yet
     var isLoadingRoute   by remember { mutableStateOf(false) }
     var activePolylines  by remember { mutableStateOf<List<Polyline>>(emptyList()) }
 
@@ -409,7 +411,8 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
     var turnSteps         by remember { mutableStateOf<List<TurnStep>>(emptyList()) }
     var currentStepIdx    by remember { mutableIntStateOf(0) }
     var showTurnPanel     by remember { mutableStateOf(false) }
-    var offRouteCheckDist by remember { mutableDoubleStateOf(0.0) }
+    var offRouteCheckDist    by remember { mutableDoubleStateOf(0.0) }
+    var lastRerouteMs        by remember { mutableLongStateOf(0L) }
 
     val alerts = remember { mutableStateListOf<AlertItem>() }
     var myLocationOverlay by remember { mutableStateOf<MyLocationNewOverlay?>(null) }
@@ -435,6 +438,7 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
     var summaryElevation by remember { mutableDoubleStateOf(0.0) }
 
     var mapViewRef          by remember { mutableStateOf<MapView?>(null) }
+    var mapInitialized      by remember { mutableStateOf(false) }
     var isFollowingLocation by remember { mutableStateOf(true) }
     var showSearchOverlay   by remember { mutableStateOf(false) }
 
@@ -596,7 +600,13 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
 
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) checkLocationStatus()
+            if (event == Lifecycle.Event.ON_RESUME) {
+                checkLocationStatus()
+                mapViewRef?.onResume()
+            }
+            if (event == Lifecycle.Event.ON_PAUSE) {
+                mapViewRef?.onPause()
+            }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
@@ -611,17 +621,18 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
                     val docStatus = doc.getString("status") ?: "active"
                     if (docStatus == "resolved") continue
                     alerts.add(AlertItem(
-                        id            = doc.id,
-                        riderName     = doc.getString("riderName") ?: "Unknown",
-                        emergencyType = doc.getString("emergencyType") ?: "Alert",
-                        locationName  = doc.getString("locationName") ?: "Resolving...",
-                        coordinates   = GeoPoint(
+                        id                   = doc.id,
+                        riderName            = doc.getString("riderName") ?: "Unknown",
+                        emergencyType        = doc.getString("emergencyType") ?: "Alert",
+                        locationName         = doc.getString("locationName") ?: "Resolving...",
+                        coordinates          = GeoPoint(
                             doc.getDouble("latitude") ?: 0.0,
                             doc.getDouble("longitude") ?: 0.0
                         ),
-                        time          = "",
-                        status        = doc.getString("status") ?: "active",
-                        responderName = doc.getString("responderName")
+                        time                 = "",
+                        status               = doc.getString("status") ?: "active",
+                        responderName        = doc.getString("responderName"),
+                        responderDisplayName = doc.getString("responderDisplayName") ?: ""
                     ))
                 }
             }
@@ -642,6 +653,8 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
                         for (doc in snap.documents) {
                             val name = doc.getString("userName") ?: continue
                             if (name == userName) continue
+                            // Never show the Admin account as a cyclist marker on any user's map
+                            if (name.trim().equals("Admin", ignoreCase = true)) continue
                             val lat  = doc.getDouble("latitude")  ?: continue
                             val lon  = doc.getDouble("longitude") ?: continue
                             val ts   = doc.getLong("timestamp")   ?: 0L
@@ -710,11 +723,11 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
         }
     }
 
-    fun fetchRoutes(start: GeoPoint, end: GeoPoint, map: MapView) {
+    fun fetchRoutes(start: GeoPoint, end: GeoPoint) {
         isLoadingRoute = true; showRoutePanel = false; showTurnPanel = false
         routeDismissed = false
         turnSteps = emptyList()
-        activePolylines.forEach { map.overlays.remove(it) }; activePolylines = emptyList()
+        mapViewRef?.let { map -> activePolylines.forEach { map.overlays.remove(it) } }
         val profiles = listOf(
             Triple("cycling-road",    "Fastest",  android.graphics.Color.argb(220, 25, 118, 210)),
             Triple("cycling-regular", "Quietest", android.graphics.Color.argb(220, 46, 125,  50))
@@ -770,6 +783,7 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
                 routeOptions   = fetched
                 isLoadingRoute = false
                 if (fetched.isEmpty()) return@withContext
+                val liveMap = mapViewRef ?: return@withContext
                 val newPolylines = fetched.mapIndexed { idx, opt ->
                     Polyline().apply {
                         setPoints(opt.points)
@@ -784,19 +798,37 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
                         outlinePaint.strokeJoin  = Paint.Join.ROUND
                     }
                 }
-                newPolylines.forEach { map.overlays.add(it) }
+                newPolylines.forEach { liveMap.overlays.add(it) }
                 activePolylines = newPolylines
                 showRoutePanel  = true
-                showTurnPanel   = true
+                showTurnPanel   = false
+                pendingRouteIdx = -1
                 currentStepIdx  = 0
-                map.invalidate()
+                liveMap.invalidate()
                 val boundingBox = org.osmdroid.util.BoundingBox.fromGeoPoints(fetched[selectedRouteIdx].points)
-                map.zoomToBoundingBox(boundingBox.increaseByScale(1.3f), true, 80)
+                val center = GeoPoint(
+                    (boundingBox.latNorth + boundingBox.latSouth) / 2.0,
+                    (boundingBox.lonEast + boundingBox.lonWest) / 2.0
+                )
+                val latSpan = boundingBox.latNorth - boundingBox.latSouth
+                val lonSpan = (boundingBox.lonEast - boundingBox.lonWest) *
+                        cos(Math.toRadians(center.latitude))
+                val maxSpan = maxOf(latSpan, lonSpan) * 1.4
+                val zoom = (ln(360.0 / maxSpan) / ln(2.0)).coerceIn(12.0, 16.5)
+                isFollowingLocation = false
+                liveMap.controller.animateTo(center, zoom, 900L)
+                scope.launch {
+                    kotlinx.coroutines.delay(3000L)
+                    val gpsLoc = userGeoPoint ?: myLocationOverlay?.myLocation ?: start
+                    val currentMap = mapViewRef ?: return@launch
+                    isFollowingLocation = true
+                    currentMap.controller.animateTo(gpsLoc, 16.5, 1200L)
+                }
             }
         }
     }
 
-    fun searchAndRoute(query: String, map: MapView) {
+    fun searchAndRoute(query: String) {
         if (query.isBlank()) return
         isLoadingRoute = true
         scope.launch(Dispatchers.IO) {
@@ -861,7 +893,7 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
                                 val responseCode = conn.responseCode
                                 if (responseCode != 200) {
                                     withContext(Dispatchers.Main) {
-                                        fetchRoutes(start, dest, map)
+                                        fetchRoutes(start, dest)
                                     }
                                     return@launch
                                 }
@@ -903,14 +935,14 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
                                         }
                                         else -> {
                                             // Within limit — proceed with full route fetch
-                                            fetchRoutes(start, dest, map)
+                                            fetchRoutes(start, dest)
                                         }
                                     }
                                 }
                             } catch (e: Exception) {
                                 // Network error on pre-check — don't block, just proceed
                                 withContext(Dispatchers.Main) {
-                                    fetchRoutes(start, dest, map)
+                                    fetchRoutes(start, dest)
                                 }
                             }
                         }
@@ -979,7 +1011,7 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
             selectedItem = 1
             kotlinx.coroutines.delay(800L)
             val map = mapViewRef
-            if (map != null) searchAndRoute(pendingDest, map)
+            if (map != null) searchAndRoute(pendingDest)
         }
     }
 
@@ -994,14 +1026,19 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
         map.invalidate(); currentStepIdx = 0
     }
 
-    fun fetchRoute(start: GeoPoint, end: GeoPoint, map: MapView) { fetchRoutes(start, end, map) }
+    fun fetchRoute(start: GeoPoint, end: GeoPoint) { fetchRoutes(start, end) }
 
     fun checkOffRoute(loc: GeoPoint) {
         val route = routeOptions.getOrNull(selectedRouteIdx) ?: return
         if (route.points.isEmpty()) return
         val minDist = route.points.minOf { haversineKm(loc.latitude, loc.longitude, it.latitude, it.longitude) }
         offRouteCheckDist = minDist
-        if (minDist > 0.08) { val map = mapViewRef ?: return; fetchRoutes(loc, destinationPoint ?: return, map) }
+        if (minDist > 0.08) {
+            val now = System.currentTimeMillis()
+            if (now - lastRerouteMs < 10_000L) return
+            lastRerouteMs = now
+            fetchRoutes(loc, destinationPoint ?: return)
+        }
     }
 
     DisposableEffect(Unit) {
@@ -1050,7 +1087,9 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
                     rawSpeedKmh >= 25f -> 14.0; rawSpeedKmh >= 10f -> 15.5
                     rawSpeedKmh >= 3f  -> 17.0; else -> 17.5
                 }
-                mapViewRef?.controller?.animateTo(gp, targetZoom, 800L)
+                if (isFollowingLocation) {
+                    mapViewRef?.controller?.animateTo(gp, targetZoom, 800L)
+                }
                 if (isTracking && !isPaused) {
                     lastTrackedLocation?.let { last ->
                         val d        = last.distanceTo(location)
@@ -1063,16 +1102,21 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
                             totalDistance  += d
                             locationPoints  = locationPoints + gp
                             // Update live trail polyline
-                            val trail = rideTrailPolyline ?: Polyline().also { rideTrailPolyline = it }
-                            trail.setPoints(locationPoints)
+                            // Always get or create a fresh Polyline — never reuse one
+                            // from a detached map as its internal LinearRing will be null
+                            val mv = mapViewRef ?: return@let
+                            val trail = rideTrailPolyline?.takeIf {
+                                mv.overlays.contains(it)
+                            } ?: Polyline().also {
+                                rideTrailPolyline = it
+                                mv.overlays.add(it)
+                            }
                             trail.outlinePaint.color       = android.graphics.Color.argb(220, 0, 180, 100)
                             trail.outlinePaint.strokeWidth = 10f
                             trail.outlinePaint.strokeCap   = android.graphics.Paint.Cap.ROUND
                             trail.outlinePaint.strokeJoin  = android.graphics.Paint.Join.ROUND
-                            mapViewRef?.let { mv ->
-                                if (!mv.overlays.contains(trail)) mv.overlays.add(trail)
-                                mv.invalidate()
-                            }
+                            trail.setPoints(locationPoints)
+                            mv.invalidate()
                         }
                     }
                     lastTrackedLocation = location
@@ -1229,7 +1273,7 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
                                                 mapView.controller.animateTo(loc)
                                                 mapView.controller.setZoom(16.0)
                                                 publishLocation(loc)
-                                                destinationPoint?.let { fetchRoute(loc, it, mapView) }
+                                                destinationPoint?.let { fetchRoute(loc, it) }
                                             }
                                         }
                                     }
@@ -1240,13 +1284,21 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
                             }
                         },
                         update = { view ->
-                            view.onResume()
-                            view.overlays.removeAll(view.overlays.filterIsInstance<Marker>() + view.overlays.filterIsInstance<Polygon>())
+                            if (isLoadingRoute) return@AndroidView
+                            val routeActive = activePolylines.isNotEmpty()
+                            // Always remove stale markers regardless of route state
+                            val toRemove = view.overlays.filter {
+                                if (routeActive) it is Marker
+                                else it is Marker || it is Polygon
+                            }
+                            toRemove.forEach { view.overlays.remove(it) }
                             val center = userGeoPoint ?: myLocationOverlay?.myLocation ?: GeoPoint(14.5995, 120.9842)
-                            // Draw outer services circle first (stays behind everything)
-                            view.overlays.add(0, buildServicesRadiusPolygon(center))
-                            // Draw inner cyclist circle on top of it
-                            view.overlays.add(1, buildCyclistRadiusPolygon(center))
+                            if (!routeActive) {
+                                // Only redraw radius circles when no route is active
+                                // — avoids z-order conflict with polylines
+                                view.overlays.add(0, buildServicesRadiusPolygon(center))
+                                view.overlays.add(1, buildCyclistRadiusPolygon(center))
+                            }
                             nearbyShops.forEach { shop ->
                                 val isHospital  = shop.type == ShopType.HOSPITAL
                                 val isRelevant  = mapFocusFilter == null || shop.type == mapFocusFilter
@@ -1464,15 +1516,139 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
                             mapViewRef?.invalidate()
                         }
 
-                        // ── Search pill — tapping opens full-screen overlay ───
-                        if (destinationPoint != null) {
+                        // ── Alert banner — always visible at top when active,
+                        //    even during navigation so safety info is never hidden ──
+                        if (!isAdmin) {
+                            val myActiveAlertTop = alerts.firstOrNull {
+                                it.riderName.trim().lowercase() == userName.trim().lowercase()
+                            }
+                            AnimatedVisibility(
+                                visible = myActiveAlertTop != null && showTurnPanel && !showSearchOverlay,
+                                enter   = fadeIn() + expandVertically(),
+                                exit    = fadeOut() + shrinkVertically()
+                            ) {
+                                if (myActiveAlertTop != null) {
+                                    val bannerColor = when (myActiveAlertTop.status) {
+                                        "responding" -> Color(0xFF1565C0)
+                                        else         -> Color(0xFFD32F2F)
+                                    }
+                                    val bannerResponderName = myActiveAlertTop.responderDisplayName
+                                        .takeIf { it.isNotBlank() }
+                                        ?: myActiveAlertTop.responderName
+                                        ?: "Someone"
+                                    val bannerText = when (myActiveAlertTop.status) {
+                                        "responding" -> "🚴 $bannerResponderName is on the way!"
+                                        else         -> "🆘 Your ${myActiveAlertTop.emergencyType} alert is active"
+                                    }
+                                    Card(
+                                        onClick   = { selectedItem = 3 },
+                                        modifier  = Modifier.fillMaxWidth(),
+                                        shape     = RoundedCornerShape(16.dp),
+                                        colors    = CardDefaults.cardColors(containerColor = bannerColor),
+                                        elevation = CardDefaults.cardElevation(6.dp)
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp),
+                                            verticalAlignment     = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                        ) {
+                                            Icon(
+                                                when (myActiveAlertTop.status) {
+                                                    "responding" -> Icons.AutoMirrored.Filled.DirectionsBike
+                                                    else         -> Icons.Default.Warning
+                                                },
+                                                null, tint = Color.White, modifier = Modifier.size(16.dp)
+                                            )
+                                            Text(
+                                                bannerText,
+                                                fontSize   = 12.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color      = Color.White,
+                                                maxLines   = 1,
+                                                modifier   = Modifier.weight(1f),
+                                                overflow   = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                                            )
+                                            Icon(Icons.Default.ChevronRight, null, tint = Color.White.copy(alpha = 0.7f), modifier = Modifier.size(16.dp))
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // ── Turn-by-turn panel — top of screen, compact ───────
+                        AnimatedVisibility(
+                            visible = showTurnPanel && turnSteps.isNotEmpty(),
+                            enter   = fadeIn() + slideInVertically(initialOffsetY = { -it }),
+                            exit    = fadeOut() + slideOutVertically(targetOffsetY = { -it })
+                        ) {
+                            val step = turnSteps.getOrNull(currentStepIdx)
+                            if (step != null) {
+                                Card(
+                                    modifier  = Modifier.fillMaxWidth(),
+                                    shape     = RoundedCornerShape(16.dp),
+                                    colors    = CardDefaults.cardColors(containerColor = Green900),
+                                    elevation = CardDefaults.cardElevation(8.dp)
+                                ) {
+                                    Row(
+                                        modifier              = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp),
+                                        verticalAlignment     = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                    ) {
+                                        Box(
+                                            modifier         = Modifier.size(36.dp).clip(RoundedCornerShape(10.dp))
+                                                .background(Color.White.copy(alpha = 0.15f)),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Icon(Icons.Default.Navigation, null, tint = Color.White, modifier = Modifier.size(20.dp))
+                                        }
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                step.instruction,
+                                                fontWeight = FontWeight.Bold,
+                                                fontSize   = 13.sp,
+                                                color      = Color.White,
+                                                maxLines   = 1,
+                                                overflow   = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                                            )
+                                            if (step.distanceM > 0)
+                                                Text(
+                                                    "in ${if (step.distanceM >= 1000) String.format("%.1f km", step.distanceM / 1000) else "${step.distanceM.toInt()} m"}",
+                                                    fontSize   = 11.sp,
+                                                    color      = Color.White.copy(alpha = 0.75f),
+                                                    fontWeight = FontWeight.Medium
+                                                )
+                                        }
+                                        Text(
+                                            "${currentStepIdx + 1}/${turnSteps.size}",
+                                            fontSize   = 11.sp,
+                                            color      = Color.White.copy(alpha = 0.6f),
+                                            fontWeight = FontWeight.Medium
+                                        )
+                                        IconButton(onClick = { showTurnPanel = false }, modifier = Modifier.size(24.dp)) {
+                                            Icon(Icons.Default.Close, null, tint = Color.White.copy(alpha = 0.6f), modifier = Modifier.size(14.dp))
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // ── Everything below hidden during active turn-by-turn navigation ──
+                        AnimatedVisibility(
+                            visible = !showTurnPanel,
+                            enter   = fadeIn(animationSpec = tween(200)),
+                            exit    = fadeOut(animationSpec = tween(150))
+                        ) {
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+
+                                // ── Search pill — tapping opens full-screen overlay ───
+                                if (destinationPoint != null) {
                             // Active destination chip
                             Row(
                                 modifier = Modifier.fillMaxWidth()
                                     .shadow(6.dp, RoundedCornerShape(32.dp))
                                     .clip(RoundedCornerShape(32.dp))
                                     .background(Color.White)
-                                    .clickable { showRoutePanel = true }
+                                    .clickable { showRoutePanel = true; routeDismissed = false }
                                     .padding(horizontal = 14.dp, vertical = 10.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -1521,6 +1697,63 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
                                     contentAlignment = Alignment.Center
                                 ) {
                                     Icon(Icons.Default.MyLocation, null, tint = Green900, modifier = Modifier.size(16.dp))
+                                }
+                            }
+                        }
+
+                        // ── Turn-by-turn panel — top of screen, compact ───────
+                        AnimatedVisibility(
+                            visible = showTurnPanel && turnSteps.isNotEmpty(),
+                            enter   = fadeIn() + slideInVertically(initialOffsetY = { -it }),
+                            exit    = fadeOut() + slideOutVertically(targetOffsetY = { -it })
+                        ) {
+                            val step = turnSteps.getOrNull(currentStepIdx)
+                            if (step != null) {
+                                Card(
+                                    modifier  = Modifier.fillMaxWidth(),
+                                    shape     = RoundedCornerShape(16.dp),
+                                    colors    = CardDefaults.cardColors(containerColor = Green900),
+                                    elevation = CardDefaults.cardElevation(8.dp)
+                                ) {
+                                    Row(
+                                        modifier              = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp),
+                                        verticalAlignment     = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                    ) {
+                                        Box(
+                                            modifier         = Modifier.size(36.dp).clip(RoundedCornerShape(10.dp))
+                                                .background(Color.White.copy(alpha = 0.15f)),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Icon(Icons.Default.Navigation, null, tint = Color.White, modifier = Modifier.size(20.dp))
+                                        }
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                step.instruction,
+                                                fontWeight = FontWeight.Bold,
+                                                fontSize   = 13.sp,
+                                                color      = Color.White,
+                                                maxLines   = 1,
+                                                overflow   = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                                            )
+                                            if (step.distanceM > 0)
+                                                Text(
+                                                    "in ${if (step.distanceM >= 1000) String.format("%.1f km", step.distanceM / 1000) else "${step.distanceM.toInt()} m"}",
+                                                    fontSize   = 11.sp,
+                                                    color      = Color.White.copy(alpha = 0.75f),
+                                                    fontWeight = FontWeight.Medium
+                                                )
+                                        }
+                                        Text(
+                                            "${currentStepIdx + 1}/${turnSteps.size}",
+                                            fontSize = 11.sp,
+                                            color    = Color.White.copy(alpha = 0.6f),
+                                            fontWeight = FontWeight.Medium
+                                        )
+                                        IconButton(onClick = { showTurnPanel = false }, modifier = Modifier.size(24.dp)) {
+                                            Icon(Icons.Default.Close, null, tint = Color.White.copy(alpha = 0.6f), modifier = Modifier.size(14.dp))
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -1681,8 +1914,12 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
                                         "responding" -> Color(0xFF1565C0)
                                         else         -> Color(0xFFD32F2F)
                                     }
+                                    val bannerResponderName = myActiveAlertInline.responderDisplayName
+                                        .takeIf { it.isNotBlank() }
+                                        ?: myActiveAlertInline.responderName
+                                        ?: "Someone"
                                     val bannerText = when (myActiveAlertInline.status) {
-                                        "responding" -> "🚴 ${myActiveAlertInline.responderName ?: "Someone"} is on the way!"
+                                        "responding" -> "🚴 $bannerResponderName is on the way!"
                                         else         -> "🆘 Your ${myActiveAlertInline.emergencyType} alert is active"
                                     }
                                     Card(
@@ -1720,7 +1957,9 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
                                 }
                             }
                         }                   // end if (!isAdmin)
-                    }                   // end top Column
+                            } // end inner Column
+                        }   // end AnimatedVisibility (!showTurnPanel)
+                    }       // end top Column
 
                     // ── Full-screen search overlay — animated drop down ────────
                     AnimatedVisibility(
@@ -1748,12 +1987,11 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
                                 else searchSuggestions = emptyList()
                             },
                             onSearch       = { query ->
-                                val map = mapViewRef ?: return@SearchOverlay
                                 searchQuery = query
                                 saveToRecents(query)
                                 showSearchOverlay = false
                                 searchSuggestions = emptyList()
-                                searchAndRoute(query, map)
+                                searchAndRoute(query)
                             },
                             onDismiss      = { showSearchOverlay = false; searchSuggestions = emptyList() },
                             onClearRecents = { clearRecents() }
@@ -1766,33 +2004,71 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
                             .padding(start = 16.dp, end = 16.dp, bottom = innerPadding.calculateBottomPadding() + 12.dp),
                         verticalArrangement = Arrangement.spacedBy(10.dp), horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        AnimatedVisibility(visible = showTurnPanel && turnSteps.isNotEmpty(),
-                            enter = fadeIn() + slideInVertically(initialOffsetY = { -it }),
-                            exit  = fadeOut() + slideOutVertically(targetOffsetY = { -it })) {
-                            val step = turnSteps.getOrNull(currentStepIdx)
-                            if (step != null) {
-                                Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp),
-                                    colors = CardDefaults.cardColors(containerColor = Color.White.copy(alpha = 0.97f)), elevation = CardDefaults.cardElevation(8.dp)) {
-                                    Row(modifier = Modifier.fillMaxWidth().height(IntrinsicSize.Min)) {
-                                        Box(modifier = Modifier.width(4.dp).fillMaxHeight()
-                                            .background(Green900, RoundedCornerShape(topStart = 16.dp, bottomStart = 16.dp)))
-                                        Row(modifier = Modifier.weight(1f).padding(horizontal = 14.dp, vertical = 12.dp),
-                                            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                                            Box(modifier = Modifier.size(40.dp).clip(RoundedCornerShape(12.dp)).background(Green100), contentAlignment = Alignment.Center) {
-                                                Icon(Icons.Default.Navigation, null, tint = Green900, modifier = Modifier.size(22.dp))
+
+
+                        // ── Collapsed route bar — visible after dismissing full panel ──
+                        AnimatedVisibility(
+                            visible = routeDismissed && routeOptions.isNotEmpty(),
+                            enter   = fadeIn() + slideInVertically(initialOffsetY = { it }),
+                            exit    = fadeOut() + slideOutVertically(targetOffsetY = { it })
+                        ) {
+                            val collapsedOpt = routeOptions.getOrNull(selectedRouteIdx)
+                            if (collapsedOpt != null) {
+                                Card(
+                                    onClick   = { routeDismissed = false; showRoutePanel = true },
+                                    modifier  = Modifier.fillMaxWidth(),
+                                    shape     = RoundedCornerShape(20.dp),
+                                    colors    = CardDefaults.cardColors(containerColor = Color.White.copy(alpha = 0.97f)),
+                                    elevation = CardDefaults.cardElevation(8.dp)
+                                ) {
+                                    Column(
+                                        modifier            = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                        verticalArrangement = Arrangement.spacedBy(2.dp)
+                                    ) {
+                                        Row(
+                                            modifier              = Modifier.fillMaxWidth(),
+                                            verticalAlignment     = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.SpaceBetween
+                                        ) {
+                                            Row(
+                                                verticalAlignment     = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                            ) {
+                                                Icon(
+                                                    if (selectedRouteIdx == 0) Icons.Default.Speed
+                                                    else Icons.AutoMirrored.Filled.DirectionsBike,
+                                                    null, tint = collapsedOpt.color,
+                                                    modifier = Modifier.size(14.dp)
+                                                )
+                                                Text(
+                                                    collapsedOpt.label,
+                                                    fontSize   = 12.sp,
+                                                    fontWeight = FontWeight.ExtraBold,
+                                                    color      = collapsedOpt.color
+                                                )
+                                                Text("·", fontSize = 12.sp, color = Color(0xFF9E9E9E))
+                                                Text(
+                                                    String.format("%.1f km", collapsedOpt.distanceKm),
+                                                    fontSize   = 12.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color      = Color(0xFF1A1A1A)
+                                                )
+                                                Text("·", fontSize = 12.sp, color = Color(0xFF9E9E9E))
+                                                Text(
+                                                    "${collapsedOpt.durationMin} min",
+                                                    fontSize = 12.sp,
+                                                    color    = Color(0xFF9E9E9E)
+                                                )
                                             }
-                                        Column(modifier = Modifier.weight(1f)) {
-                                            Text(step.instruction, fontWeight = FontWeight.Bold, fontSize = 14.sp, color = Color(0xFF1A1A1A), maxLines = 2)
-                                            if (step.distanceM > 0)
-                                                Text("in ${if (step.distanceM >= 1000) String.format("%.1f km", step.distanceM / 1000) else "${step.distanceM.toInt()} m"}",
-                                                    fontSize = 12.sp, color = Color(0xFF7A8F7A), fontWeight = FontWeight.Medium)
+                                            Icon(
+                                                Icons.Default.KeyboardArrowUp,
+                                                "Expand",
+                                                tint     = Color(0xFFBBBBBB),
+                                                modifier = Modifier.size(20.dp)
+                                            )
                                         }
-                                        Text("${currentStepIdx + 1}/${turnSteps.size}", fontSize = 11.sp, color = Color(0xFF9E9E9E), fontWeight = FontWeight.Medium)
-                                            IconButton(onClick = { showTurnPanel = false }, modifier = Modifier.size(28.dp)) {
-                                                Icon(Icons.Default.Close, null, tint = Color.LightGray, modifier = Modifier.size(16.dp))
-                                            }
-                                        } // end inner Row
-                                    } // end outer Row with accent bar
+                                    }
                                 }
                             }
                         }
@@ -1825,13 +2101,27 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
                                                     .border(if (isSelected) 2.dp else 1.dp, if (isSelected) opt.color else Color(0xFFE0E0E0), RoundedCornerShape(14.dp))
                                                     .clickable {
                                                         val map = mapViewRef ?: return@clickable
-                                                        selectRoute(idx, map)
-                                                        // Tapping a route card = selection + confirmation
-                                                        // Turn-by-turn starts immediately, no extra button needed
-                                                        showRoutePanel = false
-                                                        routeDismissed = true
-                                                        showTurnPanel  = true
-                                                        currentStepIdx = 0
+                                                        if (pendingRouteIdx == idx) {
+                                                            // Second tap on same card — confirm and start navigation
+                                                            selectRoute(idx, map)
+                                                            showRoutePanel  = false
+                                                            routeDismissed  = false
+                                                            showTurnPanel   = true
+                                                            currentStepIdx  = 0
+                                                            pendingRouteIdx = -1
+                                                            // Pan back to user GPS so they can start cycling
+                                                            scope.launch {
+                                                                kotlinx.coroutines.delay(400L)
+                                                                val gpsLoc = userGeoPoint ?: myLocationOverlay?.myLocation
+                                                                val currentMap = mapViewRef ?: return@launch
+                                                                isFollowingLocation = true
+                                                                currentMap.controller.animateTo(gpsLoc ?: return@launch, 16.5, 1000L)
+                                                            }
+                                                        } else {
+                                                            // First tap — preview this route on map, keep panel open
+                                                            pendingRouteIdx = idx
+                                                            selectRoute(idx, map)
+                                                        }
                                                     }
                                                     .padding(horizontal = 12.dp, vertical = 10.dp),
                                                 verticalArrangement = Arrangement.SpaceBetween
@@ -1839,6 +2129,14 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
                                                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
                                                     Icon(if (idx == 0) Icons.Default.Speed else Icons.AutoMirrored.Filled.DirectionsBike, null, tint = opt.color, modifier = Modifier.size(13.dp))
                                                     Text(opt.label, fontWeight = FontWeight.ExtraBold, fontSize = 12.sp, color = if (isSelected) opt.color else Color(0xFF1A1A1A))
+                                                }
+                                                if (pendingRouteIdx == idx) {
+                                                    Text(
+                                                        "Tap again to start",
+                                                        fontSize = 9.sp,
+                                                        fontWeight = FontWeight.SemiBold,
+                                                        color = opt.color
+                                                    )
                                                 }
                                                 Text(String.format("%.1f km", opt.distanceKm), fontWeight = FontWeight.ExtraBold, fontSize = 17.sp, color = if (isSelected) opt.color else Color(0xFF1A1A1A))
                                                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
@@ -2134,7 +2432,7 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
                                 selectedShop     = null
                                 val start = userGeoPoint ?: myLocationOverlay?.myLocation
                                 if (start != null) {
-                                    mapViewRef?.let { fetchRoutes(start, location, it) }
+                                    fetchRoutes(start, location)
                                 }
                             }
                         )
@@ -2149,7 +2447,7 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
                     onRetry          = { userGeoPoint?.let { fetchNearbyPlaces(it) } },
                     onDirectionClick = { destination ->
                         destinationPoint = destination
-                        mapFocusFilter   = null  // manual navigation shows all markers
+                        mapFocusFilter   = null
                         selectedItem     = 1
                     }
                 )
@@ -2162,6 +2460,12 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
                         destinationPoint = coordinates
                         mapFocusFilter   = emergencyToShopType(emergencyType)
                         selectedItem     = 1
+                        val start = userGeoPoint ?: myLocationOverlay?.myLocation
+                        val map   = mapViewRef
+                        if (start != null && map != null &&
+                            start.latitude != 0.0 && start.longitude != 0.0) {
+                            fetchRoutes(start, coordinates)
+                        }
                     },
                     onImOnMyWay      = { alert -> Toast.makeText(context, "Notifying ${alert.riderName} you're coming!", Toast.LENGTH_SHORT).show() },
                 )

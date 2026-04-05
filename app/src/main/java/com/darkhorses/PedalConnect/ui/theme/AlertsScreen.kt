@@ -69,6 +69,7 @@ data class AlertItem(
     val contactNumber: String? = null,
     val status: String = "active",
     val responderName: String? = null,
+    val responderDisplayName: String = "",
     val createdAt: Long = 0L
 )
 
@@ -128,6 +129,7 @@ fun AlertsScreen(
                                 contactNumber          = doc.getString("contactNumber"),
                                 status                 = docStatus,
                                 responderName          = doc.getString("responderName"),
+                                responderDisplayName   = doc.getString("responderDisplayName") ?: "",
                                 createdAt = doc.getLong("timestamp") ?: 0L
                             ))
                         } catch (_: Exception) {}
@@ -251,8 +253,9 @@ fun AlertsScreen(
                         throw Exception("${currentResponder} is already responding.")
                     }
                     transaction.update(ref, mapOf(
-                        "status"        to "responding",
-                        "responderName" to helperName
+                        "status"               to "responding",
+                        "responderName"        to helperName,
+                        "responderDisplayName" to helperName  // overwritten below after transaction
                     ))
                 }.addOnSuccessListener {
                     fetchDisplayName(helperName) { helperDisplay ->
@@ -260,6 +263,10 @@ fun AlertsScreen(
                             alert.riderName,
                             "$helperDisplay is on the way to help you! Stay calm and stay visible."
                         )
+                        // Write the resolved display name back so all listeners get it instantly
+                        FirebaseFirestore.getInstance()
+                            .collection("alerts").document(alert.id)
+                            .update("responderDisplayName", helperDisplay)
                     }
                     onImOnMyWay(alert)
                     successMessage = "Notified ${alert.riderDisplayName.ifBlank { alert.riderName }} you're on your way"
@@ -692,10 +699,14 @@ private fun OwnAlertCard(
                             (System.currentTimeMillis() - alert.createdAt) > 5 * 60 * 1000L
 
                     var responderDisplayName by remember(alert.responderName) {
-                        mutableStateOf(alert.responderName ?: "Someone")
+                        mutableStateOf(
+                            alert.responderDisplayName.takeIf { it.isNotBlank() }
+                                ?: alert.responderName
+                                ?: "Someone"
+                        )
                     }
                     LaunchedEffect(alert.responderName) {
-                        if (!alert.responderName.isNullOrBlank()) {
+                        if (alert.responderDisplayName.isBlank() && !alert.responderName.isNullOrBlank()) {
                             FirebaseFirestore.getInstance().collection("users")
                                 .whereEqualTo("username", alert.responderName).limit(1).get()
                                 .addOnSuccessListener { snap ->
@@ -1227,11 +1238,13 @@ fun AlertCard(
                             Icon(Icons.Default.DirectionsBike, null,
                                 tint = Color(0xFF1565C0), modifier = Modifier.size(16.dp))
                         }
+                        val claimedByDisplay = alert.responderDisplayName
+                            .takeIf { it.isNotBlank() } ?: alert.responderName ?: "Someone"
                         Column(modifier = Modifier.weight(1f)) {
                             Text("Already being helped",
                                 fontSize = 13.sp, fontWeight = FontWeight.Bold,
                                 color = Color(0xFF1565C0))
-                            Text("${alert.responderName} is on the way",
+                            Text("$claimedByDisplay is on the way",
                                 fontSize = 11.sp, color = Color(0xFF455A64))
                         }
                     }
@@ -1239,39 +1252,20 @@ fun AlertCard(
                     val isAssignedResponder = alert.status == "responding" &&
                             alert.responderName == helperName
 
-                    Row(
-                        modifier              = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        // On My Way — hidden if you're already the assigned responder
-                        if (!isAssignedResponder) {
-                            OutlinedButton(
-                                onClick  = onImOnMyWay,
-                                modifier = Modifier.weight(1f).height(48.dp),
-                                shape    = RoundedCornerShape(12.dp),
-                                colors   = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFF1565C0)),
-                                border   = BorderStroke(1.5.dp, Color(0xFF1565C0)),
-                                contentPadding = PaddingValues(horizontal = 8.dp)
-                            ) {
-                                Icon(Icons.Default.ThumbUp, null, modifier = Modifier.size(15.dp))
-                                Spacer(Modifier.width(5.dp))
-                                Text("On My Way", fontSize = 13.sp, fontWeight = FontWeight.Bold, maxLines = 1)
-                            }
-                        }
-                        // Resolved — only visible to the assigned responder
-                        if (isAssignedResponder) {
-                            OutlinedButton(
-                                onClick  = onDismiss,
-                                modifier = Modifier.weight(1f).height(48.dp),
-                                shape    = RoundedCornerShape(12.dp),
-                                colors   = ButtonDefaults.outlinedButtonColors(contentColor = HighColor),
-                                border   = BorderStroke(1.5.dp, HighColor),
-                                contentPadding = PaddingValues(horizontal = 8.dp)
-                            ) {
-                                Icon(Icons.Default.CheckCircleOutline, null, modifier = Modifier.size(15.dp))
-                                Spacer(Modifier.width(5.dp))
-                                Text("Resolved", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
-                            }
+                    // On My Way — hidden once you're already the assigned responder.
+                    // mark their own alert as resolved via OwnAlertCard.
+                    if (!isAssignedResponder) {
+                        OutlinedButton(
+                            onClick  = onImOnMyWay,
+                            modifier = Modifier.fillMaxWidth().height(48.dp),
+                            shape    = RoundedCornerShape(12.dp),
+                            colors   = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFF1565C0)),
+                            border   = BorderStroke(1.5.dp, Color(0xFF1565C0)),
+                            contentPadding = PaddingValues(horizontal = 8.dp)
+                        ) {
+                            Icon(Icons.Default.ThumbUp, null, modifier = Modifier.size(15.dp))
+                            Spacer(Modifier.width(5.dp))
+                            Text("On My Way", fontSize = 13.sp, fontWeight = FontWeight.Bold, maxLines = 1)
                         }
                     }
                 }
