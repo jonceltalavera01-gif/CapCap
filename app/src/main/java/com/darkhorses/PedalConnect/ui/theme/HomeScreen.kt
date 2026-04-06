@@ -402,12 +402,11 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
     var routeOptions     by remember { mutableStateOf<List<RouteOption>>(emptyList()) }
     var selectedRouteIdx by remember { mutableIntStateOf(0) }
     var showRoutePanel   by remember { mutableStateOf(false) }
-    var routeConfirmed   by remember { mutableStateOf(false) }
+    var showShopMarkers  by remember { mutableStateOf(true) }
     var routeDismissed   by remember { mutableStateOf(false) }  // true once user taps Navigate
     var pendingRouteIdx  by remember { mutableIntStateOf(-1) }  // -1 = nothing previewed yet
     var isLoadingRoute   by remember { mutableStateOf(false) }
     var activePolylines  by remember { mutableStateOf<List<Polyline>>(emptyList()) }
-    val showShopMarkers  by remember { derivedStateOf { (!showRoutePanel && routeConfirmed) || activePolylines.isEmpty() } }
 
     data class TurnStep(val instruction: String, val distanceM: Double)
     var turnSteps         by remember { mutableStateOf<List<TurnStep>>(emptyList()) }
@@ -729,7 +728,7 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
 
     fun fetchRoutes(start: GeoPoint, end: GeoPoint) {
         isLoadingRoute = true; showRoutePanel = false; showTurnPanel = false
-        routeDismissed = false
+        routeDismissed = false; showShopMarkers = false
         turnSteps = emptyList()
         mapViewRef?.let { map -> activePolylines.forEach { map.overlays.remove(it) } }
         val profiles = listOf(
@@ -1527,8 +1526,17 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
                             activePolylines = emptyList(); routeOptions = emptyList()
                             showRoutePanel = false; showTurnPanel = false
                             routeDismissed = false
-                            routeConfirmed = false
+                            showShopMarkers = true
+                            mapRedrawTrigger++
                             mapViewRef?.invalidate()
+                            scope.launch {
+                                kotlinx.coroutines.delay(400L)
+                                val gpsLoc = userGeoPoint ?: myLocationOverlay?.myLocation
+                                val currentMap = mapViewRef ?: return@launch
+                                currentMap.controller.animateTo(gpsLoc ?: return@launch, 16.5, 1000L)
+                                kotlinx.coroutines.delay(1050L)
+                                isFollowingLocation = true
+                            }
                         }
 
                         // ── Alert banner — always visible at top when active,
@@ -1640,9 +1648,11 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
                                             fontWeight = FontWeight.Medium
                                         )
                                         IconButton(onClick = {
-                                            showTurnPanel = false
-                                            showRoutePanel = false
-                                            routeDismissed = false
+                                            showTurnPanel   = false
+                                            showRoutePanel  = false
+                                            routeDismissed  = false
+                                            showShopMarkers = true
+                                            mapRedrawTrigger++
                                             activePolylines.forEach { mapViewRef?.overlays?.remove(it) }
                                             activePolylines = emptyList()
                                             routeOptions = emptyList()
@@ -1650,6 +1660,7 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
                                             searchQuery = ""
                                             searchSuggestions = emptyList()
                                             mapViewRef?.invalidate()
+                                            isFollowingLocation = true
                                         }, modifier = Modifier.size(24.dp)) {
                                             Icon(Icons.Default.Close, null, tint = Color.White.copy(alpha = 0.6f), modifier = Modifier.size(14.dp))
                                         }
@@ -2013,8 +2024,9 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
                                         modifier = Modifier
                                             .fillMaxWidth()
                                             .clickable {
-                                                showRoutePanel = false
-                                                routeDismissed = true
+                                                showRoutePanel  = false
+                                                routeDismissed  = true
+                                                showShopMarkers = false
                                                 isFollowingLocation = true
                                                 mapRedrawTrigger++
                                             },
@@ -2038,7 +2050,7 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
                                                             showRoutePanel  = false
                                                             routeDismissed  = false
                                                             showTurnPanel   = true
-                                                            routeConfirmed  = true
+                                                            showShopMarkers = true
                                                             mapRedrawTrigger++
                                                             currentStepIdx  = 0
                                                             pendingRouteIdx = -1
