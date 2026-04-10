@@ -483,7 +483,12 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
     var lastOverpassCenter  by remember { mutableStateOf<GeoPoint?>(null) }
     var mapFocusFilter      by remember { mutableStateOf<ShopType?>(null) }
 
-    var mapRedrawTrigger by remember { mutableIntStateOf(0) }
+    var mapRedrawTrigger            by remember { mutableIntStateOf(0) }
+    var helperLocationLastWriteMs   by remember { mutableLongStateOf(0L) }
+    var locationLastWriteMs         by remember { mutableLongStateOf(0L) }
+    var activeAlertId           by remember { mutableStateOf<String?>(null) }
+    var helperLiveLocation      by remember { mutableStateOf<GeoPoint?>(null) }
+    var helperLiveMarker        by remember { mutableStateOf<org.osmdroid.views.overlay.Marker?>(null) }
 
     val avgSpeedKmh = if (elapsedSeconds > 0) (totalDistance / 1000.0) / (elapsedSeconds / 3600.0) else 0.0
 
@@ -612,8 +617,24 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
     fun publishLocation(loc: GeoPoint, locationSharingEnabled: Boolean = true) {
         if (userName.trim().equals("Admin", ignoreCase = true)) return
 
-        // Always fetch nearby places regardless of sharing preference
         val now = System.currentTimeMillis()
+        // Throttle Firestore location writes to every 3 seconds maximum
+        // GPS fires every ~1s; writing every update wastes quota and battery
+        if (now - locationLastWriteMs < 3_000L) {
+            // Still update local UI and fetch nearby places at full rate
+            userGeoPoint = loc
+            val lastCenter = lastOverpassCenter
+            val movedEnough = lastCenter == null ||
+                    haversineKm(loc.latitude, loc.longitude, lastCenter.latitude, lastCenter.longitude) >= OVERPASS_MOVE_KM
+            val timeElapsed = (now - lastOverpassFetchMs) >= OVERPASS_INTERVAL_MS
+            if (timeElapsed || movedEnough) {
+                lastOverpassFetchMs = now
+                lastOverpassCenter = loc
+                fetchNearbyPlaces(loc)
+            }
+            return
+        }
+        locationLastWriteMs = now
         val lastCenter = lastOverpassCenter
         val movedEnough = lastCenter == null ||
                 haversineKm(loc.latitude, loc.longitude, lastCenter.latitude, lastCenter.longitude) >= OVERPASS_MOVE_KM
@@ -636,6 +657,47 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
                 "longitude" to loc.longitude,
                 "timestamp" to System.currentTimeMillis()
             ))
+        val now2 = System.currentTimeMillis()
+
+        // Publish rider location if this user has an active responding alert
+        val requestId = activeAlertId
+        val myAlert   = alerts.firstOrNull {
+            it.riderName.trim().lowercase() == userName.trim().lowercase()
+                    && it.status == "responding"
+        }
+        if (requestId != null && myAlert != null) {
+            db.collection("live_locations").document(requestId)
+                .set(
+                    mapOf("rider" to mapOf(
+                        "lat"       to loc.latitude,
+                        "lng"       to loc.longitude,
+                        "updatedAt" to now2
+                    )),
+                    com.google.firebase.firestore.SetOptions.merge()
+                )
+        }
+
+        // Publish helper location if this user is the responder on any active alert
+        // Throttled to every 3 seconds to avoid excessive Firestore writes
+        val respondingAlert = alerts.firstOrNull {
+            it.responderName?.trim()?.lowercase() == userName.trim().lowercase()
+                    && it.status == "responding"
+        }
+        if (respondingAlert != null) {
+            val lastHelperWrite = helperLocationLastWriteMs
+            if (now2 - lastHelperWrite >= 3_000L) {
+                helperLocationLastWriteMs = now2
+                db.collection("live_locations").document(respondingAlert.id)
+                    .set(
+                        mapOf("helper" to mapOf(
+                            "lat"       to loc.latitude,
+                            "lng"       to loc.longitude,
+                            "updatedAt" to now2
+                        )),
+                        com.google.firebase.firestore.SetOptions.merge()
+                    )
+            }
+        }
 
     }
 
@@ -682,6 +744,11 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
                     ))
                 }
                 alertsFirstLoad = false
+                // Track active alertId for live location subscription
+                val myAlert = alerts.firstOrNull {
+                    it.riderName.trim().lowercase() == userName.trim().lowercase()
+                }
+                activeAlertId = myAlert?.id
             }
         }
     }
@@ -729,6 +796,27 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
             }
             kotlinx.coroutines.delay(8_000L)
         }
+    }
+
+    // ── Live helper location — only active when rider has a responding alert ──
+    DisposableEffect(activeAlertId) {
+        val requestId = activeAlertId
+        if (requestId == null) {
+            helperLiveLocation = null
+            return@DisposableEffect onDispose {}
+        }
+        val listener = db.collection("live_locations")
+            .document(requestId)
+            .addSnapshotListener { snapshot, _ ->
+                val helperMap = snapshot?.get("helper") as? Map<*, *>
+                val lat = helperMap?.get("lat") as? Double
+                val lng = helperMap?.get("lng") as? Double
+                if (lat != null && lng != null) {
+                    helperLiveLocation = GeoPoint(lat, lng)
+                    mapRedrawTrigger++
+                }
+            }
+        onDispose { listener.remove() }
     }
 
     DisposableEffect(Unit) {
@@ -1462,6 +1550,34 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
                                     }
                                 }
                             }
+                            // ── Live helper marker — only shown when helper is responding ──
+                            helperLiveLocation?.let { helperGp ->
+                                val existingHelperMarker = view.overlays
+                                    .filterIsInstance<org.osmdroid.views.overlay.Marker>()
+                                    .firstOrNull { it.id == "live_helper" }
+                                if (existingHelperMarker != null) {
+                                    existingHelperMarker.position = helperGp
+                                } else {
+                                    val helperBitmap = makeMarkerBitmap(
+                                        context    = view.context,
+                                        bgColor    = android.graphics.Color.argb(255, 245, 124, 0),
+                                        isHospital = false,
+                                        sizePx     = 88,
+                                        isAlert    = false,
+                                        isCyclist  = true
+                                    )
+                                    Marker(view).apply {
+                                        id       = "live_helper"
+                                        position = helperGp
+                                        title    = "🚴 Helper is on the way"
+                                        setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+                                        icon = android.graphics.drawable.BitmapDrawable(
+                                            view.context.resources, helperBitmap
+                                        )
+                                        view.overlays.add(this)
+                                    }
+                                }
+                            }
                             nearbyUsers.forEach { user ->
                                 Marker(view).apply {
                                     position = user.location
@@ -1677,8 +1793,20 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
                                                     color      = Color.White,
                                                     maxLines   = 1
                                                 )
+                                                val helperDistanceText = helperLiveLocation?.let { helperGp ->
+                                                    val dist = haversineKm(
+                                                        helperGp.latitude, helperGp.longitude,
+                                                        userGeoPoint?.latitude  ?: helperGp.latitude,
+                                                        userGeoPoint?.longitude ?: helperGp.longitude
+                                                    )
+                                                    when {
+                                                        dist < 0.1  -> "Less than 100m away"
+                                                        dist < 1.0  -> "${(dist * 1000).toInt()}m away"
+                                                        else        -> String.format("%.1fkm away", dist)
+                                                    }
+                                                } ?: myRespondingAlert.emergencyType
                                                 Text(
-                                                    myRespondingAlert.emergencyType,
+                                                    helperDistanceText,
                                                     fontSize = 10.sp,
                                                     color    = Color.White.copy(alpha = 0.75f)
                                                 )
@@ -2518,6 +2646,7 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
                 3 -> AlertsScreen(
                     paddingValues    = innerPadding,
                     helperName       = userName,
+                    userLocation     = userGeoPoint,
                     isAdmin          = isAdmin,
                     onNavigateToHelp = { coordinates, emergencyType ->
                         destinationPoint = coordinates

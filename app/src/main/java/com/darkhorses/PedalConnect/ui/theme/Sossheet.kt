@@ -167,7 +167,7 @@ fun SosSheet(
                         val base64Image = android.util.Base64.encodeToString(
                             photoBytes, android.util.Base64.NO_WRAP
                         )
-                        val apiKey = "697c37daa7aa4705b309befb3de1d384"
+                        val apiKey = com.darkhorses.PedalConnect.BuildConfig.IMGBB_API_KEY
                         val boundary = "----FormBoundary${System.currentTimeMillis()}"
                         val conn = java.net.URL(
                             "https://api.imgbb.com/1/upload?key=$apiKey&expiration=2592000"
@@ -244,6 +244,70 @@ fun SosSheet(
                         else "⚠️ Alert sent — location unknown."
                         Toast.makeText(context, msg,
                             if (hasLocation) Toast.LENGTH_SHORT else Toast.LENGTH_LONG).show()
+                    }
+                    // Check if any nearby cyclists are online right now
+                    if (hasLocation) {
+                        try {
+                            val locationSnap = db.collection("userLocations").get().await()
+                            val staleThresholdMs = 30_000L
+                            val now = System.currentTimeMillis()
+                            val nearbyCount = locationSnap.documents.count { doc ->
+                                val name = doc.getString("userName") ?: return@count false
+                                if (name.trim().equals(userName, ignoreCase = true)) return@count false
+                                if (name.trim().equals("Admin", ignoreCase = true)) return@count false
+                                val ts  = doc.getLong("timestamp") ?: 0L
+                                if (now - ts > staleThresholdMs) return@count false
+                                val lat = doc.getDouble("latitude")  ?: return@count false
+                                val lon = doc.getDouble("longitude") ?: return@count false
+                                val dist = haversineKm(
+                                    userGeoPoint!!.latitude, userGeoPoint.longitude, lat, lon
+                                )
+                                dist <= 3.0
+                            }
+                            withContext(Dispatchers.Main) {
+                                if (nearbyCount == 0) {
+                                    Toast.makeText(
+                                        context,
+                                        "⚠️ No cyclists are nearby right now. Consider calling emergency services.",
+                                        Toast.LENGTH_LONG
+                                    ).show()
+                                }
+                            }
+                        } catch (e: Exception) {
+                            // Silent — don't block the alert flow if this check fails
+                        }
+                    }
+                    // Check if any nearby cyclists are online right now
+                    if (hasLocation) {
+                        try {
+                            val locationSnap = db.collection("userLocations").get().await()
+                            val staleThresholdMs = 30_000L
+                            val now = System.currentTimeMillis()
+                            val nearbyCount = locationSnap.documents.count { doc ->
+                                val name = doc.getString("userName") ?: return@count false
+                                if (name.trim().equals(userName, ignoreCase = true)) return@count false
+                                if (name.trim().equals("Admin", ignoreCase = true)) return@count false
+                                val ts  = doc.getLong("timestamp") ?: 0L
+                                if (now - ts > staleThresholdMs) return@count false
+                                val lat = doc.getDouble("latitude")  ?: return@count false
+                                val lon = doc.getDouble("longitude") ?: return@count false
+                                val dist = haversineKm(
+                                    userGeoPoint!!.latitude, userGeoPoint.longitude, lat, lon
+                                )
+                                dist <= 1.0
+                            }
+                            withContext(Dispatchers.Main) {
+                                if (nearbyCount == 0) {
+                                    Toast.makeText(
+                                        context,
+                                        "⚠️ No cyclists are nearby right now. Consider calling emergency services (911).",
+                                        Toast.LENGTH_LONG
+                                    ).show()
+                                }
+                            }
+                        } catch (e: Exception) {
+                            // Silent — don't block the alert flow if this check fails
+                        }
                     }
                 } catch (e: Exception) {
                     withContext(Dispatchers.Main) {

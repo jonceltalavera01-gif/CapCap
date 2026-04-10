@@ -70,7 +70,9 @@ data class AlertItem(
     val status: String = "active",
     val responderName: String? = null,
     val responderDisplayName: String = "",
-    val createdAt: Long = 0L
+    val createdAt: Long = 0L,
+    val ratingGiven: Boolean = false,
+    val ratingValue: Int? = null
 )
 
 enum class AlertSeverity { HIGH, MEDIUM, LOW }
@@ -80,10 +82,11 @@ enum class AlertSeverity { HIGH, MEDIUM, LOW }
 fun AlertsScreen(
     paddingValues    : PaddingValues,
     helperName       : String,
+    userLocation     : GeoPoint?,
     onNavigateToHelp : (GeoPoint, String) -> Unit,
     onImOnMyWay      : (AlertItem) -> Unit,
     isAdmin          : Boolean = false,
-) {
+){
     var isRefreshing    by remember { mutableStateOf(false) }
     var selectedFilter  by remember { mutableStateOf("All") }
     var errorMessage    by remember { mutableStateOf<String?>(null) }
@@ -96,6 +99,8 @@ fun AlertsScreen(
     val alerts      = remember { mutableStateListOf<AlertItem>() }
     var isFirstLoad by remember { mutableStateOf(true) }
     var isClaimingAlert by remember { mutableStateOf(false) }
+    var alertToRate     by remember { mutableStateOf<AlertItem?>(null) }
+    var pendingRating   by remember { mutableIntStateOf(0) }
 
     LaunchedEffect(Unit) {
         FirebaseFirestore.getInstance()
@@ -132,7 +137,9 @@ fun AlertsScreen(
                                 status                 = docStatus,
                                 responderName          = doc.getString("responderName"),
                                 responderDisplayName   = doc.getString("responderDisplayName") ?: "",
-                                createdAt = doc.getLong("timestamp") ?: 0L
+                                createdAt   = doc.getLong("timestamp") ?: 0L,
+                                ratingGiven = doc.getBoolean("ratingGiven") ?: false,
+                                ratingValue = doc.getLong("ratingValue")?.toInt()
                             ))
                         } catch (_: Exception) {}
                     }
@@ -145,7 +152,15 @@ fun AlertsScreen(
 
     val currentUserLower = helperName.trim().lowercase()
     val ownAlert         = alerts.firstOrNull { it.riderNameLower == currentUserLower }
-    val othersAlerts     = alerts.filter    { it.riderNameLower != currentUserLower }
+    val othersAlerts     = alerts.filter { alert ->
+        if (alert.riderNameLower == currentUserLower) return@filter false
+        if (userLocation == null) return@filter true // show all if GPS not ready yet
+        val dist = haversineKm(
+            userLocation.latitude, userLocation.longitude,
+            alert.coordinates.latitude, alert.coordinates.longitude
+        )
+        dist <= 3.0
+    }
 
     val severityOrder = mapOf(AlertSeverity.HIGH to 0, AlertSeverity.MEDIUM to 1, AlertSeverity.LOW to 2)
 
@@ -292,6 +307,18 @@ fun AlertsScreen(
                         "responderDisplayName" to helperName  // overwritten below after transaction
                     ))
                 }.addOnSuccessListener {
+                    // Seed the live_locations document so the rider's listener fires immediately
+                    FirebaseFirestore.getInstance()
+                        .collection("live_locations")
+                        .document(alert.id)
+                        .set(
+                            mapOf("helper" to mapOf(
+                                "lat"       to 0.0,
+                                "lng"       to 0.0,
+                                "updatedAt" to System.currentTimeMillis()
+                            )),
+                            com.google.firebase.firestore.SetOptions.merge()
+                        )
                     fetchDisplayName(helperName) { helperDisplay ->
                         sendHelpNotification(
                             alert.riderName,
@@ -343,16 +370,58 @@ fun AlertsScreen(
         }
     }
 
-    fun confirmSelfResolved(alert: AlertItem) {
+    val resolveAlert: (AlertItem, Int?, String?) -> Unit = { alert, ratingValue, reviewText ->
         scope.launch {
             try {
+                val updates = mutableMapOf<String, Any>(
+                    "status"      to "resolved",
+                    "ratingGiven" to true
+                )
+                if (reviewText != null) updates["ratingReview"] = reviewText
+                // Delete live location doc — revokes access for both sides
+                FirebaseFirestore.getInstance()
+                    .collection("live_locations")
+                    .document(alert.id)
+                    .delete()
+                if (ratingValue != null) updates["ratingValue"] = ratingValue
+
                 FirebaseFirestore.getInstance()
                     .collection("alerts").document(alert.id)
-                    .update("status", "resolved")
+                    .update(updates)
                     .addOnSuccessListener {
+                        // Write rating to responder's user document
+                        if (ratingValue != null && !alert.responderName.isNullOrBlank()) {
+                            val db = FirebaseFirestore.getInstance()
+                            db.collection("users")
+                                .whereEqualTo("username", alert.responderName!!)
+                                .limit(1)
+                                .get()
+                                .addOnSuccessListener { snap ->
+                                    val doc = snap.documents.firstOrNull() ?: return@addOnSuccessListener
+                                    val currentRating = doc.getDouble("helperRating") ?: 0.0
+                                    val currentCount  = doc.getLong("helperRatingCount")?.toInt() ?: 0
+                                    val newCount      = currentCount + 1
+                                    val newRating     = ((currentRating * currentCount) + ratingValue) / newCount
+                                    val ratingUpdate  = mutableMapOf<String, Any>(
+                                        "helperRating"      to newRating,
+                                        "helperRatingCount" to newCount
+                                    )
+                                    doc.reference.update(ratingUpdate)
+                                    // Save review as a separate document for history
+                                    if (reviewText != null) {
+                                        db.collection("helperReviews").add(hashMapOf(
+                                            "responderName" to alert.responderName!!,
+                                            "riderName"     to alert.riderName,
+                                            "rating"        to ratingValue,
+                                            "review"        to reviewText,
+                                            "alertId"       to alert.id,
+                                            "timestamp"     to System.currentTimeMillis()
+                                        ))
+                                    }
+                                }
+                        }
                         alerts.remove(alert)
                         successMessage = "Alert closed. Stay safe out there!"
-                        // Notify responder if one was assigned
                         if (!alert.responderName.isNullOrEmpty()) {
                             fetchDisplayName(alert.riderName) { riderDisplay ->
                                 sendHelpNotification(
@@ -361,7 +430,6 @@ fun AlertsScreen(
                                 )
                             }
                         }
-                        // Also delete any pending resolve_requested notifications for this alert
                         FirebaseFirestore.getInstance()
                             .collection("notifications")
                             .whereEqualTo("alertId", alert.id)
@@ -375,8 +443,36 @@ fun AlertsScreen(
         }
     }
 
+    val submitResponderRating: (String, Int) -> Unit = { responderUsername, rating ->
+        val db = FirebaseFirestore.getInstance()
+        db.collection("users")
+            .whereEqualTo("username", responderUsername)
+            .limit(1)
+            .get()
+            .addOnSuccessListener { snap ->
+                val doc = snap.documents.firstOrNull() ?: return@addOnSuccessListener
+                val currentRating = doc.getDouble("helperRating") ?: 0.0
+                val currentCount  = doc.getLong("helperRatingCount")?.toInt() ?: 0
+                val newCount      = currentCount + 1
+                val newRating     = ((currentRating * currentCount) + rating) / newCount
+                doc.reference.update(mapOf(
+                    "helperRating"      to newRating,
+                    "helperRatingCount" to newCount
+                ))
+            }
+    }
 
-    val highCount = othersAlerts.count { it.severity == AlertSeverity.HIGH }
+    fun confirmSelfResolved(alert: AlertItem) {
+        if (!alert.responderName.isNullOrBlank() && !alert.ratingGiven) {
+            alertToRate   = alert
+            pendingRating = 0
+            return
+        }
+        resolveAlert(alert, null, null)
+    }
+
+
+    val highCount= othersAlerts.count { it.severity == AlertSeverity.HIGH }
     val medCount  = othersAlerts.count { it.severity == AlertSeverity.MEDIUM }
     val lowCount  = othersAlerts.count { it.severity == AlertSeverity.LOW }
 
@@ -700,6 +796,160 @@ fun AlertsScreen(
             }
         )
     }
+    var pendingReview by remember { mutableStateOf("") }
+    alertToRate?.let { alert ->
+        val responderDisplay = alert.responderDisplayName
+            .takeIf { it.isNotBlank() } ?: alert.responderName ?: "the responder"
+        AlertDialog(
+            onDismissRequest = { /* blocked — must interact with buttons */ },
+            shape          = RoundedCornerShape(20.dp),
+            containerColor = Color.White,
+            icon = {
+                Box(
+                    modifier = Modifier.size(56.dp).clip(CircleShape)
+                        .background(Color(0xFFE8F5E9)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(Icons.Default.Star, null,
+                        tint     = Color(0xFFF57C00),
+                        modifier = Modifier.size(28.dp))
+                }
+            },
+            title = {
+                Text(
+                    "Rate Your Helper",
+                    fontWeight = FontWeight.ExtraBold,
+                    fontSize   = 18.sp,
+                    color      = Color(0xFF1A1A1A),
+                    textAlign  = androidx.compose.ui.text.style.TextAlign.Center,
+                    modifier   = Modifier.fillMaxWidth()
+                )
+            },
+            text = {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        "How was $responderDisplay's response?",
+                        fontSize  = 14.sp,
+                        color     = Color.Gray,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                    )
+                    // Star row
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.padding(vertical = 4.dp)
+                    ) {
+                        (1..5).forEach { star ->
+                            Icon(
+                                imageVector = if (star <= pendingRating)
+                                    Icons.Default.Star
+                                else
+                                    Icons.Default.StarBorder,
+                                contentDescription = "$star stars",
+                                tint     = if (star <= pendingRating) Color(0xFFF57C00)
+                                else Color(0xFFDDDDDD),
+                                modifier = Modifier
+                                    .size(40.dp)
+                                    .clickable(
+                                        interactionSource = remember {
+                                            androidx.compose.foundation.interaction.MutableInteractionSource()
+                                        },
+                                        indication = null
+                                    ) { pendingRating = star }
+                            )
+                        }
+                    }
+                    if (pendingRating > 0) {
+                        Text(
+                            when (pendingRating) {
+                                1 -> "Poor — they barely helped"
+                                2 -> "Fair — could have been better"
+                                3 -> "Good — they helped adequately"
+                                4 -> "Great — they really came through"
+                                5 -> "Excellent — lifesaver! 🙌"
+                                else -> ""
+                            },
+                            fontSize   = 12.sp,
+                            color      = Color(0xFF455A64),
+                            fontWeight = FontWeight.Medium,
+                            textAlign  = androidx.compose.ui.text.style.TextAlign.Center
+                        )
+                    }
+                    // Optional written review
+                    OutlinedTextField(
+                        value         = pendingReview,
+                        onValueChange = { if (it.length <= 150) pendingReview = it },
+                        placeholder   = { Text("Leave a comment (optional)", fontSize = 12.sp, color = Color.LightGray) },
+                        modifier      = Modifier.fillMaxWidth().height(80.dp),
+                        shape         = RoundedCornerShape(12.dp),
+                        colors        = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor      = Color(0xFFF57C00),
+                            unfocusedBorderColor    = Color(0xFFE0E0E0),
+                            focusedContainerColor   = Color.White,
+                            unfocusedContainerColor = Color(0xFFFAFAFA),
+                            cursorColor             = Color(0xFFF57C00),
+                            focusedTextColor        = Color(0xFF1A1A1A),
+                            unfocusedTextColor      = Color(0xFF1A1A1A)
+                        ),
+                        maxLines = 3
+                    )
+                    if (pendingRating == 0) {
+                        Text(
+                            "Please select a star rating to close this alert.",
+                            fontSize   = 11.sp,
+                            color      = Color(0xFFD32F2F),
+                            fontWeight = FontWeight.Medium,
+                            textAlign  = androidx.compose.ui.text.style.TextAlign.Center
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                Column(
+                    modifier            = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Button(
+                        onClick = {
+                            if (pendingRating > 0) {
+                                val review = pendingReview.trim().ifBlank { null }
+                                alertToRate   = null
+                                pendingReview = ""
+                                resolveAlert(alert, pendingRating, review)
+                            }
+                        },
+                        enabled  = pendingRating > 0,
+                        modifier = Modifier.fillMaxWidth().height(48.dp),
+                        shape    = RoundedCornerShape(12.dp),
+                        colors   = ButtonDefaults.buttonColors(
+                            containerColor         = Color(0xFF2E7D32),
+                            contentColor           = Color.White,
+                            disabledContainerColor = Color(0xFFBDBDBD),
+                            disabledContentColor   = Color.White
+                        )
+                    ) {
+                        Text(
+                            "Submit Rating & Close Alert",
+                            fontWeight = FontWeight.Bold,
+                            fontSize   = 14.sp
+                        )
+                    }
+                    OutlinedButton(
+                        onClick  = { /* keep dialog open */ },
+                        modifier = Modifier.fillMaxWidth().height(44.dp),
+                        shape    = RoundedCornerShape(12.dp),
+                        border   = androidx.compose.foundation.BorderStroke(
+                            1.dp, Color(0xFFDDDDDD))
+                    ) {
+                        Text("Go Back", color = Color.Gray, fontSize = 14.sp)
+                    }
+                }
+            }
+        )
+    }
     alertToCancelResponse?.let { alert ->
         AlertDialog(
             onDismissRequest = { alertToCancelResponse = null },
@@ -744,6 +994,11 @@ fun AlertsScreen(
                                     ))
                                     .addOnSuccessListener {
                                         alertToCancelResponse = null
+                                        // Revoke live location access
+                                        FirebaseFirestore.getInstance()
+                                            .collection("live_locations")
+                                            .document(alert.id)
+                                            .delete()
                                         fetchDisplayName(helperName) { helperDisplay ->
                                             sendHelpNotification(
                                                 alert.riderName,
@@ -1403,16 +1658,17 @@ fun AlertCard(
                                         fontSize = 13.sp, fontWeight = FontWeight.Bold,
                                         color = Color(0xFF1565C0), maxLines = 1,
                                         overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
-                                    Text("On the way to ${alert.riderDisplayName.ifBlank { alert.riderName }}",
-                                        fontSize = 11.sp, color = Color(0xFF455A64))
-                                }
-                                Box(
-                                    modifier = Modifier.clip(RoundedCornerShape(6.dp))
-                                        .background(Color(0xFF1565C0))
-                                        .padding(horizontal = 8.dp, vertical = 4.dp)
-                                ) {
-                                    Text("En Route", fontSize = 10.sp,
-                                        fontWeight = FontWeight.Bold, color = Color.White)
+                                    Spacer(Modifier.height(3.dp))
+                                    Row(
+                                        verticalAlignment     = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        Text("On the way to ${alert.riderDisplayName.ifBlank { alert.riderName }}",
+                                            fontSize = 11.sp, color = Color(0xFF455A64))
+                                        if (!alert.responderName.isNullOrBlank()) {
+                                            HelperRatingBadge(responderUsername = alert.responderName!!)
+                                        }
+                                    }
                                 }
                             }
                         }
