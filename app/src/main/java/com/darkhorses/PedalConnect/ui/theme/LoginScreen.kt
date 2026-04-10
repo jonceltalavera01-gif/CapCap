@@ -649,7 +649,7 @@ fun LoginScreen(navController: NavController, paddingValues: PaddingValues) {
                                 OutlinedTextField(
                                     value         = loginEmail,
                                     onValueChange = { loginEmail = it; loginEmailError = ""; loginGeneralError = "" },
-                                    placeholder   = { Text("your@email.com", color = Color(0xFFB0BEC5)) },
+                                    placeholder   = { Text("your@gmail.com", color = Color(0xFFB0BEC5)) },
                                     leadingIcon   = { Icon(Icons.Rounded.AccountCircle, null, tint = LGreen700, modifier = Modifier.size(20.dp)) },
                                     isError       = loginEmailError.isNotEmpty(),
                                     singleLine    = true,
@@ -766,7 +766,7 @@ fun LoginScreen(navController: NavController, paddingValues: PaddingValues) {
                                             emailTypoSuggestion = detectEmailTypo(it)
                                         }
                                     },
-                                    placeholder   = { Text("your@email.com", color = Color(0xFFB0BEC5)) },
+                                    placeholder   = { Text("your@gmail.com", color = Color(0xFFB0BEC5)) },
                                     leadingIcon   = { Icon(Icons.Rounded.AccountCircle, null, tint = LGreen700, modifier = Modifier.size(20.dp)) },
                                     isError       = regEmailError.isNotEmpty(),
                                     singleLine    = true,
