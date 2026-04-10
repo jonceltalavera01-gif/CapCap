@@ -78,6 +78,8 @@ private fun notifStyle(type: String): NotifStyle = when (type) {
     "ride"      -> NotifStyle(Icons.Default.DirectionsBike,   NGreen700,          NGreen100,          Color(0xFFF5FBF5), "Ride")
     "reply"     -> NotifStyle(Icons.AutoMirrored.Filled.Send, Color(0xFF7B1FA2),  Color(0xFFF3E5F5),  Color(0xFFFAF5FF), "Reply")
     "resolve_requested"-> NotifStyle(Icons.Default.HelpOutline,      Color(0xFFF57C00), Color(0xFFFFF3E0), Color(0xFFFFFBF0), "Resolve Request")
+    "moderation"       -> NotifStyle(Icons.Default.Gavel,             Color(0xFFD32F2F), Color(0xFFFFEBEE), Color(0xFFFFF5F5), "Moderation")
+    "moderation_restored" -> NotifStyle(Icons.Default.CheckCircle,    Color(0xFF388E3C), Color(0xFFE8F5E9), Color(0xFFF1FBF2), "Restored")
     else               -> NotifStyle(Icons.Default.Notifications,    Color(0xFF7A8F7A), Color(0xFFF0F0F0), Color.White,       "Notification")
 }
 
@@ -611,7 +613,7 @@ private fun NotificationCard(
     val currentOnNavigateToFeed   by rememberUpdatedState(onNavigateToFeed)
 
     var hasNavigated by remember { mutableStateOf(false) }
-    val isTappable = notif.type in listOf("ride", "accepted", "rejected", "alert", "like", "comment", "reply")
+    val isTappable = notif.type in listOf("ride", "accepted", "rejected", "alert", "like", "comment", "reply", "moderation", "moderation_restored")
     // "accepted" and "rejected" refer to post moderation — navigate to feed, not ride events
 
     Card(
@@ -634,7 +636,9 @@ private fun NotificationCard(
                             "rejected",
                             "like",
                             "comment",
-                            "reply"              -> currentOnNavigateToFeed()
+                            "reply",
+                            "moderation",
+                            "moderation_restored" -> currentOnNavigateToFeed()
                             else                 -> {}
                         }
                     }

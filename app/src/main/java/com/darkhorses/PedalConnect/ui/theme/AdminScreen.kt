@@ -1417,6 +1417,15 @@ fun AdminScreen(paddingValues: PaddingValues) {
                                                 .addOnSuccessListener { snap ->
                                                     snap.documents.forEach { it.reference.delete() }
                                                 }
+                                            db.collection("notifications").add(
+                                                hashMapOf(
+                                                    "userName" to post.userName,
+                                                    "message" to "Your post was permanently removed by an admin for violating community guidelines.",
+                                                    "type" to "moderation",
+                                                    "timestamp" to System.currentTimeMillis(),
+                                                    "read" to false
+                                                )
+                                            )
                                             reportedPosts.remove(post)
                                         },
                                         onApprove = {
@@ -1506,8 +1515,8 @@ fun AdminScreen(paddingValues: PaddingValues) {
                                                     // Notify the reporter(s) their report was dismissed
                                                     db.collection("notifications").add(hashMapOf(
                                                         "userName"  to reported.userName,
-                                                        "message"   to "ℹ️ A report on your comment was reviewed and dismissed. Your comment is visible again.",
-                                                        "type"      to "alert",
+                                                        "message"   to "✅ A report on your comment was reviewed and dismissed. Your comment is visible again.",
+                                                        "type"      to "moderation_restored",
                                                         "timestamp" to System.currentTimeMillis(),
                                                         "read"      to false
                                                     ))
