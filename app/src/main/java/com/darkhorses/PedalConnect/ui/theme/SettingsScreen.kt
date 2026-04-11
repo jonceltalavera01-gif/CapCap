@@ -382,7 +382,10 @@ fun SettingsScreen(navController: NavController) {
                         onClick = { showDeleteStep1 = false; showDeleteStep2 = true },
                         modifier = Modifier.fillMaxWidth().height(48.dp),
                         shape = RoundedCornerShape(12.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = DangerRed)
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = DangerRed,
+                            contentColor   = Color.White
+                        )
                     ) {
                         Icon(Icons.Rounded.DeleteForever, null, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(8.dp))
@@ -454,8 +457,10 @@ fun SettingsScreen(navController: NavController) {
                         modifier = Modifier.fillMaxWidth().height(48.dp),
                         shape = RoundedCornerShape(12.dp),
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = DangerRed,
-                            disabledContainerColor = DangerRed.copy(alpha = 0.5f)
+                            containerColor         = DangerRed,
+                            contentColor           = Color.White,
+                            disabledContainerColor = DangerRed.copy(alpha = 0.5f),
+                            disabledContentColor   = Color.White.copy(alpha = 0.7f)
                         )
                     ) {
                         if (isDeleting) {

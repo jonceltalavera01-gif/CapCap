@@ -409,14 +409,17 @@ fun AlertsScreen(
                                     doc.reference.update(ratingUpdate)
                                     // Save review as a separate document for history
                                     if (reviewText != null) {
-                                        db.collection("helperReviews").add(hashMapOf(
-                                            "responderName" to alert.responderName!!,
-                                            "riderName"     to alert.riderName,
-                                            "rating"        to ratingValue,
-                                            "review"        to reviewText,
-                                            "alertId"       to alert.id,
-                                            "timestamp"     to System.currentTimeMillis()
-                                        ))
+                                        fetchDisplayName(alert.riderName) { riderDisplay ->
+                                            db.collection("helperReviews").add(hashMapOf(
+                                                "responderName"     to alert.responderName!!,
+                                                "riderName"         to alert.riderName,
+                                                "riderDisplayName"  to riderDisplay,
+                                                "rating"            to ratingValue,
+                                                "review"            to reviewText,
+                                                "alertId"           to alert.id,
+                                                "timestamp"         to System.currentTimeMillis()
+                                            ))
+                                        }
                                     }
                                 }
                         }
@@ -424,10 +427,20 @@ fun AlertsScreen(
                         successMessage = "Alert closed. Stay safe out there!"
                         if (!alert.responderName.isNullOrEmpty()) {
                             fetchDisplayName(alert.riderName) { riderDisplay ->
-                                sendHelpNotification(
-                                    alert.responderName,
+                                val stars = if (ratingValue != null)
+                                    "★".repeat(ratingValue).padEnd(5, '☆')
+                                else null
+                                val msg = if (stars != null)
+                                    "$riderDisplay resolved their ${alert.emergencyType} alert and rated your response $stars ($ratingValue/5). Thank you for helping!"
+                                else
                                     "$riderDisplay has resolved their ${alert.emergencyType} alert. Thank you for helping!"
-                                )
+                                FirebaseFirestore.getInstance().collection("notifications").add(hashMapOf(
+                                    "userName"  to alert.responderName!!,
+                                    "message"   to msg,
+                                    "type"      to if (stars != null) "rating" else "accepted",
+                                    "timestamp" to System.currentTimeMillis(),
+                                    "read"      to false
+                                ))
                             }
                         }
                         FirebaseFirestore.getInstance()
@@ -1238,6 +1251,16 @@ fun AlertCard(
     onCancelResponse : () -> Unit,
     modifier         : Modifier = Modifier
 ){
+    var showReviewSheet by remember { mutableStateOf(false) }
+
+    if (showReviewSheet && !alert.responderName.isNullOrBlank()) {
+        HelperReviewSheet(
+            responderUsername    = alert.responderName!!,
+            responderDisplayName = alert.responderDisplayName
+                .takeIf { it.isNotBlank() } ?: alert.responderName!!,
+            onDismiss = { showReviewSheet = false }
+        )
+    }
     val severityColor = when (alert.severity) {
         AlertSeverity.HIGH   -> HighColor
         AlertSeverity.MEDIUM -> MedColor
@@ -1666,7 +1689,10 @@ fun AlertCard(
                                         Text("On the way to ${alert.riderDisplayName.ifBlank { alert.riderName }}",
                                             fontSize = 11.sp, color = Color(0xFF455A64))
                                         if (!alert.responderName.isNullOrBlank()) {
-                                            HelperRatingBadge(responderUsername = alert.responderName!!)
+                                            HelperRatingBadge(
+                                                responderUsername = alert.responderName!!,
+                                                onClick           = { showReviewSheet = true }
+                                            )
                                         }
                                     }
                                 }

@@ -11,6 +11,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.clickable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -73,7 +75,8 @@ fun fetchHelperRating(
 @Composable
 fun HelperRatingBadge(
     responderUsername: String,
-    modifier:          Modifier = Modifier
+    modifier:          Modifier = Modifier,
+    onClick:           (() -> Unit)? = null
 ) {
     var ratingData by remember(responderUsername) { mutableStateOf<HelperRatingData?>(null) }
     var loaded     by remember(responderUsername) { mutableStateOf(false) }
@@ -116,6 +119,12 @@ fun HelperRatingBadge(
         modifier = modifier
             .clip(RoundedCornerShape(8.dp))
             .background(badgeBg)
+            .then(
+                if (onClick != null) Modifier.clickable(
+                    interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                    indication        = null
+                ) { onClick() } else Modifier
+            )
             .padding(horizontal = 7.dp, vertical = 3.dp),
         verticalAlignment     = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(3.dp)
