@@ -54,6 +54,8 @@ import com.google.firebase.firestore.FirebaseFirestore
 import kotlinx.coroutines.delay
 import kotlin.math.sin
 import kotlin.math.cos
+import androidx.compose.foundation.Image
+import androidx.compose.ui.window.Dialog
 
 // ── Colour tokens ─────────────────────────────────────────────────────────────
 private val LGreen950 = Color(0xFF021F14)
@@ -255,6 +257,7 @@ fun LoginScreen(navController: NavController, paddingValues: PaddingValues) {
     var usernameAvailable         by remember { mutableStateOf<Boolean?>(null) }
     var emailTypoSuggestion       by remember { mutableStateOf("") }
     val passwordStrength          = evaluatePasswordStrength(regPassword)
+    var showTermsDialog           by remember { mutableStateOf(false) }
 
     // ── Focus ─────────────────────────────────────────────────────────────────
     val focusManager    = LocalFocusManager.current
@@ -401,7 +404,7 @@ fun LoginScreen(navController: NavController, paddingValues: PaddingValues) {
         var valid        = true
         val trimUser     = regUsername.trim()
         val trimEmail    = regEmail.trim().lowercase() // Normalize to lowercase
-        
+
         when {
             trimUser.isBlank()   -> { regUsernameError = "Username is required"; valid = false }
             trimUser.length < 3  -> { regUsernameError = "At least 3 characters"; valid = false }
@@ -433,7 +436,7 @@ fun LoginScreen(navController: NavController, paddingValues: PaddingValues) {
         }
         if (!termsAccepted) { termsError = "You must accept the terms"; valid = false }
         if (!valid) return
-        
+
         focusManager.clearFocus()
         isRegLoading = true
         db.collection("users").whereEqualTo("usernameLower", trimUser.lowercase()).limit(1).get()
@@ -501,6 +504,18 @@ fun LoginScreen(navController: NavController, paddingValues: PaddingValues) {
             ) { if (phase == 0) phase = 1 }
     ) {
         TopoBackground(modifier = Modifier.fillMaxSize())
+
+        if (showTermsDialog) {
+            TermsAndPrivacyDialog(
+                onDismiss = { showTermsDialog = false },
+                onAccept = {
+                    termsAccepted = true
+                    showTermsDialog = false
+                }
+            )
+        }
+
+
 
         AnimatedVisibility(
             visible = phase == 0,
@@ -685,6 +700,20 @@ fun LoginScreen(navController: NavController, paddingValues: PaddingValues) {
                                     colors        = lFieldColors()
                                 )
                                 if (loginPasswordError.isNotEmpty()) LFieldError(loginPasswordError)
+
+
+                                Text(
+                                    "Forgot Password?",
+                                    fontSize   = 13.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color      = LGreen900,
+                                    modifier   = Modifier
+                                        .align(Alignment.End)
+
+
+                                        .padding(vertical = 12.dp)
+                                )
+
                                 Spacer(Modifier.height(24.dp))
 
                                 Button(
@@ -704,7 +733,10 @@ fun LoginScreen(navController: NavController, paddingValues: PaddingValues) {
                                     else Text("Login", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Color.White)
                                 }
 
-                                Spacer(Modifier.height(20.dp))
+
+
+
+
                                 LDivider()
                                 Spacer(Modifier.height(20.dp))
 
@@ -717,7 +749,11 @@ fun LoginScreen(navController: NavController, paddingValues: PaddingValues) {
                                     colors   = ButtonDefaults.outlinedButtonColors(containerColor = Color.White, contentColor = Color(0xFF111827))
                                 ) {
                                     Row(verticalAlignment = Alignment.CenterVertically) {
-                                        GoogleLogo(modifier = Modifier.size(20.dp))
+                                        Image(
+                                            painter            = painterResource(id = R.drawable.google),
+                                            contentDescription = null,
+                                            modifier           = Modifier.size(20.dp)
+                                        )
                                         Spacer(Modifier.width(12.dp))
                                         Text("Continue with Google", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
                                     }
@@ -886,8 +922,13 @@ fun LoginScreen(navController: NavController, paddingValues: PaddingValues) {
                                     )
                                     Spacer(Modifier.width(10.dp))
                                     Text("I agree to the ", fontSize = 13.sp, color = Color(0xFF444444))
-                                    Text("Terms & Privacy Policy", fontSize = 13.sp,
-                                        color = LGreen900, fontWeight = FontWeight.SemiBold)
+                                    Text(
+                                        "Terms & Privacy Policy",
+                                        fontSize   = 13.sp,
+                                        color      = LGreen900,
+                                        fontWeight = FontWeight.SemiBold,
+                                        modifier   = Modifier.clickable { showTermsDialog = true }
+                                    )
                                 }
                                 if (termsError.isNotEmpty()) LFieldError(termsError)
                                 Spacer(Modifier.height(20.dp))
@@ -917,6 +958,7 @@ fun LoginScreen(navController: NavController, paddingValues: PaddingValues) {
         }
     }
 }
+
 
 @Composable
 private fun LFieldLabel(text: String) {
@@ -1008,5 +1050,221 @@ private fun GoogleLogo(modifier: Modifier = Modifier) {
         drawRect(Color(0xFF4285F4),
             topLeft = androidx.compose.ui.geometry.Offset(cx, cy - r * 0.18f),
             size    = androidx.compose.ui.geometry.Size(r * 0.76f, r * 0.36f))
+    }
+}
+@Composable
+private fun TermsAndPrivacyDialog(onDismiss: () -> Unit, onAccept: () -> Unit) {
+    Dialog(onDismissRequest = onDismiss) {
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .fillMaxHeight(0.85f)
+                .padding(16.dp),
+            shape = RoundedCornerShape(24.dp),
+            colors = CardDefaults.cardColors(containerColor = Color.White)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(24.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        "Legal Information",
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = LGreen900
+                    )
+                    IconButton(onClick = onDismiss) {
+                        Icon(Icons.Rounded.Close, contentDescription = "Close", tint = LMuted)
+                    }
+                }
+
+                Spacer(Modifier.height(16.dp))
+
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .verticalScroll(rememberScrollState())
+                ) {
+                    Text(
+                        "1. Privacy Policy",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 16.sp,
+                        color = LGreen900
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "PedalConnect is committed to protecting your privacy. This policy explains how we collect and use your data to provide a safer cycling experience.",
+                        fontSize = 14.sp, color = Color(0xFF4B5563)
+                    )
+
+                    Spacer(Modifier.height(12.dp))
+                    Text(
+                        "Data We Collect",
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 14.sp,
+                        color = LGreen800
+                    )
+                    Text(
+                        "• Location Data: We collect precise GPS coordinates to enable the SOS alert system and route-sharing features.",
+                        fontSize = 14.sp,
+                        color = Color(0xFF4B5563)
+                    )
+                    Text(
+                        "• Account Information: Your name, email, and contact details are collected via Firebase Authentication.",
+                        fontSize = 14.sp,
+                        color = Color(0xFF4B5563)
+                    )
+                    Text(
+                        "• Incident Reports: Information and photos you submit regarding road hazards or accidents.",
+                        fontSize = 14.sp,
+                        color = Color(0xFF4B5563)
+                    )
+
+                    Spacer(Modifier.height(12.dp))
+                    Text(
+                        "How We Use Your Data",
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 14.sp,
+                        color = LGreen800
+                    )
+                    Text(
+                        "• To broadcast your location to nearby responders during an emergency.",
+                        fontSize = 14.sp,
+                        color = Color(0xFF4B5563)
+                    )
+                    Text(
+                        "• To populate the community feed with safety updates.",
+                        fontSize = 14.sp,
+                        color = Color(0xFF4B5563)
+                    )
+                    Text(
+                        "• To improve cycling routes based on community-verified data.",
+                        fontSize = 14.sp,
+                        color = Color(0xFF4B5563)
+                    )
+
+                    Spacer(Modifier.height(12.dp))
+                    Text(
+                        "Data Storage & Security",
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 14.sp,
+                        color = LGreen800
+                    )
+                    Text(
+                        "Your data is securely stored using Google Firebase Cloud Firestore. We implement industry-standard encryption to protect your sensitive location history.",
+                        fontSize = 14.sp,
+                        color = Color(0xFF4B5563)
+                    )
+
+                    Spacer(Modifier.height(12.dp))
+                    Text(
+                        "User Rights",
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 14.sp,
+                        color = LGreen800
+                    )
+                    Text(
+                        "You may request the deletion of your account and all associated data at any time through the app settings.",
+                        fontSize = 14.sp,
+                        color = Color(0xFF4B5563)
+                    )
+
+                    Spacer(Modifier.height(24.dp))
+                    Text(
+                        "2. Terms and Conditions",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 16.sp,
+                        color = LGreen900
+                    )
+
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "1. Acceptance of Terms",
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 14.sp,
+                        color = LGreen800
+                    )
+                    Text(
+                        "By creating an account, you agree to be bound by these terms. This application is a functional prototype developed for academic research purposes.",
+                        fontSize = 14.sp,
+                        color = Color(0xFF4B5563)
+                    )
+
+                    Spacer(Modifier.height(12.dp))
+                    Text(
+                        "2. Emergency Services Disclaimer",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 14.sp,
+                        color = LError
+                    )
+                    Text(
+                        "CRITICAL: PedalConnect is a community-based alerting tool. It is NOT a replacement for official emergency services (e.g., 911/NDRRMC). In a life-threatening situation, always contact local authorities first.",
+                        fontSize = 14.sp,
+                        color = LError
+                    )
+
+                    Spacer(Modifier.height(12.dp))
+                    Text(
+                        "3. User Conduct",
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 14.sp,
+                        color = LGreen800
+                    )
+                    Text(
+                        "• No False Alerts: Intentional triggering of false SOS signals is strictly prohibited and will result in an immediate permanent ban.",
+                        fontSize = 14.sp,
+                        color = Color(0xFF4B5563)
+                    )
+                    Text(
+                        "• Verification: You agree to provide accurate information when reporting incidents to ensure community safety.",
+                        fontSize = 14.sp,
+                        color = Color(0xFF4B5563)
+                    )
+
+                    Spacer(Modifier.height(12.dp))
+                    Text(
+                        "4. Limitation of Liability",
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 14.sp,
+                        color = LGreen800
+                    )
+                    Text(
+                        "The developers of PedalConnect (students of Pasig Catholic College) shall not be held liable for any accidents, injuries, or damages resulting from the use of this software. You use this application at your own risk while cycling.",
+                        fontSize = 14.sp,
+                        color = Color(0xFF4B5563)
+                    )
+
+                    Spacer(Modifier.height(12.dp))
+                    Text(
+                        "5. Connectivity Requirement",
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 14.sp,
+                        color = LGreen800
+                    )
+                    Text(
+                        "You acknowledge that real-time features require a stable LTE or Wi-Fi connection. The developers are not responsible for alert failures due to network \"dead zones.\"",
+                        fontSize = 14.sp,
+                        color = Color(0xFF4B5563)
+                    )
+                }
+
+                Spacer(Modifier.height(16.dp))
+
+                Button(
+                    onClick = onAccept,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(containerColor = LGreen900, contentColor = Color.White),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Text("I Understand", fontWeight = FontWeight.Bold, color = Color.White)
+                }
+            }
+        }
     }
 }

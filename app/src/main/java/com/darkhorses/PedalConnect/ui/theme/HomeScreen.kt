@@ -91,6 +91,12 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
+import androidx.compose.ui.input.pointer.pointerInput
+import kotlinx.coroutines.tasks.await
 
 // ── Colour tokens ─────────────────────────────────────────────────────────────
 private val Green900 = Color(0xFF06402B)
@@ -106,7 +112,10 @@ private const val STALE_MS             = 30_000L           // 30s — written ev
 private const val OVERPASS_INTERVAL_MS = 90_000L
 private const val OVERPASS_MOVE_KM     = 0.25
 
-private fun fuzzDistance(km: Double): Double = (Math.round(km * 2).toDouble()) / 2.0
+private fun fuzzDistance(km: Double): Double = when {
+    km < 1.0 -> (Math.round(km * 10).toDouble()) / 10.0  // 0.1km steps under 1km
+    else     -> (Math.round(km * 2).toDouble())  / 2.0   // 0.5km steps above 1km
+}
 
 private fun getDistanceLayer(distanceKm: Double): Int = when {
     distanceKm <= CYCLIST_RADIUS_KM -> 1      // Layer 1: closest cyclists
@@ -183,7 +192,8 @@ internal fun makeMarkerBitmap(
     isAlert:          Boolean = false,
     isCyclist:        Boolean = false,
     isFlag:           Boolean = false,
-    isCheckeredFlag:  Boolean = false
+    isCheckeredFlag:  Boolean = false,
+    isUrgent:         Boolean = false
 ): android.graphics.Bitmap {
     val w      = sizePx
     val h      = (sizePx * 1.35f).toInt()
@@ -233,7 +243,18 @@ internal fun makeMarkerBitmap(
         strokeJoin  = Paint.Join.ROUND
     }
 
-    if (isAlert) {
+    if (isUrgent) {
+        // Double exclamation mark — unconscious/urgent rider
+        val barW = r * 0.16f
+        val gap  = r * 0.18f
+        iconPaint.style = Paint.Style.FILL
+        // Left bar
+        canvas.drawRoundRect(cx - gap - barW, cy - r * 0.44f, cx - gap, cy + r * 0.10f, barW, barW, iconPaint)
+        canvas.drawCircle(cx - gap - barW / 2f, cy + r * 0.34f, r * 0.13f, iconPaint)
+        // Right bar
+        canvas.drawRoundRect(cx + gap, cy - r * 0.44f, cx + gap + barW, cy + r * 0.10f, barW, barW, iconPaint)
+        canvas.drawCircle(cx + gap + barW / 2f, cy + r * 0.34f, r * 0.13f, iconPaint)
+    } else if (isAlert) {
         val barW = r * 0.22f
         iconPaint.style = Paint.Style.FILL
         canvas.drawRoundRect(cx - barW, cy - r * 0.44f, cx + barW, cy + r * 0.10f, barW, barW, iconPaint)
@@ -352,6 +373,9 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
     var locationSharingEnabled by remember { mutableStateOf(true) }
     var notificationsEnabled by remember { mutableStateOf(true) }
     var showCancelResponderDialog by remember { mutableStateOf(false) }
+    var showUrgentHelpDialog      by remember { mutableStateOf(false) }
+    var sosHoldProgress           by remember { mutableFloatStateOf(0f) }
+    var isHoldingSos              by remember { mutableStateOf(false) }
 
     LaunchedEffect(userName) {
         FirebaseFirestore.getInstance()
@@ -479,9 +503,10 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
     var fetchFailed         by remember { mutableStateOf(false) }
     // Tapped shop — drives the bottom sheet
     var selectedShop        by remember { mutableStateOf<ShopItem?>(null) }
-    var lastOverpassFetchMs by remember { mutableLongStateOf(0L) }
-    var lastOverpassCenter  by remember { mutableStateOf<GeoPoint?>(null) }
-    var mapFocusFilter      by remember { mutableStateOf<ShopType?>(null) }
+    var lastOverpassFetchMs   by remember { mutableLongStateOf(0L) }
+    var lastOverpassCenter    by remember { mutableStateOf<GeoPoint?>(null) }
+    var mapFocusFilter        by remember { mutableStateOf<ShopType?>(null) }
+    var firstFetchCompleted   by remember { mutableStateOf(false) }
 
     var mapRedrawTrigger            by remember { mutableIntStateOf(0) }
     var helperLocationLastWriteMs   by remember { mutableLongStateOf(0L) }
@@ -539,7 +564,6 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
         """.trimIndent()
 
         isLoadingShops = true
-        fetchFailed    = false
 
         scope.launch(Dispatchers.IO) {
             try {
@@ -591,13 +615,26 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
                 withContext(Dispatchers.Main) {
                     nearbyShops.clear()
                     nearbyShops.addAll(fetched)
-                    isLoadingShops = false
+                    isLoadingShops     = false
+                    firstFetchCompleted = true
+                    fetchFailed        = false
+                    mapRedrawTrigger++
+                    mapViewRef?.invalidate()
                 }
             } catch (e: Exception) {
                 e.printStackTrace()
                 withContext(Dispatchers.Main) {
                     isLoadingShops = false
                     fetchFailed    = true
+                    mapRedrawTrigger++
+                    mapViewRef?.invalidate()
+                    if (firstFetchCompleted) {
+                        Toast.makeText(
+                            context,
+                            "Couldn't load nearby services. Check your connection and try moving slightly.",
+                            Toast.LENGTH_LONG
+                        ).show()
+                    }
                 }
             }
         }
@@ -1530,12 +1567,23 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
                                 }
                             }
                             alerts.forEach { alert ->
+                                val isUrgentAlert = alert.emergencyType == "Urgent Help"
                                 Marker(view).apply {
                                     position = alert.coordinates
-                                    title    = "🆘 ${alert.riderName}: ${alert.emergencyType}"
+                                    title    = if (isUrgentAlert) "🚨 URGENT: ${alert.riderName}"
+                                    else "🆘 ${alert.riderName}: ${alert.emergencyType}"
                                     snippet  = alert.locationName
                                     setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
-                                    val alertBitmap = makeMarkerBitmap(view.context, android.graphics.Color.argb(255, 211, 47, 47), false, 80, true)
+                                    val alertBitmap = if (isUrgentAlert)
+                                        makeMarkerBitmap(
+                                            context    = view.context,
+                                            bgColor    = android.graphics.Color.argb(255, 74, 20, 140),
+                                            isHospital = false,
+                                            sizePx     = 96,
+                                            isUrgent   = true
+                                        )
+                                    else
+                                        makeMarkerBitmap(view.context, android.graphics.Color.argb(255, 211, 47, 47), false, 80, true)
                                     icon = android.graphics.drawable.BitmapDrawable(view.context.resources, alertBitmap)
                                     view.overlays.add(this)
                                     // Fetch display name and update marker title asynchronously
@@ -1545,7 +1593,8 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
                                             fetchUserProfile(alert.riderName, db).displayName
                                                 .takeIf { it.isNotBlank() } ?: alert.riderName
                                         } catch (e: Exception) { alert.riderName }
-                                        title = "🆘 $displayName: ${alert.emergencyType}"
+                                        title = if (isUrgentAlert) "🚨 URGENT: $displayName"
+                                        else "🆘 $displayName: ${alert.emergencyType}"
                                         view.invalidate()
                                     }
                                 }
@@ -1582,7 +1631,10 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
                                 Marker(view).apply {
                                     position = user.location
                                     title    = "🚴 ${user.userName}"
-                                    snippet  = "${user.distanceKm} km away"
+                                    snippet  = if (user.distanceKm < 1.0)
+                                        "${(user.distanceKm * 1000).toInt()} m away"
+                                    else
+                                        "${user.distanceKm} km away"
                                     setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
                                     // Fetch display name and update marker title asynchronously
                                     scope.launch {
@@ -1702,6 +1754,26 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
                             .padding(end = 16.dp, bottom = innerPadding.calculateBottomPadding() + 180.dp),
                         verticalArrangement = Arrangement.spacedBy(10.dp), horizontalAlignment = Alignment.End
                     ) {
+                        androidx.compose.animation.AnimatedVisibility(
+                            visible = fetchFailed,
+                            enter   = fadeIn() + scaleIn(),
+                            exit    = fadeOut() + scaleOut()
+                        ) {
+                            FloatingActionButton(
+                                onClick = {
+                                    fetchFailed = false
+                                    userGeoPoint?.let { fetchNearbyPlaces(it) }
+                                },
+                                modifier       = Modifier.size(44.dp),
+                                shape          = CircleShape,
+                                containerColor = Color(0xFFFFEBEE),
+                                contentColor   = Color(0xFFD32F2F),
+                                elevation      = FloatingActionButtonDefaults.elevation(6.dp)
+                            ) {
+                                Icon(Icons.Default.Refresh, "Retry loading services",
+                                    modifier = Modifier.size(20.dp))
+                            }
+                        }
                         androidx.compose.animation.AnimatedVisibility(visible = !isFollowingLocation, enter = fadeIn() + scaleIn(), exit = fadeOut() + scaleOut()) {
                             FloatingActionButton(
                                 onClick = {
@@ -2106,7 +2178,10 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
                                         ?: myActiveAlertInline.riderName
                                     val bannerText = when (myActiveAlertInline.status) {
                                         "responding" -> "🚴 $bannerResponderName is on the way!"
-                                        else         -> "🆘 Your ${myActiveAlertInline.emergencyType} alert is active"
+                                        else         -> if (myActiveAlertInline.emergencyType == "Urgent Help")
+                                            "🚨 Urgent alert is active"
+                                        else
+                                            "🆘 Your ${myActiveAlertInline.emergencyType} alert is active"
                                     }
                                     Card(
                                         onClick   = { selectedItem = 3 },
@@ -2544,70 +2619,206 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
                                     enter   = fadeIn(animationSpec  = tween(200)),
                                     exit    = fadeOut(animationSpec = tween(150))
                                 ) {
-                                Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                                    Box(
-                                        modifier = Modifier.fillMaxWidth().height(72.dp)
-                                            .clip(RoundedCornerShape(24.dp))
-                                            .background(
-                                                if (hasActiveAlert) Color(0xFF2E7D32).copy(alpha = 0.18f)
-                                                else Color(0xFFD32F2F).copy(alpha = 0.18f)
-                                            )
-                                    )
-                                    val sosPulse = rememberInfiniteTransition(label = "sos")
-                                    val sosScale by sosPulse.animateFloat(
-                                        initialValue = 1f, targetValue = if (!hasActiveAlert) 1.03f else 1f,
-                                        animationSpec = infiniteRepeatable(tween(900), RepeatMode.Reverse),
-                                        label = "sosScale"
-                                    )
-                                    Button(
-                                        onClick = {
-                                            if (hasActiveAlert) showCancelSosDialog = true
-                                            else showSheet = true
-                                        },
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .padding(horizontal = 4.dp, vertical = 4.dp)
-                                            .height(64.dp)
-                                            .graphicsLayer { scaleX = sosScale; scaleY = sosScale }
-                                            .shadow(16.dp, RoundedCornerShape(20.dp)),
-                                        shape  = RoundedCornerShape(20.dp),
-                                        colors = ButtonDefaults.buttonColors(
-                                            containerColor = if (hasActiveAlert) Color(0xFF2E7D32) else Color(0xFFD32F2F)
-                                        ),
-                                        elevation = ButtonDefaults.buttonElevation(defaultElevation = 0.dp)
-                                    ) {
-                                        Row(
-                                            verticalAlignment     = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                    Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                                        Box(
+                                            modifier = Modifier.fillMaxWidth().height(72.dp)
+                                                .clip(RoundedCornerShape(24.dp))
+                                                .background(
+                                                    if (hasActiveAlert) Color(0xFF2E7D32).copy(alpha = 0.18f)
+                                                    else Color(0xFFD32F2F).copy(alpha = 0.18f)
+                                                )
+                                        )
+                                        val sosPulse = rememberInfiniteTransition(label = "sos")
+                                        val sosScale by sosPulse.animateFloat(
+                                            initialValue = 1f, targetValue = if (!hasActiveAlert) 1.03f else 1f,
+                                            animationSpec = infiniteRepeatable(tween(900), RepeatMode.Reverse),
+                                            label = "sosScale"
+                                        )
+                                        // Hold-to-send coroutine job
+                                        val holdJob = remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+
+                                        Box(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(horizontal = 4.dp, vertical = 4.dp)
+                                                .height(64.dp)
+                                                .graphicsLayer { scaleX = if (isHoldingSos) 0.97f else sosScale; scaleY = if (isHoldingSos) 0.97f else sosScale }
+                                                .shadow(16.dp, RoundedCornerShape(20.dp))
+                                                .clip(RoundedCornerShape(20.dp))
+                                                .background(if (hasActiveAlert) Color(0xFF2E7D32) else Color(0xFFD32F2F))
+                                                .pointerInput(hasActiveAlert) {
+                                                    if (hasActiveAlert) return@pointerInput
+                                                    detectTapGestures(
+                                                        onTap = {
+                                                            if (!isHoldingSos) showSheet = true
+                                                        },
+                                                        onLongPress = { /* handled by press start below */ }
+                                                    )
+                                                }
+                                                .pointerInput(hasActiveAlert) {
+                                                    if (hasActiveAlert) {
+                                                        detectTapGestures(onTap = { showCancelSosDialog = true })
+                                                        return@pointerInput
+                                                    }
+                                                    detectTapGestures(
+                                                        onTap = { showSheet = true },
+                                                        onLongPress = {
+                                                            // onLongPress fires after ~500ms — we use it
+                                                            // only as a fallback; main hold is handled below
+                                                        },
+                                                        onPress = {
+                                                            isHoldingSos    = true
+                                                            sosHoldProgress = 0f
+                                                            holdJob.value?.cancel()
+                                                            holdJob.value = scope.launch {
+                                                                val holdDurationMs = 3000L
+                                                                val tickMs         = 16L
+                                                                val steps          = holdDurationMs / tickMs
+                                                                for (i in 1..steps) {
+                                                                    kotlinx.coroutines.delay(tickMs)
+                                                                    sosHoldProgress = i.toFloat() / steps.toFloat()
+                                                                    if (sosHoldProgress >= 1f) {
+                                                                        isHoldingSos    = false
+                                                                        sosHoldProgress = 0f
+                                                                        // Fire urgent alert
+                                                                        scope.launch {
+                                                                            try {
+                                                                                val gp = userGeoPoint
+                                                                                val address: String = if (gp != null) {
+                                                                                    withContext(Dispatchers.IO) {
+                                                                                        try {
+                                                                                            val addresses = android.location.Geocoder(
+                                                                                                context, java.util.Locale.getDefault()
+                                                                                            ).getFromLocation(gp.latitude, gp.longitude, 1)
+                                                                                            if (!addresses.isNullOrEmpty())
+                                                                                                addresses[0].getAddressLine(0) ?: "Unknown Location"
+                                                                                            else "Unknown Location"
+                                                                                        } catch (e: Exception) { "Location Error" }
+                                                                                    }
+                                                                                } else "Location unavailable — check on rider"
+
+                                                                                val displayName: String = try {
+                                                                                    withContext(Dispatchers.IO) {
+                                                                                        val snap = db.collection("users")
+                                                                                            .whereEqualTo("username", userName)
+                                                                                            .limit(1).get().await()
+                                                                                        snap.documents.firstOrNull()
+                                                                                            ?.getString("displayName")
+                                                                                            ?.takeIf { it.isNotBlank() } ?: userName
+                                                                                    }
+                                                                                } catch (e: Exception) { userName }
+
+                                                                                val alertData = hashMapOf<String, Any>(
+                                                                                    "riderName"         to userName,
+                                                                                    "riderNameLower"    to userName.trim().lowercase(),
+                                                                                    "riderDisplayName"  to displayName,
+                                                                                    "emergencyType"     to "Urgent Help",
+                                                                                    "latitude"          to (gp?.latitude  ?: 0.0),
+                                                                                    "longitude"         to (gp?.longitude ?: 0.0),
+                                                                                    "locationName"      to address,
+                                                                                    "timestamp"         to System.currentTimeMillis(),
+                                                                                    "severity"          to "HIGH",
+                                                                                    "status"            to "active",
+                                                                                    "responderName"     to "",
+                                                                                    "additionalDetails" to "⚠️ Triggered via hold — rider may be unconscious or in critical condition."
+                                                                                )
+                                                                                withContext(Dispatchers.IO) {
+                                                                                    db.collection("alerts")
+                                                                                        .add(alertData).await()
+                                                                                }
+                                                                                showUrgentHelpDialog = true
+                                                                            } catch (e: Exception) {
+                                                                                Toast.makeText(
+                                                                                    context,
+                                                                                    "Failed to send urgent alert. Try again.",
+                                                                                    Toast.LENGTH_LONG
+                                                                                ).show()
+                                                                            }
+                                                                        }
+                                                                        return@launch
+                                                                    }
+                                                                }
+                                                            }
+                                                            // Suspend until finger is lifted
+                                                            tryAwaitRelease()
+                                                            // Cancelled before 3s — reset
+                                                            holdJob.value?.cancel()
+                                                            holdJob.value   = null
+                                                            isHoldingSos    = false
+                                                            sosHoldProgress = 0f
+                                                        }
+                                                    )
+                                                },
+                                            contentAlignment = Alignment.Center
                                         ) {
-                                            Box(
-                                                modifier = Modifier.size(36.dp).clip(CircleShape)
-                                                    .background(Color.White.copy(alpha = 0.2f)),
-                                                contentAlignment = Alignment.Center
-                                            ) {
-                                                Icon(
-                                                    if (hasActiveAlert) Icons.Default.Cancel else Icons.Default.Warning,
-                                                    null, modifier = Modifier.size(20.dp), tint = Color.White
-                                                )
+                                            // Hold progress ring drawn behind content
+                                            if (isHoldingSos) {
+                                                androidx.compose.foundation.Canvas(
+                                                    modifier = Modifier.fillMaxSize()
+                                                ) {
+                                                    val stroke = 6.dp.toPx()
+                                                    drawArc(
+                                                        color       = Color.White.copy(alpha = 0.35f),
+                                                        startAngle  = -90f,
+                                                        sweepAngle  = 360f,
+                                                        useCenter   = false,
+                                                        style       = androidx.compose.ui.graphics.drawscope.Stroke(stroke),
+                                                        topLeft     = androidx.compose.ui.geometry.Offset(stroke / 2, stroke / 2),
+                                                        size        = androidx.compose.ui.geometry.Size(size.width - stroke, size.height - stroke)
+                                                    )
+                                                    drawArc(
+                                                        color       = Color.White,
+                                                        startAngle  = -90f,
+                                                        sweepAngle  = 360f * sosHoldProgress,
+                                                        useCenter   = false,
+                                                        style       = androidx.compose.ui.graphics.drawscope.Stroke(
+                                                            stroke,
+                                                            cap = androidx.compose.ui.graphics.StrokeCap.Round
+                                                        ),
+                                                        topLeft     = androidx.compose.ui.geometry.Offset(stroke / 2, stroke / 2),
+                                                        size        = androidx.compose.ui.geometry.Size(size.width - stroke, size.height - stroke)
+                                                    )
+                                                }
                                             }
-                                            Column(horizontalAlignment = Alignment.Start) {
-                                                Text(
-                                                    if (hasActiveAlert) "CANCEL SOS" else "SOS",
-                                                    fontWeight = FontWeight.ExtraBold,
-                                                    fontSize   = 20.sp, letterSpacing = 4.sp,
-                                                    color      = Color.White
-                                                )
-                                                Text(
-                                                    if (hasActiveAlert) "Tap to cancel your active alert"
-                                                    else "Tap to send distress signal",
-                                                    fontSize   = 9.sp, fontWeight = FontWeight.Medium,
-                                                    color      = Color.White.copy(alpha = 0.8f),
-                                                    letterSpacing = 0.3.sp
-                                                )
+                                            Row(
+                                                verticalAlignment     = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                                modifier              = Modifier.padding(horizontal = 16.dp)
+                                            ) {
+                                                Box(
+                                                    modifier = Modifier.size(36.dp).clip(CircleShape)
+                                                        .background(Color.White.copy(alpha = 0.2f)),
+                                                    contentAlignment = Alignment.Center
+                                                ) {
+                                                    Icon(
+                                                        if (hasActiveAlert) Icons.Default.Cancel
+                                                        else if (isHoldingSos) Icons.Default.PriorityHigh
+                                                        else Icons.Default.Warning,
+                                                        null, modifier = Modifier.size(20.dp), tint = Color.White
+                                                    )
+                                                }
+                                                Column(horizontalAlignment = Alignment.Start) {
+                                                    Text(
+                                                        if (hasActiveAlert) "CANCEL SOS"
+                                                        else if (isHoldingSos) "URGENT HELP!"
+                                                        else "SOS",
+                                                        fontWeight = FontWeight.ExtraBold,
+                                                        fontSize   = 20.sp, letterSpacing = 4.sp,
+                                                        color      = Color.White
+                                                    )
+                                                    Text(
+                                                        if (hasActiveAlert) "Tap to cancel your active alert"
+                                                        else if (isHoldingSos) "Release to cancel · Sending in 3s…"
+                                                        else "Tap to send distress signal",
+                                                        fontSize      = 9.sp,
+                                                        fontWeight    = FontWeight.Medium,
+                                                        color         = Color.White.copy(alpha = 0.8f),
+                                                        letterSpacing = 0.3.sp
+                                                    )
+                                                }
                                             }
                                         }
                                     }
-                                }
                                 }
                             } // end if (!isAdmin)
                         } // end if (!isTracking && totalDistance == 0.0)
@@ -3038,6 +3249,50 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
                     userName     = userName,
                     userGeoPoint = userGeoPoint,
                     onDismiss    = { showSheet = false }
+                )
+            }
+
+            if (showUrgentHelpDialog) {
+                AlertDialog(
+                    onDismissRequest = { showUrgentHelpDialog = false },
+                    shape            = RoundedCornerShape(20.dp),
+                    containerColor   = Color.White,
+                    icon = {
+                        Box(
+                            modifier = Modifier.size(56.dp).clip(CircleShape)
+                                .background(Color(0xFFFFEBEE)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(Icons.Default.Warning, null,
+                                tint = Color(0xFFD32F2F), modifier = Modifier.size(28.dp))
+                        }
+                    },
+                    title = {
+                        Text("Urgent Help Sent!",
+                            fontWeight = FontWeight.ExtraBold, fontSize = 18.sp,
+                            color = Color(0xFFD32F2F),
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                            modifier = Modifier.fillMaxWidth())
+                    },
+                    text = {
+                        Text(
+                            "An urgent distress alert has been sent to nearby cyclists and responders with your current location.",
+                            fontSize = 14.sp, color = Color.Gray, lineHeight = 20.sp,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                        )
+                    },
+                    confirmButton = {
+                        Button(
+                            onClick  = { showUrgentHelpDialog = false },
+                            modifier = Modifier.fillMaxWidth().height(48.dp),
+                            shape    = RoundedCornerShape(12.dp),
+                            colors   = ButtonDefaults.buttonColors(
+                                containerColor = Color(0xFFD32F2F),
+                                contentColor   = Color.White)
+                        ) {
+                            Text("OK", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                        }
+                    }
                 )
             }
         }

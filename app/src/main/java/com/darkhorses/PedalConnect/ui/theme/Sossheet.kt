@@ -300,7 +300,7 @@ fun SosSheet(
                                 if (nearbyCount == 0) {
                                     Toast.makeText(
                                         context,
-                                        "⚠️ No cyclists are nearby right now. Consider calling emergency services (911).",
+                                        "⚠️ No cyclists are nearby right now. Consider calling emergency services.",
                                         Toast.LENGTH_LONG
                                     ).show()
                                 }

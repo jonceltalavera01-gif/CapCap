@@ -994,7 +994,7 @@ fun ProfileScreen(navController: NavController, userName: String, paddingValues:
                                 },
                                 onEdit    = { editingPost = post; editDescription = post.description; showEditDialog = true },
                                 onDelete  = { deletingPost = post; showDeleteDialog = true },
-                                photoUrl  = null,
+                                photoUrl  = photoUrl,
                                 isAdmin   = false
                             )
                             Spacer(Modifier.height(12.dp))
