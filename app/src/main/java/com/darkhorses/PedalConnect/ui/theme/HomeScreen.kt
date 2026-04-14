@@ -628,7 +628,7 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
                     fetchFailed    = true
                     mapRedrawTrigger++
                     mapViewRef?.invalidate()
-                    if (firstFetchCompleted) {
+                    if (firstFetchCompleted && nearbyShops.isEmpty()) {
                         Toast.makeText(
                             context,
                             "Couldn't load nearby services. Check your connection and try moving slightly.",
@@ -1311,7 +1311,7 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
                     val alt = location.altitude
                     if (lastAltitude != Double.MIN_VALUE) {
                         val diff = alt - lastAltitude
-                        if (diff > 0.5) elevationGainMeters += diff
+                        if (diff > 4.0) elevationGainMeters += diff
                     }
                     lastAltitude = alt
                 }
@@ -1627,7 +1627,14 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
                                     }
                                 }
                             }
-                            nearbyUsers.forEach { user ->
+                            val activeResponderNames = alerts
+                                .filter { it.status == "responding" && !it.responderName.isNullOrBlank() }
+                                .map { it.responderName!!.trim().lowercase() }
+                                .toSet()
+
+                            nearbyUsers.filter { user ->
+                                user.userName.trim().lowercase() !in activeResponderNames
+                            }.forEach { user ->
                                 Marker(view).apply {
                                     position = user.location
                                     title    = "🚴 ${user.userName}"

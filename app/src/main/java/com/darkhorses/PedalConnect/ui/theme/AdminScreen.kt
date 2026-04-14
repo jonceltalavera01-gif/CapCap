@@ -1084,222 +1084,222 @@ fun AdminScreen(paddingValues: PaddingValues, adminUserName: String = "") {
                                 item {
                                     Box(
                                         Modifier.fillMaxWidth()
-                                        .clip(RoundedCornerShape(18.dp))
-                                        .background(Brush.horizontalGradient(listOf(AGreen900, Color(0xFF0A5C3D))))
-                                        .padding(20.dp)
-                                ) {
-                                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                        Text("Admin Dashboard", fontSize = 20.sp,
-                                            fontWeight = FontWeight.ExtraBold, color = Color.White)
-                                        Spacer(Modifier.height(12.dp))
-                                        HorizontalDivider(color = Color.White.copy(alpha = 0.15f))
-                                        Spacer(Modifier.height(12.dp))
-                                        // Quick stats row
-                                        Row(
-                                            Modifier.fillMaxWidth(),
-                                            horizontalArrangement = Arrangement.SpaceAround
-                                        ) {
-                                            DashboardStat("$totalUsers",    "Users",    Icons.Default.People,       Color(0xFF90CAF9))
-                                            DashboardStatDivider()
-                                            DashboardStat("$totalPosts",   "Posts",    Icons.Default.Article,      AAmber500)
-                                            DashboardStatDivider()
-                                            DashboardStat("$resolvedAlerts", "Resolved", Icons.Default.CheckCircle, Color(0xFF81C784))
-                                            DashboardStatDivider()
-                                            DashboardStat("${activeAlerts.size}", "Active SOS", Icons.Default.Warning, Color(0xFFEF9A9A))
+                                            .clip(RoundedCornerShape(18.dp))
+                                            .background(Brush.horizontalGradient(listOf(AGreen900, Color(0xFF0A5C3D))))
+                                            .padding(20.dp)
+                                    ) {
+                                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                            Text("Admin Dashboard", fontSize = 20.sp,
+                                                fontWeight = FontWeight.ExtraBold, color = Color.White)
+                                            Spacer(Modifier.height(12.dp))
+                                            HorizontalDivider(color = Color.White.copy(alpha = 0.15f))
+                                            Spacer(Modifier.height(12.dp))
+                                            // Quick stats row
+                                            Row(
+                                                Modifier.fillMaxWidth(),
+                                                horizontalArrangement = Arrangement.SpaceAround
+                                            ) {
+                                                DashboardStat("$totalUsers",    "Users",    Icons.Default.People,       Color(0xFF90CAF9))
+                                                DashboardStatDivider()
+                                                DashboardStat("$totalPosts",   "Posts",    Icons.Default.Article,      AAmber500)
+                                                DashboardStatDivider()
+                                                DashboardStat("$resolvedAlerts", "Resolved", Icons.Default.CheckCircle, Color(0xFF81C784))
+                                                DashboardStatDivider()
+                                                DashboardStat("${activeAlerts.size}", "Active SOS", Icons.Default.Warning, Color(0xFFEF9A9A))
+                                            }
                                         }
                                     }
                                 }
-                            }
 
-                            // Needs attention cards
-                            item {
-                                Spacer(Modifier.height(4.dp))
-                                Text("Needs Attention", fontSize = 13.sp,
-                                    fontWeight = FontWeight.Bold, color = AOnSurface,
-                                    modifier = Modifier.padding(start = 2.dp))
-                                Spacer(Modifier.height(8.dp))
-                                val attentionItems = listOf(
-                                    Triple("Posts",           pendingPosts.size,    1),
-                                    Triple("Rides",           pendingRides.size,    2),
-                                    Triple("Post Reports",    reportedPosts.size,   3),
-                                    Triple("Comment Reports", reportedComments.size,4),
-                                    Triple("Photo Reports",   reportedImages.size,  5),
-                                    Triple("Active Alerts",   activeAlerts.size,    6)
-                                ).filter { it.second > 0 }
+                                // Needs attention cards
+                                item {
+                                    Spacer(Modifier.height(4.dp))
+                                    Text("Needs Attention", fontSize = 13.sp,
+                                        fontWeight = FontWeight.Bold, color = AOnSurface,
+                                        modifier = Modifier.padding(start = 2.dp))
+                                    Spacer(Modifier.height(8.dp))
+                                    val attentionItems = listOf(
+                                        Triple("Posts",           pendingPosts.size,    1),
+                                        Triple("Rides",           pendingRides.size,    2),
+                                        Triple("Post Reports",    reportedPosts.size,   3),
+                                        Triple("Comment Reports", reportedComments.size,4),
+                                        Triple("Photo Reports",   reportedImages.size,  5),
+                                        Triple("Active Alerts",   activeAlerts.size,    6)
+                                    ).filter { it.second > 0 }
 
-                                if (attentionItems.isEmpty()) {
-                                    Box(
-                                        Modifier.fillMaxWidth()
-                                            .clip(RoundedCornerShape(14.dp))
-                                            .background(AGreen50)
-                                            .padding(20.dp),
-                                        Alignment.Center
-                                    ) {
-                                        Row(verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                                            Icon(Icons.Default.CheckCircle, null,
-                                                tint = AGreen900, modifier = Modifier.size(20.dp))
-                                            Text("All clear — nothing needs attention!",
-                                                fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
-                                                color = AGreen900)
+                                    if (attentionItems.isEmpty()) {
+                                        Box(
+                                            Modifier.fillMaxWidth()
+                                                .clip(RoundedCornerShape(14.dp))
+                                                .background(AGreen50)
+                                                .padding(20.dp),
+                                            Alignment.Center
+                                        ) {
+                                            Row(verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                                Icon(Icons.Default.CheckCircle, null,
+                                                    tint = AGreen900, modifier = Modifier.size(20.dp))
+                                                Text("All clear — nothing needs attention!",
+                                                    fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
+                                                    color = AGreen900)
+                                            }
                                         }
-                                    }
-                                } else {
-                                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                        attentionItems.forEach { (label, count, sectionIdx) ->
-                                            val isUrgent = label.contains("Alert") || label.contains("Report")
-                                            Row(
-                                                Modifier.fillMaxWidth()
-                                                    .clip(RoundedCornerShape(12.dp))
-                                                    .background(if (isUrgent) ARedLight else AAmber50)
-                                                    .clickable { selectedSection = sectionIdx }
-                                                    .padding(horizontal = 14.dp, vertical = 12.dp),
-                                                verticalAlignment = Alignment.CenterVertically,
-                                                horizontalArrangement = Arrangement.SpaceBetween
-                                            ) {
-                                                Row(verticalAlignment = Alignment.CenterVertically,
-                                                    horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                                                    Box(
-                                                        Modifier.size(36.dp)
-                                                            .clip(RoundedCornerShape(10.dp))
-                                                            .background(if (isUrgent) ARedColor.copy(alpha = 0.12f) else AAmber500.copy(alpha = 0.12f)),
-                                                        Alignment.Center
-                                                    ) {
-                                                        Icon(
-                                                            if (isUrgent) Icons.Default.Warning else Icons.Default.HourglassTop,
-                                                            null,
+                                    } else {
+                                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                            attentionItems.forEach { (label, count, sectionIdx) ->
+                                                val isUrgent = label.contains("Alert") || label.contains("Report")
+                                                Row(
+                                                    Modifier.fillMaxWidth()
+                                                        .clip(RoundedCornerShape(12.dp))
+                                                        .background(if (isUrgent) ARedLight else AAmber50)
+                                                        .clickable { selectedSection = sectionIdx }
+                                                        .padding(horizontal = 14.dp, vertical = 12.dp),
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                    horizontalArrangement = Arrangement.SpaceBetween
+                                                ) {
+                                                    Row(verticalAlignment = Alignment.CenterVertically,
+                                                        horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                                        Box(
+                                                            Modifier.size(36.dp)
+                                                                .clip(RoundedCornerShape(10.dp))
+                                                                .background(if (isUrgent) ARedColor.copy(alpha = 0.12f) else AAmber500.copy(alpha = 0.12f)),
+                                                            Alignment.Center
+                                                        ) {
+                                                            Icon(
+                                                                if (isUrgent) Icons.Default.Warning else Icons.Default.HourglassTop,
+                                                                null,
+                                                                tint = if (isUrgent) ARedColor else AAmber500,
+                                                                modifier = Modifier.size(18.dp)
+                                                            )
+                                                        }
+                                                        Column {
+                                                            Text(label, fontSize = 13.sp,
+                                                                fontWeight = FontWeight.SemiBold,
+                                                                color = if (isUrgent) ARedColor else Color(0xFF92400E))
+                                                            Text("Tap to review",
+                                                                fontSize = 11.sp,
+                                                                color = if (isUrgent) ARedColor.copy(alpha = 0.65f) else Color(0xFFB45309))
+                                                        }
+                                                    }
+                                                    Row(verticalAlignment = Alignment.CenterVertically,
+                                                        horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                                        Box(
+                                                            Modifier.clip(RoundedCornerShape(20.dp))
+                                                                .background(if (isUrgent) ARedColor else AAmber500)
+                                                                .padding(horizontal = 10.dp, vertical = 4.dp)
+                                                        ) {
+                                                            Text("$count", fontSize = 12.sp,
+                                                                fontWeight = FontWeight.ExtraBold,
+                                                                color = Color.White)
+                                                        }
+                                                        Icon(Icons.Default.ChevronRight, null,
                                                             tint = if (isUrgent) ARedColor else AAmber500,
-                                                            modifier = Modifier.size(18.dp)
-                                                        )
+                                                            modifier = Modifier.size(16.dp))
                                                     }
-                                                    Column {
-                                                        Text(label, fontSize = 13.sp,
-                                                            fontWeight = FontWeight.SemiBold,
-                                                            color = if (isUrgent) ARedColor else Color(0xFF92400E))
-                                                        Text("Tap to review",
-                                                            fontSize = 11.sp,
-                                                            color = if (isUrgent) ARedColor.copy(alpha = 0.65f) else Color(0xFFB45309))
-                                                    }
-                                                }
-                                                Row(verticalAlignment = Alignment.CenterVertically,
-                                                    horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                                    Box(
-                                                        Modifier.clip(RoundedCornerShape(20.dp))
-                                                            .background(if (isUrgent) ARedColor else AAmber500)
-                                                            .padding(horizontal = 10.dp, vertical = 4.dp)
-                                                    ) {
-                                                        Text("$count", fontSize = 12.sp,
-                                                            fontWeight = FontWeight.ExtraBold,
-                                                            color = Color.White)
-                                                    }
-                                                    Icon(Icons.Default.ChevronRight, null,
-                                                        tint = if (isUrgent) ARedColor else AAmber500,
-                                                        modifier = Modifier.size(16.dp))
                                                 }
                                             }
                                         }
                                     }
                                 }
-                            }
 
-                            // Recent activity feed — self-contained scrollable card
-                            item {
-                                Spacer(Modifier.height(4.dp))
-                                Text(
-                                    "Recent Activity", fontSize = 13.sp,
-                                    fontWeight = FontWeight.Bold, color = AOnSurface,
-                                    modifier = Modifier.padding(start = 2.dp)
-                                )
-                                Spacer(Modifier.height(8.dp))
+                                // Recent activity feed — self-contained scrollable card
+                                item {
+                                    Spacer(Modifier.height(4.dp))
+                                    Text(
+                                        "Recent Activity", fontSize = 13.sp,
+                                        fontWeight = FontWeight.Bold, color = AOnSurface,
+                                        modifier = Modifier.padding(start = 2.dp)
+                                    )
+                                    Spacer(Modifier.height(8.dp))
 
-                                Card(
-                                    modifier  = Modifier.fillMaxWidth(),
-                                    shape     = RoundedCornerShape(16.dp),
-                                    colors    = CardDefaults.cardColors(containerColor = AWhite),
-                                    elevation = CardDefaults.cardElevation(2.dp)
-                                ) {
-                                    if (recentActivity.isEmpty()) {
-                                        Column(
-                                            modifier = Modifier.fillMaxWidth().padding(vertical = 32.dp),
-                                            horizontalAlignment = Alignment.CenterHorizontally,
-                                            verticalArrangement = Arrangement.spacedBy(8.dp)
-                                        ) {
-                                            Icon(Icons.Default.Inbox, null,
-                                                tint = AMuted, modifier = Modifier.size(28.dp))
-                                            Text("No activity yet", fontSize = 13.sp,
-                                                fontWeight = FontWeight.SemiBold, color = AMuted)
-                                        }
-                                    } else {
-                                        Box(modifier = Modifier.fillMaxWidth()) {
+                                    Card(
+                                        modifier  = Modifier.fillMaxWidth(),
+                                        shape     = RoundedCornerShape(16.dp),
+                                        colors    = CardDefaults.cardColors(containerColor = AWhite),
+                                        elevation = CardDefaults.cardElevation(2.dp)
+                                    ) {
+                                        if (recentActivity.isEmpty()) {
                                             Column(
-                                                modifier = Modifier
-                                                    .fillMaxWidth()
-                                                    .heightIn(max = 340.dp)
-                                                    .verticalScroll(rememberScrollState())
+                                                modifier = Modifier.fillMaxWidth().padding(vertical = 32.dp),
+                                                horizontalAlignment = Alignment.CenterHorizontally,
+                                                verticalArrangement = Arrangement.spacedBy(8.dp)
                                             ) {
-                                            recentActivity.take(10).forEachIndexed { index, activity ->
-                                                val (icon, iconBg, iconTint) = when (activity.type) {
-                                                    "alert"  -> Triple(Icons.Default.Warning, Color(0xFFFFEBEE), ARedColor)
-                                                    "report" -> Triple(Icons.Default.Flag,    AAmber50,          AAmber500)
-                                                    else     -> Triple(Icons.Default.Article, AGreen50,          AGreen900)
-                                                }
-                                                Row(
-                                                    Modifier
+                                                Icon(Icons.Default.Inbox, null,
+                                                    tint = AMuted, modifier = Modifier.size(28.dp))
+                                                Text("No activity yet", fontSize = 13.sp,
+                                                    fontWeight = FontWeight.SemiBold, color = AMuted)
+                                            }
+                                        } else {
+                                            Box(modifier = Modifier.fillMaxWidth()) {
+                                                Column(
+                                                    modifier = Modifier
                                                         .fillMaxWidth()
-                                                        .padding(horizontal = 12.dp, vertical = 10.dp),
-                                                    verticalAlignment = Alignment.CenterVertically,
-                                                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                                        .heightIn(max = 340.dp)
+                                                        .verticalScroll(rememberScrollState())
                                                 ) {
-                                                    Box(
-                                                        Modifier.size(36.dp)
-                                                            .clip(RoundedCornerShape(10.dp))
-                                                            .background(iconBg),
-                                                        Alignment.Center
-                                                    ) {
-                                                        Icon(icon, null, tint = iconTint,
-                                                            modifier = Modifier.size(16.dp))
+                                                    recentActivity.take(10).forEachIndexed { index, activity ->
+                                                        val (icon, iconBg, iconTint) = when (activity.type) {
+                                                            "alert"  -> Triple(Icons.Default.Warning, Color(0xFFFFEBEE), ARedColor)
+                                                            "report" -> Triple(Icons.Default.Flag,    AAmber50,          AAmber500)
+                                                            else     -> Triple(Icons.Default.Article, AGreen50,          AGreen900)
+                                                        }
+                                                        Row(
+                                                            Modifier
+                                                                .fillMaxWidth()
+                                                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                                                            verticalAlignment = Alignment.CenterVertically,
+                                                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                                        ) {
+                                                            Box(
+                                                                Modifier.size(36.dp)
+                                                                    .clip(RoundedCornerShape(10.dp))
+                                                                    .background(iconBg),
+                                                                Alignment.Center
+                                                            ) {
+                                                                Icon(icon, null, tint = iconTint,
+                                                                    modifier = Modifier.size(16.dp))
+                                                            }
+                                                            Column(
+                                                                Modifier.weight(1f),
+                                                                verticalArrangement = Arrangement.spacedBy(2.dp)
+                                                            ) {
+                                                                Text(activity.title, fontSize = 13.sp,
+                                                                    fontWeight = FontWeight.SemiBold, color = AOnSurface)
+                                                                Text(activity.subtitle, fontSize = 11.sp, color = AMuted)
+                                                            }
+                                                            Text(formatAdminTime(activity.timestamp),
+                                                                fontSize = 10.sp, color = AMuted)
+                                                        }
+                                                        if (index < recentActivity.take(10).lastIndex) {
+                                                            HorizontalDivider(
+                                                                modifier = Modifier.padding(horizontal = 12.dp),
+                                                                color = ADivider, thickness = 0.5.dp
+                                                            )
+                                                        }
                                                     }
-                                                    Column(
-                                                        Modifier.weight(1f),
-                                                        verticalArrangement = Arrangement.spacedBy(2.dp)
-                                                    ) {
-                                                        Text(activity.title, fontSize = 13.sp,
-                                                            fontWeight = FontWeight.SemiBold, color = AOnSurface)
-                                                        Text(activity.subtitle, fontSize = 11.sp, color = AMuted)
-                                                    }
-                                                    Text(formatAdminTime(activity.timestamp),
-                                                        fontSize = 10.sp, color = AMuted)
                                                 }
-                                                if (index < recentActivity.take(10).lastIndex) {
-                                                    HorizontalDivider(
-                                                        modifier = Modifier.padding(horizontal = 12.dp),
-                                                        color = ADivider, thickness = 0.5.dp
+                                                // Fade hint — only shows when there are enough items to scroll
+                                                if (recentActivity.size > 4) {
+                                                    Box(
+                                                        Modifier
+                                                            .fillMaxWidth()
+                                                            .height(32.dp)
+                                                            .align(Alignment.BottomCenter)
+                                                            .background(
+                                                                Brush.verticalGradient(
+                                                                    listOf(Color.Transparent, AWhite)
+                                                                )
+                                                            )
                                                     )
                                                 }
                                             }
-                                            }
-                                            // Fade hint — only shows when there are enough items to scroll
-                                            if (recentActivity.size > 4) {
-                                                Box(
-                                                    Modifier
-                                                        .fillMaxWidth()
-                                                        .height(32.dp)
-                                                        .align(Alignment.BottomCenter)
-                                                        .background(
-                                                            Brush.verticalGradient(
-                                                                listOf(Color.Transparent, AWhite)
-                                                            )
-                                                        )
-                                                )
-                                            }
                                         }
                                     }
                                 }
                             }
-                            }
                         } // end else isLoadingDashboard
                         1 -> {
-                    if (isLoadingPosts) {
+                            if (isLoadingPosts) {
                                 item { AdminLoadingState() }
                             } else if (pendingPosts.isEmpty()) {
                                 item { AdminEmptyState(Icons.Default.CheckCircle, "All caught up!", "No posts pending approval.") }

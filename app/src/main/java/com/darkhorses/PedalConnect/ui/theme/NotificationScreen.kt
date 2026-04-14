@@ -82,6 +82,7 @@ private fun notifStyle(type: String): NotifStyle = when (type) {
     "moderation"       -> NotifStyle(Icons.Default.Gavel,             Color(0xFFD32F2F), Color(0xFFFFEBEE), Color(0xFFFFF5F5), "Moderation")
     "moderation_restored" -> NotifStyle(Icons.Default.CheckCircle,    Color(0xFF388E3C), Color(0xFFE8F5E9), Color(0xFFF1FBF2), "Restored")
     "rating"           -> NotifStyle(Icons.Default.Star,             Color(0xFFF57C00), Color(0xFFFFF3E0), Color(0xFFFFFBF0), "Rating")
+    "report"           -> NotifStyle(Icons.Default.Flag,             Color(0xFFD32F2F), Color(0xFFFFEBEE), Color(0xFFFFF5F5), "Report")
     else               -> NotifStyle(Icons.Default.Notifications,    Color(0xFF7A8F7A), Color(0xFFF0F0F0), Color.White,       "Notification")
 }
 

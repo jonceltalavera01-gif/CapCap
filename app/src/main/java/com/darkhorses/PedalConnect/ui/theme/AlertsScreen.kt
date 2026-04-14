@@ -100,7 +100,13 @@ fun AlertsScreen(
     var isFirstLoad by remember { mutableStateOf(true) }
     var isClaimingAlert by remember { mutableStateOf(false) }
     var alertToRate     by remember { mutableStateOf<AlertItem?>(null) }
-    var pendingRating   by remember { mutableIntStateOf(0) }
+    var pendingRating        by remember { mutableIntStateOf(0) }
+    var showReportDialog     by remember { mutableStateOf(false) }
+    var reportTargetName     by remember { mutableStateOf("") }
+    var reportTargetRole     by remember { mutableStateOf("") } // "rider" or "helper"
+    var reportAlertRef       by remember { mutableStateOf<AlertItem?>(null) }
+    var selectedReportReason by remember { mutableStateOf("") }
+    var reportOtherText      by remember { mutableStateOf("") }
 
     LaunchedEffect(Unit) {
         FirebaseFirestore.getInstance()
@@ -725,6 +731,15 @@ fun AlertsScreen(
                             onImOnMyWay      = { handleImOnMyWay(alert) },
                             onDismiss        = { alertToConfirm = alert },
                             onCancelResponse = { alertToCancelResponse = alert },
+                            onReportRider    = { reportedAlert ->
+                                reportTargetName     = reportedAlert.riderDisplayName
+                                    .takeIf { it.isNotBlank() } ?: reportedAlert.riderName
+                                reportTargetRole     = "rider"
+                                reportAlertRef       = reportedAlert
+                                selectedReportReason = ""
+                                reportOtherText      = ""
+                                showReportDialog     = true
+                            },
                             modifier         = Modifier.padding(horizontal = 16.dp, vertical = 5.dp)
                         )
                     }
@@ -918,6 +933,45 @@ fun AlertsScreen(
                             textAlign  = androidx.compose.ui.text.style.TextAlign.Center
                         )
                     }
+                    // ── Report helper option ──────────────────────────────────
+                    HorizontalDivider(
+                        color     = Color(0xFFEEEEEE),
+                        thickness = 0.5.dp
+                    )
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(10.dp))
+                            .clickable(
+                                interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                                indication        = null
+                            ) {
+                                val helper = alert.responderName ?: return@clickable
+                                reportTargetName     = alert.responderDisplayName
+                                    .takeIf { it.isNotBlank() } ?: helper
+                                reportTargetRole     = "helper"
+                                reportAlertRef       = alert
+                                selectedReportReason = ""
+                                reportOtherText      = ""
+                                showReportDialog     = true
+                            }
+                            .padding(horizontal = 4.dp, vertical = 6.dp),
+                        verticalAlignment     = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.Center
+                    ) {
+                        Icon(
+                            Icons.Default.Flag, null,
+                            tint     = Color(0xFFD32F2F).copy(alpha = 0.7f),
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Spacer(Modifier.width(5.dp))
+                        Text(
+                            "Report this helper",
+                            fontSize   = 12.sp,
+                            color      = Color(0xFFD32F2F).copy(alpha = 0.7f),
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
                 }
             },
             confirmButton = {
@@ -963,6 +1017,236 @@ fun AlertsScreen(
             }
         )
     }
+    // ── Report User Dialog ────────────────────────────────────────────────────
+    if (showReportDialog) {
+        val reportReasons = listOf(
+            "False/Fake Alert",
+            "Never showed up",
+            "Inappropriate behavior",
+            "Other"
+        )
+        val isOther          = selectedReportReason == "Other"
+        val canSubmit        = selectedReportReason.isNotBlank() &&
+                (!isOther || reportOtherText.trim().length >= 5)
+
+        AlertDialog(
+            onDismissRequest = {
+                showReportDialog     = false
+                selectedReportReason = ""
+                reportOtherText      = ""
+            },
+            shape          = RoundedCornerShape(20.dp),
+            containerColor = Color.White,
+            icon = {
+                Box(
+                    modifier = Modifier.size(56.dp).clip(CircleShape)
+                        .background(Color(0xFFFFEBEE)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(Icons.Default.Flag, null,
+                        tint     = Color(0xFFD32F2F),
+                        modifier = Modifier.size(28.dp))
+                }
+            },
+            title = {
+                Text(
+                    "Report ${reportTargetRole.replaceFirstChar { it.uppercase() }}",
+                    fontWeight = FontWeight.ExtraBold,
+                    fontSize   = 18.sp,
+                    color      = Color(0xFF1A1A1A),
+                    textAlign  = androidx.compose.ui.text.style.TextAlign.Center,
+                    modifier   = Modifier.fillMaxWidth()
+                )
+            },
+            text = {
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        "Why are you reporting $reportTargetName?",
+                        fontSize  = 13.sp,
+                        color     = Color.Gray,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                        modifier  = Modifier.fillMaxWidth()
+                    )
+                    reportReasons.forEach { reason ->
+                        val isSelected = selectedReportReason == reason
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(
+                                    if (isSelected) Color(0xFFFFEBEE)
+                                    else Color(0xFFF7F7F7)
+                                )
+                                .border(
+                                    width = if (isSelected) 1.5.dp else 1.dp,
+                                    color = if (isSelected) Color(0xFFD32F2F)
+                                    else Color(0xFFE0E0E0),
+                                    shape = RoundedCornerShape(12.dp)
+                                )
+                                .clickable(
+                                    interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                                    indication        = null
+                                ) { selectedReportReason = reason }
+                                .padding(horizontal = 14.dp, vertical = 12.dp),
+                            verticalAlignment     = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier.size(18.dp)
+                                    .clip(CircleShape)
+                                    .background(
+                                        if (isSelected) Color(0xFFD32F2F)
+                                        else Color.White
+                                    )
+                                    .border(
+                                        1.5.dp,
+                                        if (isSelected) Color(0xFFD32F2F)
+                                        else Color(0xFFBBBBBB),
+                                        CircleShape
+                                    ),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                if (isSelected) {
+                                    Box(
+                                        modifier = Modifier.size(8.dp)
+                                            .clip(CircleShape)
+                                            .background(Color.White)
+                                    )
+                                }
+                            }
+                            Text(
+                                reason,
+                                fontSize   = 13.sp,
+                                fontWeight = if (isSelected) FontWeight.SemiBold
+                                else FontWeight.Normal,
+                                color      = if (isSelected) Color(0xFFD32F2F)
+                                else Color(0xFF1A1A1A)
+                            )
+                        }
+                    }
+                    // Optional/required text field
+                    androidx.compose.animation.AnimatedVisibility(
+                        visible = selectedReportReason.isNotBlank()
+                    ) {
+                        OutlinedTextField(
+                            value         = reportOtherText,
+                            onValueChange = { if (it.length <= 100) reportOtherText = it },
+                            placeholder   = {
+                                Text(
+                                    if (isOther) "Please describe the issue (required)"
+                                    else         "Add a comment (optional)",
+                                    fontSize = 12.sp,
+                                    color    = Color.LightGray
+                                )
+                            },
+                            modifier = Modifier.fillMaxWidth().height(80.dp),
+                            shape    = RoundedCornerShape(12.dp),
+                            colors   = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor      = Color(0xFFD32F2F),
+                                unfocusedBorderColor    = Color(0xFFE0E0E0),
+                                focusedContainerColor   = Color.White,
+                                unfocusedContainerColor = Color(0xFFFAFAFA),
+                                cursorColor             = Color(0xFFD32F2F),
+                                focusedTextColor        = Color(0xFF1A1A1A),
+                                unfocusedTextColor      = Color(0xFF1A1A1A)
+                            ),
+                            maxLines = 3
+                        )
+                    }
+                    if (isOther && reportOtherText.trim().length < 5 && reportOtherText.isNotBlank()) {
+                        Text(
+                            "Please provide more detail.",
+                            fontSize   = 11.sp,
+                            color      = Color(0xFFD32F2F),
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                Column(
+                    modifier            = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Button(
+                        onClick = {
+                            if (!canSubmit) return@Button
+                            val alert     = reportAlertRef ?: return@Button
+                            val reason    = if (isOther) reportOtherText.trim()
+                            else selectedReportReason
+                            val comment   = if (!isOther) reportOtherText.trim()
+                            else null
+                            val db        = FirebaseFirestore.getInstance()
+                            val reportData = hashMapOf<String, Any>(
+                                "reporterName"   to helperName,
+                                "reportedName"   to reportTargetName,
+                                "reportedRole"   to reportTargetRole,
+                                "alertId"        to alert.id,
+                                "emergencyType"  to alert.emergencyType,
+                                "reason"         to reason,
+                                "timestamp"      to System.currentTimeMillis(),
+                                "reviewed"       to false
+                            )
+                            if (!comment.isNullOrBlank()) reportData["comment"] = comment
+                            db.collection("userReports").add(reportData)
+                                .addOnSuccessListener {
+                                    // Notify admin
+                                    val adminMsg = buildString {
+                                        append("🚩 $helperName reported $reportTargetName ")
+                                        append("(${reportTargetRole}) for \"$reason\"")
+                                        if (!comment.isNullOrBlank()) append(" — \"$comment\"")
+                                        append(" | Alert: ${alert.emergencyType}")
+                                    }
+                                    db.collection("notifications").add(hashMapOf(
+                                        "userName"  to "Admin",
+                                        "message"   to adminMsg,
+                                        "type"      to "report",
+                                        "timestamp" to System.currentTimeMillis(),
+                                        "read"      to false
+                                    ))
+                                    successMessage = "Report submitted. Thank you for keeping the community safe."
+                                }
+                                .addOnFailureListener {
+                                    errorMessage = "Failed to submit report. Please try again."
+                                }
+                            showReportDialog     = false
+                            selectedReportReason = ""
+                            reportOtherText      = ""
+                        },
+                        enabled  = canSubmit,
+                        modifier = Modifier.fillMaxWidth().height(48.dp),
+                        shape    = RoundedCornerShape(12.dp),
+                        colors   = ButtonDefaults.buttonColors(
+                            containerColor         = Color(0xFFD32F2F),
+                            contentColor           = Color.White,
+                            disabledContainerColor = Color(0xFFBDBDBD),
+                            disabledContentColor   = Color.White
+                        )
+                    ) {
+                        Text("Submit Report",
+                            fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                    }
+                    OutlinedButton(
+                        onClick  = {
+                            showReportDialog     = false
+                            selectedReportReason = ""
+                            reportOtherText      = ""
+                        },
+                        modifier = Modifier.fillMaxWidth().height(44.dp),
+                        shape    = RoundedCornerShape(12.dp),
+                        border   = androidx.compose.foundation.BorderStroke(
+                            1.dp, Color(0xFFDDDDDD))
+                    ) {
+                        Text("Cancel", color = Color.Gray, fontSize = 14.sp)
+                    }
+                }
+            }
+        )
+    }
+
     alertToCancelResponse?.let { alert ->
         AlertDialog(
             onDismissRequest = { alertToCancelResponse = null },
@@ -1249,6 +1533,7 @@ fun AlertCard(
     onImOnMyWay      : () -> Unit,
     onDismiss        : () -> Unit,
     onCancelResponse : () -> Unit,
+    onReportRider    : (AlertItem) -> Unit = {},
     modifier         : Modifier = Modifier
 ){
     var showReviewSheet by remember { mutableStateOf(false) }
@@ -1651,6 +1936,34 @@ fun AlertCard(
                                     Icon(Icons.Default.Cancel, null, modifier = Modifier.size(15.dp))
                                     Spacer(Modifier.width(6.dp))
                                     Text("Cancel Response", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                                }
+                                // ── Report rider option ───────────────────────
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(10.dp))
+                                        .clickable(
+                                            interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                                            indication        = null
+                                        ) {
+                                            onReportRider(alert)
+                                        }
+                                        .padding(horizontal = 4.dp, vertical = 6.dp),
+                                    verticalAlignment     = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.Center
+                                ) {
+                                    Icon(
+                                        Icons.Default.Flag, null,
+                                        tint     = Color(0xFFD32F2F).copy(alpha = 0.7f),
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                    Spacer(Modifier.width(5.dp))
+                                    Text(
+                                        "Report this rider",
+                                        fontSize   = 12.sp,
+                                        color      = Color(0xFFD32F2F).copy(alpha = 0.7f),
+                                        fontWeight = FontWeight.Medium
+                                    )
                                 }
                             }
                         }

@@ -50,7 +50,7 @@ class GpsTrailPipeline {
          * 40 m is permissive enough for urban canyons while blocking truly bad fixes.
          * Lower (e.g. 20 m) = more dropouts in cities; higher (e.g. 65 m) = more noise.
          */
-        const val MAX_ACCURACY_M = 40f
+        const val MAX_ACCURACY_M = 65f
         const val MAX_SPEED_MS = 24f
         const val MAX_HOP_M = 80f
 
@@ -122,6 +122,9 @@ class GpsTrailPipeline {
 
         // ── Stage 1: Accuracy gate ────────────────────────────────────────────
         if (location.accuracy > MAX_ACCURACY_M) {
+            // Update anchor even on rejection so spike detector stays calibrated
+            // after GPS recovers from a building shadow
+            lastRawAccepted = location
             return PipelineResult.Rejected(RejectionReason.POOR_ACCURACY)
         }
 
