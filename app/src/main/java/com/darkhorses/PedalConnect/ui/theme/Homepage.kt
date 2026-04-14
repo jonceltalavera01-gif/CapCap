@@ -4915,6 +4915,16 @@
                                             contentScale = ContentScale.Crop,
                                             modifier = Modifier.fillMaxSize()
                                         )
+                                        Box(
+                                            Modifier
+                                                .align(Alignment.TopStart)
+                                                .padding(8.dp)
+                                                .clip(RoundedCornerShape(6.dp))
+                                                .background(Color(0xFF111827).copy(alpha = 0.55f))
+                                                .padding(horizontal = 8.dp, vertical = 4.dp)
+                                        ) {
+                                            Text("Route", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                                        }
                                     }
                                 }
                             }

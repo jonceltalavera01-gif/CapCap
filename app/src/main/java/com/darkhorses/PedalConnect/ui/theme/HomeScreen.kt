@@ -1463,7 +1463,7 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
                 )
 
                 1 -> if (isAdmin) {
-                    AdminScreen(paddingValues = innerPadding)
+                    AdminScreen(paddingValues = innerPadding, adminUserName = userName)
                 } else Box(modifier = Modifier.fillMaxSize()) {
                     LaunchedEffect(showRoutePanel) {
                         mapViewRef?.invalidate()

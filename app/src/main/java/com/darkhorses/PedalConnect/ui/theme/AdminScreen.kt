@@ -105,11 +105,21 @@ private data class AdminAlert(
     val photoUrl: String?,
     val responderName: String?
 )
+private data class AuditLogEntry(
+    val id: String,
+    val adminUserName: String,
+    val adminDisplayName: String,
+    val action: String,
+    val targetType: String,   // "post", "ride", "comment", "alert", "photo"
+    val targetUser: String,
+    val detail: String,
+    val timestamp: Long
+)
 
 // ── Screen ────────────────────────────────────────────────────────────────────
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun AdminScreen(paddingValues: PaddingValues) {
+fun AdminScreen(paddingValues: PaddingValues, adminUserName: String = "") {
     val db    = FirebaseFirestore.getInstance()
     val scope = rememberCoroutineScope()
 
@@ -149,6 +159,9 @@ fun AdminScreen(paddingValues: PaddingValues) {
     var isLoadingReportedComments by remember { mutableStateOf(true) }
     var isLoadingModerationLogs   by remember { mutableStateOf(true) }
     val moderationLogs = remember { mutableStateListOf<ModerationLog>() }
+    val auditLogs = remember { mutableStateListOf<AuditLogEntry>() }
+    var isLoadingAuditLogs by remember { mutableStateOf(true) }
+    var adminDisplayName by remember { mutableStateOf(adminUserName) }
 
     var successMessage by remember { mutableStateOf<String?>(null) }
     var errorMessage   by remember { mutableStateOf<String?>(null) }
@@ -446,6 +459,16 @@ fun AdminScreen(paddingValues: PaddingValues) {
                 isLoadingReportedComments = false
             }
     }
+    LaunchedEffect(adminUserName) {
+        if (adminUserName.isBlank()) return@LaunchedEffect
+        db.collection("users").whereEqualTo("username", adminUserName)
+            .limit(1).get()
+            .addOnSuccessListener { snap ->
+                val d = snap.documents.firstOrNull()?.getString("displayName")
+                    ?.takeIf { it.isNotBlank() } ?: adminUserName
+                adminDisplayName = d
+            }
+    }
 
     // Dashboard — total users
     LaunchedEffect(Unit) {
@@ -561,6 +584,29 @@ fun AdminScreen(paddingValues: PaddingValues) {
                 isLoadingModerationLogs = false
             }
     }
+    LaunchedEffect(selectedSection) {
+        if (selectedSection != 8) return@LaunchedEffect
+        db.collection("moderationAuditLog")
+            .orderBy("timestamp", Query.Direction.DESCENDING)
+            .limit(100)
+            .addSnapshotListener { snap, _ ->
+                if (snap == null) { isLoadingAuditLogs = false; return@addSnapshotListener }
+                auditLogs.clear()
+                for (doc in snap.documents) {
+                    auditLogs.add(AuditLogEntry(
+                        id               = doc.id,
+                        adminUserName    = doc.getString("adminUserName")    ?: "",
+                        adminDisplayName = doc.getString("adminDisplayName") ?: "",
+                        action           = doc.getString("action")           ?: "",
+                        targetType       = doc.getString("targetType")       ?: "",
+                        targetUser       = doc.getString("targetUser")       ?: "",
+                        detail           = doc.getString("detail")           ?: "",
+                        timestamp        = doc.getLong("timestamp")          ?: 0L
+                    ))
+                }
+                isLoadingAuditLogs = false
+            }
+    }
 
     LaunchedEffect(selectedSection) {
         if (selectedSection != 6) return@LaunchedEffect
@@ -586,7 +632,18 @@ fun AdminScreen(paddingValues: PaddingValues) {
                 isLoadingAlerts = false
             }
     }
-
+    fun logAudit(action: String, targetType: String, targetUser: String, detail: String) {
+        if (adminUserName.isBlank()) return
+        db.collection("moderationAuditLog").add(hashMapOf(
+            "adminUserName"    to adminUserName,
+            "adminDisplayName" to adminDisplayName,
+            "action"           to action,
+            "targetType"       to targetType,
+            "targetUser"       to targetUser,
+            "detail"           to detail,
+            "timestamp"        to System.currentTimeMillis()
+        ))
+    }
     // ── Actions ───────────────────────────────────────────────────────────────
     fun toast(msg: String, isSuccess: Boolean = true) {
         if (isSuccess) successMessage = msg else errorMessage = msg
@@ -618,6 +675,7 @@ fun AdminScreen(paddingValues: PaddingValues) {
                             "timestamp" to System.currentTimeMillis(), "read" to false))
                     }
                 toast("Post approved!")
+                logAudit("Approved post", "post", post.userName, post.description.take(80))
             }.addOnFailureListener {
                 pendingPosts.add(post)  // restore on failure
                 toast("Failed to approve post.", false)
@@ -649,6 +707,7 @@ fun AdminScreen(paddingValues: PaddingValues) {
                             "timestamp" to System.currentTimeMillis(), "read" to false))
                     }
                 toast("Post rejected.")
+                logAudit("Rejected post", "post", post.userName, post.description.take(80))
             }.addOnFailureListener {
                 pendingPosts.add(post)  // restore on failure
                 toast("Failed to reject post.", false)
@@ -661,6 +720,7 @@ fun AdminScreen(paddingValues: PaddingValues) {
             db.collection("posts").document(post.id).delete()
                 .addOnSuccessListener {
                     toast("Post deleted.")
+                    logAudit("Deleted post", "post", post.userName, post.description.take(80))
                     if (deleteUrl.isNotBlank()) {
                         scope.launch(kotlinx.coroutines.Dispatchers.IO) {
                             try {
@@ -699,6 +759,7 @@ fun AdminScreen(paddingValues: PaddingValues) {
                             "timestamp" to System.currentTimeMillis(), "read" to false))
                     }
                 toast("Ride approved!")
+                logAudit("Approved ride", "ride", ride.organizer, ride.title)
             }.addOnFailureListener {
                 pendingRides.add(ride)  // restore on failure
                 toast("Failed to approve ride.", false)
@@ -730,6 +791,7 @@ fun AdminScreen(paddingValues: PaddingValues) {
                             "timestamp" to System.currentTimeMillis(), "read" to false))
                     }
                 toast("Ride rejected.")
+                logAudit("Rejected ride", "ride", ride.organizer, ride.title)
             }.addOnFailureListener {
                 pendingRides.add(ride)  // restore on failure
                 toast("Failed to reject ride.", false)
@@ -742,6 +804,7 @@ fun AdminScreen(paddingValues: PaddingValues) {
                 db.collection("reportedImages").whereEqualTo("alertId", report.alertId)
                     .get().addOnSuccessListener { it.documents.forEach { d -> d.reference.delete() } }
                 toast("Photo removed.")
+                logAudit("Removed alert photo", "photo", report.reportedBy, report.alertId)
             }.addOnFailureListener { toast("Failed to remove photo.", false) }
     }
 
@@ -750,6 +813,7 @@ fun AdminScreen(paddingValues: PaddingValues) {
             .get().addOnSuccessListener { snap ->
                 snap.documents.forEach { it.reference.delete() }
                 toast("Reports dismissed.")
+                logAudit("Dismissed photo reports", "photo", report.reportedBy, report.alertId)
             }.addOnFailureListener { toast("Failed to dismiss.", false) }
     }
 
@@ -777,6 +841,7 @@ fun AdminScreen(paddingValues: PaddingValues) {
                             "timestamp" to System.currentTimeMillis(), "read" to false))
                     }
                 toast("Alert resolved.")
+                logAudit("Resolved alert", "alert", alert.riderName, alert.emergencyType)
             }.addOnFailureListener { toast("Failed to resolve.", false) }
     }
 
@@ -802,7 +867,8 @@ fun AdminScreen(paddingValues: PaddingValues) {
         NavSection("Comment Reports",  Icons.Default.ChatBubbleOutline, reportedComments.size,   Color(0xFFEA580C)),
         NavSection("Photo Reports",    Icons.Default.Image,             reportedImages.size,     Color(0xFFEA580C)),
         NavSection("Alerts",           Icons.Default.Warning,           activeAlerts.size,       Color(0xFFEF4444)),
-        NavSection("Profanity Logs",   Icons.Default.Shield,            moderationLogs.size,     Color(0xFF7C3AED))
+        NavSection("Profanity Logs",   Icons.Default.Shield,            moderationLogs.size,     Color(0xFF7C3AED)),
+        NavSection("Audit Log",        Icons.Default.ManageAccounts,    auditLogs.size,          Color(0xFF0891B2))
     )
     // ── Drawer state ──────────────────────────────────────────────────────────
     val drawerState = rememberDrawerState(DrawerValue.Closed)
@@ -966,6 +1032,7 @@ fun AdminScreen(paddingValues: PaddingValues) {
                                     5 -> "${reportedImages.size} reported"
                                     6 -> "${activeAlerts.size} active"
                                     7 -> "${moderationLogs.size} entries"
+                                    8 -> "${auditLogs.size} entries"
                                     else -> ""
                                 }, fontSize = 11.sp, color = Color.White.copy(alpha = 0.65f))
                             }
@@ -1528,6 +1595,7 @@ fun AdminScreen(paddingValues: PaddingValues) {
                                                         "read"      to false
                                                     ))
                                                     toast("Comment restored.")
+                                                    logAudit("Restored comment", "comment", reported.userName, reported.text.take(80))
                                                 }
                                                 .addOnFailureListener {
                                                     reportedComments.add(reported)
@@ -1554,6 +1622,7 @@ fun AdminScreen(paddingValues: PaddingValues) {
                                                         "read"      to false
                                                     ))
                                                     toast("Comment deleted.")
+                                                    logAudit("Deleted comment", "comment", reported.userName, reported.text.take(80))
                                                 }
                                                 .addOnFailureListener {
                                                     reportedComments.add(reported)
@@ -1568,6 +1637,7 @@ fun AdminScreen(paddingValues: PaddingValues) {
                                                 .addOnSuccessListener { snap ->
                                                     snap.documents.forEach { it.reference.delete() }
                                                     toast("Reports dismissed.")
+                                                    logAudit("Dismissed comment reports", "comment", reported.userName, reported.text.take(80))
                                                 }
                                                 .addOnFailureListener {
                                                     reportedComments.add(reported)
@@ -1613,6 +1683,24 @@ fun AdminScreen(paddingValues: PaddingValues) {
                                 }
                                 items(moderationLogs, key = { it.id }) { log ->
                                     AdminModerationLogCard(log = log)
+                                }
+                            }
+                        }
+                        8 -> {
+                            if (isLoadingAuditLogs) {
+                                item { AdminLoadingState() }
+                            } else if (auditLogs.isEmpty()) {
+                                item { AdminEmptyState(Icons.Default.ManageAccounts, "No audit entries yet", "Actions taken by admins will appear here.") }
+                            } else {
+                                item {
+                                    Text(
+                                        "${auditLogs.size} action${if (auditLogs.size != 1) "s" else ""} logged",
+                                        fontSize = 12.sp, color = AMuted,
+                                        modifier = Modifier.padding(start = 4.dp, bottom = 2.dp)
+                                    )
+                                }
+                                items(auditLogs, key = { it.id }) { entry ->
+                                    AdminAuditCard(entry = entry)
                                 }
                             }
                         }
@@ -2819,5 +2907,105 @@ private fun formatAdminTime(timestamp: Long): String {
         diff < 3_600_000  -> "${diff / 60_000}m ago"
         diff < 86_400_000 -> "${diff / 3_600_000}h ago"
         else -> SimpleDateFormat("MMM dd, HH:mm", Locale.getDefault()).format(Date(timestamp))
+    }
+}
+@Composable
+private fun AdminAuditCard(entry: AuditLogEntry) {
+    val (actionColor, actionBg, actionIcon) = when {
+        entry.action.startsWith("Approved")  -> Triple(Color(0xFF166534), Color(0xFFDCFCE7), Icons.Default.CheckCircle)
+        entry.action.startsWith("Rejected")  -> Triple(Color(0xFF9A3412), Color(0xFFFFEDD5), Icons.Default.Cancel)
+        entry.action.startsWith("Deleted")   -> Triple(ARedColor,          ARedLight,          Icons.Default.Delete)
+        entry.action.startsWith("Resolved")  -> Triple(Color(0xFF1565C0), Color(0xFFE3F2FD), Icons.Default.CheckCircle)
+        entry.action.startsWith("Restored")  -> Triple(AGreen900,          AGreen50,           Icons.Default.Restore)
+        entry.action.startsWith("Dismissed") -> Triple(AAmber500,          AAmber50,           Icons.Default.Close)
+        entry.action.startsWith("Removed")   -> Triple(ARedColor,          ARedLight,          Icons.Default.Delete)
+        else                                 -> Triple(AMuted,              Color(0xFFF3F4F6),  Icons.Default.Info)
+    }
+
+    val targetTypeLabel = when (entry.targetType) {
+        "post"    -> "Post"
+        "ride"    -> "Ride"
+        "comment" -> "Comment"
+        "alert"   -> "Alert"
+        "photo"   -> "Photo"
+        else      -> entry.targetType
+    }
+
+    Card(
+        modifier  = Modifier.fillMaxWidth(),
+        shape     = RoundedCornerShape(14.dp),
+        colors    = CardDefaults.cardColors(containerColor = AWhite),
+        elevation = CardDefaults.cardElevation(1.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(12.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.Top
+        ) {
+            // Action icon
+            Box(
+                Modifier.size(40.dp).clip(RoundedCornerShape(12.dp)).background(actionBg),
+                Alignment.Center
+            ) {
+                Icon(actionIcon, null, tint = actionColor, modifier = Modifier.size(18.dp))
+            }
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                // Action + type
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Text(
+                        entry.action, fontWeight = FontWeight.SemiBold,
+                        fontSize = 13.sp, color = actionColor
+                    )
+                    Box(
+                        Modifier.clip(RoundedCornerShape(4.dp))
+                            .background(Color(0xFFF3F4F6))
+                            .padding(horizontal = 5.dp, vertical = 1.dp)
+                    ) {
+                        Text(targetTypeLabel, fontSize = 9.sp,
+                            fontWeight = FontWeight.Bold, color = AMuted,
+                            letterSpacing = 0.5.sp)
+                    }
+                }
+                // Admin who did it
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Icon(Icons.Default.AdminPanelSettings, null,
+                        tint = Color(0xFF0891B2), modifier = Modifier.size(11.dp))
+                    Text(
+                        entry.adminDisplayName.ifBlank { entry.adminUserName },
+                        fontSize = 11.sp, fontWeight = FontWeight.SemiBold,
+                        color = Color(0xFF0891B2)
+                    )
+                }
+                // Target user
+                if (entry.targetUser.isNotBlank()) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Icon(Icons.Default.Person, null,
+                            tint = AMuted, modifier = Modifier.size(11.dp))
+                        Text("re: ${entry.targetUser}", fontSize = 11.sp, color = AMuted)
+                    }
+                }
+                // Detail snippet
+                if (entry.detail.isNotBlank()) {
+                    Text(
+                        entry.detail, fontSize = 11.sp, color = AMuted,
+                        maxLines = 2, overflow = TextOverflow.Ellipsis,
+                        lineHeight = 16.sp
+                    )
+                }
+            }
+            Text(
+                formatAdminTime(entry.timestamp),
+                fontSize = 10.sp, color = AMuted
+            )
+        }
     }
 }
