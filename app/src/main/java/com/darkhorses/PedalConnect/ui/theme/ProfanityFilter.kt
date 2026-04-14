@@ -49,6 +49,12 @@ object ProfanityFilter {
         ProfanityEntry("moron",     Severity.STRONG),
         ProfanityEntry("imbecile",  Severity.STRONG),
         ProfanityEntry("loser",     Severity.STRONG),
+        ProfanityEntry("son of a bitch", Severity.STRONG),
+        ProfanityEntry("piece of shit",  Severity.STRONG),
+        ProfanityEntry("goddamn",        Severity.STRONG),
+        ProfanityEntry("damn it",        Severity.MILD),
+        ProfanityEntry("wtf",            Severity.STRONG),
+        ProfanityEntry("stfu",           Severity.STRONG),
         // ── English (MILD) ───────────────────────────────────────────────────
         ProfanityEntry("stupid",    Severity.MILD),
         ProfanityEntry("dumb",      Severity.MILD),
@@ -63,6 +69,8 @@ object ProfanityFilter {
         ProfanityEntry("putang ina",  Severity.STRONG), // phrase support
         ProfanityEntry("putang ina mo", Severity.STRONG),
         ProfanityEntry("puta",        Severity.STRONG),
+        ProfanityEntry("pota",        Severity.STRONG),
+        ProfanityEntry("pota ka",     Severity.STRONG),
         ProfanityEntry("tangina",     Severity.STRONG),
         ProfanityEntry("hindot",      Severity.STRONG),
         ProfanityEntry("kantot",      Severity.STRONG),
@@ -104,7 +112,19 @@ object ProfanityFilter {
         ProfanityEntry("peste",    Severity.MILD),
         ProfanityEntry("kupal",    Severity.MILD),
         ProfanityEntry("salot",    Severity.MILD),
-        ProfanityEntry("hampas lupa", Severity.MILD),
+        ProfanityEntry("hampas lupa",    Severity.MILD),
+        ProfanityEntry("putcha",         Severity.STRONG),
+        ProfanityEntry("putcha mo",      Severity.STRONG),
+        ProfanityEntry("pisting yawa",   Severity.STRONG),
+        ProfanityEntry("hinayupak",      Severity.STRONG),
+        ProfanityEntry("putragis",       Severity.STRONG),
+        ProfanityEntry("paksyet",        Severity.STRONG),
+        ProfanityEntry("bwisit ka",      Severity.MILD),
+        ProfanityEntry("bobo ka",        Severity.MILD),
+        ProfanityEntry("tanga ka",       Severity.MILD),
+        ProfanityEntry("kupal ka",       Severity.MILD),
+        ProfanityEntry("gago ka naman",  Severity.STRONG),
+        ProfanityEntry("yabang",         Severity.MILD),
     )
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -301,8 +321,8 @@ object ProfanityFilter {
 
         var censored = original
         var wasCensored = false
-        // Lazy — only computed if a shadow match is needed
         val shadow: String by lazy { normalize(original) }
+        val strippedShadow: String by lazy { normalize(original.replace(Regex("\\s+"), "")) }
 
         for (compiled in compiledEntries) {
             val pattern = compiled.pattern
@@ -314,7 +334,6 @@ object ProfanityFilter {
                 val m = pattern.matcher(censored)
                 var foundReal = false
                 while (m.find()) {
-                    // Skip if the match belongs to a protected word
                     if (isProtectedMatch(censored, m.start(), m.end())) {
                         m.appendReplacement(sb, java.util.regex.Matcher.quoteReplacement(m.group()))
                         continue
@@ -329,42 +348,66 @@ object ProfanityFilter {
                 }
                 continue
             }
+
             // Pass 2 — try shadow (handles leet, repeated chars, separators)
+            // Pass 3 — try stripped shadow (catches concatenated bypasses e.g. "youfuck")
             val matcherShadow = pattern.matcher(shadow)
-            if (matcherShadow.find()) {
+            val matcherStripped = pattern.matcher(strippedShadow)
+            if (matcherShadow.find() || matcherStripped.find()) {
                 wasCensored = true
-                // Shadow matched but we need to mask the ORIGINAL span
-                // Strategy: use the shadow match position as a guide,
-                // then mask the corresponding character range in the original
-                // This works because normalize() only ever shortens or equals
-                // the original length — never extends it
-                val sb = StringBuffer()
                 val mShadow = pattern.matcher(shadow)
-                // Collect all shadow match ranges
                 val shadowRanges = mutableListOf<IntRange>()
                 while (mShadow.find()) {
                     shadowRanges.add(mShadow.start()..mShadow.end())
                 }
-                // Map shadow ranges back to original ranges using a char-level offset map
-                val offsetMap = buildOffsetMap(original)
-                var result = censored
-                // Apply in reverse order to preserve indices
-                for (range in shadowRanges.sortedByDescending { it.first }) {
-                    val origStart = offsetMap.getOrNull(range.first) ?: continue
-                    val origEnd   = offsetMap.getOrNull(range.last)?.plus(1)
-                        ?: result.length
-                    val span = result.substring(origStart, origEnd.coerceAtMost(result.length))
-                    result = result.substring(0, origStart) +
-                            mask(span) +
-                            result.substring(origEnd.coerceAtMost(result.length))
+                if (shadowRanges.isEmpty()) {
+                    // Shadow had no ranges — profanity only found in stripped shadow
+                    // Mask the word token(s) in original that contain the profanity
+                    val mStripped = pattern.matcher(strippedShadow)
+                    while (mStripped.find()) {
+                        val matchedProfanity = mStripped.group().lowercase()
+                        val wordRegex = Regex("\\S+")
+                        var result = censored
+                        var offset = 0
+                        wordRegex.findAll(censored).forEach { wordMatch ->
+                            val normalizedWord = normalize(wordMatch.value)
+                            if (normalizedWord.contains(matchedProfanity) ||
+                                normalize(wordMatch.value.replace(Regex("\\s+"), ""))
+                                    .contains(matchedProfanity)
+                            ) {
+                                val start = wordMatch.range.first + offset
+                                val end = wordMatch.range.last + 1 + offset
+                                val masked = mask(wordMatch.value)
+                                result = result.substring(0, start) + masked +
+                                        result.substring(end)
+                                offset += masked.length - wordMatch.value.length
+                            }
+                        }
+                        censored = result
+                    }
+                } else {
+                    // Shadow had ranges — map them back to original positions
+                    val offsetMap = buildOffsetMap(original)
+                    var result = censored
+                    for (range in shadowRanges.sortedByDescending { it.first }) {
+                        val origStart = offsetMap.getOrNull(range.first) ?: continue
+                        val origEnd = offsetMap.getOrNull(range.last)?.plus(1)
+                            ?: result.length
+                        val span = result.substring(
+                            origStart,
+                            origEnd.coerceAtMost(result.length)
+                        )
+                        result = result.substring(0, origStart) +
+                                mask(span) +
+                                result.substring(origEnd.coerceAtMost(result.length))
+                    }
+                    censored = result
                 }
-                censored = result
             }
         }
 
         return Pair(wasCensored, censored)
     }
-
     // ─────────────────────────────────────────────────────────────────────────
     // 8. Offset map builder
     //    Maps each index in the normalized shadow back to its position

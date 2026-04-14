@@ -1,6 +1,7 @@
         package com.darkhorses.PedalConnect.ui.theme
-        
+
         import android.widget.Toast
+        import androidx.compose.animation.AnimatedVisibility
         import androidx.compose.animation.core.animateFloat
         import androidx.compose.animation.core.rememberInfiniteTransition
         import androidx.compose.foundation.background
@@ -59,7 +60,11 @@
         import androidx.compose.ui.text.withStyle
         import androidx.compose.foundation.ExperimentalFoundationApi
         import androidx.compose.foundation.combinedClickable
-    
+        import androidx.compose.material.icons.rounded.Check
+        import androidx.compose.material.icons.rounded.DeleteForever
+        import androidx.compose.material.icons.rounded.Flag
+        import com.darkhorses.PedalConnect.BuildConfig
+
         // ─────────────────────────────────────────────────────────────────────────────
         // Design Tokens — shared with RidingEventsScreen
         // ─────────────────────────────────────────────────────────────────────────────
@@ -70,14 +75,19 @@
         private val Green500    = Color(0xFF1A9E6E)
         private val Green100    = Color(0xFFDDF1E8)
         private val Green50     = Color(0xFFF0FAF5)
-        
+
         private val Amber500    = Color(0xFFF59E0B)
         private val Amber50     = Color(0xFFFFFBEB)
         private val Red600      = Color(0xFFDC2626)
         private val Red50       = Color(0xFFFEF2F2)
         private val Orange600   = Color(0xFFEA580C)
         private val Orange50    = Color(0xFFFFF7ED)
-        
+
+        private val SurfaceWhite   = Color(0xFFFFFFFF)
+        private val DangerRed      = Color(0xFFD32F2F)
+        private val DangerRedBg    = Color(0xFFFFEBEE)
+        private val AmberWarning   = Color(0xFFF59E0B)
+
         private val BgCanvas    = Color(0xFFF5F7F6)
         private val BgSurface   = Color(0xFFFFFFFF)
         private val TextPrimary   = Color(0xFF111827)
@@ -85,7 +95,7 @@
         private val TextMuted     = Color(0xFF6B7280)
         private val DividerColor  = Color(0xFFE5E7EB)
         private val BorderDefault = Color(0xFFD1D5DB)
-        
+
         // ─────────────────────────────────────────────────────────────────────────────
         // Weather helpers
         // ─────────────────────────────────────────────────────────────────────────────
@@ -96,7 +106,7 @@
             val rideAdvice: String  = "Checking conditions…",
             val isLoading: Boolean  = true
         )
-        
+
         private fun weatherFromCode(code: Int, isDay: Boolean): Pair<String, String> = when (code) {
             0         -> if (isDay) Pair("☀️", "Clear Sky")    else Pair("🌙", "Clear Night")
             1         -> if (isDay) Pair("🌤", "Mostly Clear") else Pair("🌙", "Mostly Clear")
@@ -110,7 +120,7 @@
             in 95..99 -> Pair("⛈", "Thunderstorm")
             else      -> Pair("🌡", "Unknown")
         }
-        
+
         private fun rideAdvice(code: Int, tempC: Int): String = when {
             code in 95..99  -> "⚠️ Thunderstorm — avoid riding today"
             code in 61..82  -> "🌧 Rainy — ride with caution"
@@ -120,12 +130,12 @@
             tempC in 22..29 -> "✅ Great conditions for a ride!"
             else            -> "🌤 Good to ride — dress appropriately"
         }
-        
+
         // ─────────────────────────────────────────────────────────────────────────────
         // Data models (unchanged)
         // ─────────────────────────────────────────────────────────────────────────────
         typealias PostItem = Post
-    
+
         data class NotificationItem(
             val id: String       = "",
             val message: String  = "",
@@ -159,7 +169,7 @@
                 else            -> "?"
             }
         }
-        
+
         // ─────────────────────────────────────────────────────────────────────────────
         // Homepage
         // ─────────────────────────────────────────────────────────────────────────────
@@ -210,6 +220,16 @@
             var showDeleteDialog by remember { mutableStateOf(false) }
             var deletingPost by remember { mutableStateOf<PostItem?>(null) }
             var isDeletingPost by remember { mutableStateOf(false) }
+
+// Reason dialog state — shared by admin delete and user report
+            val deleteReasons = listOf("Spam", "Inappropriate Content", "Swearing / Offensive Language", "Harassment", "Misinformation", "Other")
+            val reportReasons = listOf("Spam", "Swearing / Offensive Language", "Harassment", "False Information", "Misleading Content", "Other")
+            var showReasonDialog by remember { mutableStateOf(false) }
+            var reasonDialogMode by remember { mutableStateOf("") } // "admin_delete" or "user_report"
+            var reasonDialogPost by remember { mutableStateOf<PostItem?>(null) }
+            var selectedReason by remember { mutableStateOf("") }
+            var otherReasonText by remember { mutableStateOf("") }
+            var reasonDialogError by remember { mutableStateOf<String?>(null) }
 
             var isRefreshing by remember { mutableStateOf(false) }
             var isLoadingFeed by remember { mutableStateOf(true) }
@@ -450,6 +470,7 @@
                         val pending = snapshot?.documents
                             ?.mapNotNull { doc ->
                                 val poly = doc.safePolyline()
+                                android.util.Log.d("POLY_DEBUG", "id=${doc.id} polyline size=${poly.size} routeImageUrl='${doc.getString("routeImageUrl")}'")
                                 Post(
                                     id = doc.id,
                                     userName = doc.getString("userName") ?: "",
@@ -688,7 +709,7 @@
                     }
             }
 
-            fun deletePost() {
+            fun deletePost(adminReason: String? = null) {
                 val post = deletingPost ?: return
                 isDeletingPost = true
                 db.collection("posts").document(post.id).delete()
@@ -697,23 +718,20 @@
                         posts.removeAll { it.id == post.id }
                         Toast.makeText(context, "Post deleted.", Toast.LENGTH_SHORT).show()
                         if (isAdmin) {
-                            db.collection("users").whereEqualTo("username", post.userName)
-                                .limit(1).get()
-                                .addOnSuccessListener { snap ->
-                                    val displayName = snap.documents.firstOrNull()
-                                        ?.getString("displayName")?.takeIf { it.isNotBlank() }
-                                        ?: post.userName
-                                    db.collection("notifications").add(
-                                        hashMapOf(
-                                            "userName" to post.userName,
-                                            "message" to "Your post was permanently removed by an admin for violating community guidelines.",
-                                            "type" to "moderation",
-                                            "timestamp" to System.currentTimeMillis(),
-                                            "read" to false,
-                                            "postId" to post.id
-                                        )
-                                    )
-                                }
+                            val message = if (adminReason != null)
+                                "Your post was removed by an admin. Reason: $adminReason"
+                            else
+                                "Your post was permanently removed by an admin for violating community guidelines."
+                            db.collection("notifications").add(
+                                hashMapOf(
+                                    "userName" to post.userName,
+                                    "message" to message,
+                                    "type" to "moderation",
+                                    "timestamp" to System.currentTimeMillis(),
+                                    "read" to false,
+                                    "postId" to post.id
+                                )
+                            )
                         }
                         // Clean up ImgBB image if one exists
                         if (post.imageDeleteUrl.isNotBlank()) {
@@ -815,8 +833,6 @@
                 db.collection("posts").document(selectedPostId).collection("comments")
                     .add(payload)
                     .addOnSuccessListener {
-                        db.collection("posts").document(selectedPostId)
-                            .update("comments", FieldValue.increment(1))
 
                         // Fetch commenter's display name once, then send notifications
                         db.collection("users").whereEqualTo("username", userName)
@@ -1099,6 +1115,23 @@
                 var editingComment by remember { mutableStateOf<CommentItem?>(null) }
                 var editCommentText by remember { mutableStateOf("") }
                 var deletingComment by remember { mutableStateOf<CommentItem?>(null) }
+                var showCommentReasonDialog by remember { mutableStateOf(false) }
+                var commentReasonTarget by remember { mutableStateOf<CommentItem?>(null) }
+                var selectedCommentReason by remember { mutableStateOf("") }
+                var otherCommentReasonText by remember { mutableStateOf("") }
+                var commentReasonError by remember { mutableStateOf<String?>(null) }
+
+                var showHideCommentReasonDialog by remember { mutableStateOf(false) }
+                var hideCommentReasonTarget by remember { mutableStateOf<CommentItem?>(null) }
+                var selectedHideCommentReason by remember { mutableStateOf("") }
+                var otherHideCommentReasonText by remember { mutableStateOf("") }
+                var hideCommentReasonError by remember { mutableStateOf<String?>(null) }
+
+                var showCommentReportDialog by remember { mutableStateOf(false) }
+                var commentReportTarget by remember { mutableStateOf<CommentItem?>(null) }
+                var selectedCommentReportReason by remember { mutableStateOf("") }
+                var otherCommentReportReasonText by remember { mutableStateOf("") }
+                var commentReportReasonError by remember { mutableStateOf<String?>(null) }
                 var contextMenuComment by remember { mutableStateOf<CommentItem?>(null) }
                 val contextSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
@@ -1314,6 +1347,604 @@
                     )
                 }
 
+                // ── Admin comment delete reason dialog ───────────────────────────────
+                if (showCommentReasonDialog && commentReasonTarget != null) {
+                    val commentDeleteReasons = listOf("Swearing / Offensive Language", "Harassment", "Spam", "Personal Attack", "Inappropriate Content", "Other")
+                    AlertDialog(
+                        onDismissRequest = {
+                            showCommentReasonDialog = false
+                            commentReasonTarget = null
+                            selectedCommentReason = ""
+                            otherCommentReasonText = ""
+                            commentReasonError = null
+                        },
+                        shape = RoundedCornerShape(20.dp),
+                        containerColor = SurfaceWhite,
+                        icon = {
+                            Box(
+                                Modifier.size(56.dp).background(DangerRedBg, CircleShape),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    Icons.Rounded.DeleteForever, null,
+                                    tint = DangerRed, modifier = Modifier.size(28.dp)
+                                )
+                            }
+                        },
+                        title = {
+                            Text(
+                                "Delete Comment",
+                                fontWeight = FontWeight.ExtraBold, fontSize = 18.sp,
+                                color = TextPrimary, textAlign = TextAlign.Center,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        },
+                        text = {
+                            Column(
+                                verticalArrangement = Arrangement.spacedBy(10.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text(
+                                    "Select a reason for removing this comment:",
+                                    fontSize = 13.sp, color = TextSecondary
+                                )
+                                commentDeleteReasons.forEach { reason ->
+                                    val isSelected = selectedCommentReason == reason
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clip(RoundedCornerShape(10.dp))
+                                            .background(if (isSelected) DangerRedBg else Color(0xFFF3F4F6))
+                                            .clickable {
+                                                selectedCommentReason = reason
+                                                if (reason != "Other") otherCommentReasonText = ""
+                                                commentReasonError = null
+                                            }
+                                            .padding(horizontal = 14.dp, vertical = 12.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                    ) {
+                                        Box(
+                                            modifier = Modifier.size(20.dp).clip(CircleShape)
+                                                .background(if (isSelected) DangerRed else Color(0xFFD1D5DB)),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            if (isSelected) {
+                                                Icon(
+                                                    Icons.Rounded.Check, null,
+                                                    tint = Color.White, modifier = Modifier.size(12.dp)
+                                                )
+                                            }
+                                        }
+                                        Text(
+                                            reason, fontSize = 14.sp,
+                                            fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                                            color = TextPrimary
+                                        )
+                                    }
+                                }
+                                AnimatedVisibility(visible = selectedCommentReason == "Other") {
+                                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                        OutlinedTextField(
+                                            value = otherCommentReasonText,
+                                            onValueChange = {
+                                                if (it.length <= 150) {
+                                                    otherCommentReasonText = it
+                                                    commentReasonError = null
+                                                }
+                                            },
+                                            placeholder = {
+                                                Text("Please describe the issue…", fontSize = 13.sp,
+                                                    color = TextSecondary.copy(alpha = 0.5f))
+                                            },
+                                            singleLine = false, maxLines = 3,
+                                            shape = RoundedCornerShape(10.dp),
+                                            colors = OutlinedTextFieldDefaults.colors(
+                                                focusedBorderColor = DangerRed,
+                                                unfocusedBorderColor = DividerColor,
+                                                focusedTextColor = TextPrimary,
+                                                unfocusedTextColor = TextPrimary
+                                            ),
+                                            modifier = Modifier.fillMaxWidth()
+                                        )
+                                        Text(
+                                            "${otherCommentReasonText.length}/150",
+                                            fontSize = 10.sp,
+                                            color = if (otherCommentReasonText.length >= 140) AmberWarning else TextSecondary,
+                                            modifier = Modifier.align(Alignment.End)
+                                        )
+                                    }
+                                }
+                                AnimatedVisibility(visible = commentReasonError != null) {
+                                    Text(commentReasonError ?: "", fontSize = 12.sp, color = DangerRed)
+                                }
+                            }
+                        },
+                        confirmButton = {
+                            Column(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Button(
+                                    onClick = {
+                                        if (selectedCommentReason.isBlank()) {
+                                            commentReasonError = "Please select a reason."
+                                            return@Button
+                                        }
+                                        if (selectedCommentReason == "Other" && otherCommentReasonText.trim().length < 10) {
+                                            commentReasonError = "Please describe the issue (min 10 characters)."
+                                            return@Button
+                                        }
+                                        val finalReason = if (selectedCommentReason == "Other")
+                                            otherCommentReasonText.trim() else selectedCommentReason
+                                        val c = commentReasonTarget ?: return@Button
+                                        showCommentReasonDialog = false
+                                        db.collection("posts").document(selectedPostId)
+                                            .collection("comments").document(c.id).delete()
+                                            .addOnSuccessListener {
+                                                db.collection("posts").document(selectedPostId)
+                                                    .update("comments", FieldValue.increment(-1))
+                                                db.collection("notifications").add(
+                                                    hashMapOf(
+                                                        "userName" to c.userName,
+                                                        "message" to "Your comment was removed by an admin. Reason: $finalReason",
+                                                        "type" to "moderation",
+                                                        "timestamp" to System.currentTimeMillis(),
+                                                        "read" to false
+                                                    )
+                                                )
+                                                commentReasonTarget = null
+                                                selectedCommentReason = ""
+                                                otherCommentReasonText = ""
+                                                commentReasonError = null
+                                            }
+                                    },
+                                    modifier = Modifier.fillMaxWidth().height(48.dp),
+                                    shape = RoundedCornerShape(12.dp),
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = DangerRed, contentColor = Color.White
+                                    )
+                                ) {
+                                    Text("Delete Comment", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                                }
+                                OutlinedButton(
+                                    onClick = {
+                                        showCommentReasonDialog = false
+                                        commentReasonTarget = null
+                                        selectedCommentReason = ""
+                                        otherCommentReasonText = ""
+                                        commentReasonError = null
+                                    },
+                                    modifier = Modifier.fillMaxWidth().height(44.dp),
+                                    shape = RoundedCornerShape(12.dp)
+                                ) {
+                                    Text("Cancel", color = TextSecondary, fontWeight = FontWeight.Medium)
+                                }
+                            }
+                        }
+                    )
+                }
+
+
+
+                // ── Admin hide comment reason dialog ─────────────────────────────────
+                if (showHideCommentReasonDialog && hideCommentReasonTarget != null) {
+                    val commentHideReasons = listOf("Swearing / Offensive Language", "Harassment", "Spam", "Personal Attack", "Inappropriate Content", "Other")
+                    AlertDialog(
+                        onDismissRequest = {
+                            showHideCommentReasonDialog = false
+                            hideCommentReasonTarget = null
+                            selectedHideCommentReason = ""
+                            otherHideCommentReasonText = ""
+                            hideCommentReasonError = null
+                        },
+                        shape = RoundedCornerShape(20.dp),
+                        containerColor = SurfaceWhite,
+                        icon = {
+                            Box(
+                                Modifier.size(56.dp).background(Amber50, CircleShape),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    Icons.Default.VisibilityOff, null,
+                                    tint = Amber500, modifier = Modifier.size(28.dp)
+                                )
+                            }
+                        },
+                        title = {
+                            Text(
+                                "Hide Comment",
+                                fontWeight = FontWeight.ExtraBold, fontSize = 18.sp,
+                                color = TextPrimary, textAlign = TextAlign.Center,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        },
+                        text = {
+                            Column(
+                                verticalArrangement = Arrangement.spacedBy(10.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text(
+                                    "Select a reason for hiding this comment:",
+                                    fontSize = 13.sp, color = TextSecondary
+                                )
+                                commentHideReasons.forEach { reason ->
+                                    val isSelected = selectedHideCommentReason == reason
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clip(RoundedCornerShape(10.dp))
+                                            .background(if (isSelected) Amber50 else Color(0xFFF3F4F6))
+                                            .clickable {
+                                                selectedHideCommentReason = reason
+                                                if (reason != "Other") otherHideCommentReasonText = ""
+                                                hideCommentReasonError = null
+                                            }
+                                            .padding(horizontal = 14.dp, vertical = 12.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                    ) {
+                                        Box(
+                                            modifier = Modifier.size(20.dp).clip(CircleShape)
+                                                .background(if (isSelected) Amber500 else Color(0xFFD1D5DB)),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            if (isSelected) {
+                                                Icon(
+                                                    Icons.Rounded.Check, null,
+                                                    tint = Color.White, modifier = Modifier.size(12.dp)
+                                                )
+                                            }
+                                        }
+                                        Text(
+                                            reason, fontSize = 14.sp,
+                                            fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                                            color = TextPrimary
+                                        )
+                                    }
+                                }
+                                AnimatedVisibility(visible = selectedHideCommentReason == "Other") {
+                                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                        OutlinedTextField(
+                                            value = otherHideCommentReasonText,
+                                            onValueChange = {
+                                                if (it.length <= 150) {
+                                                    otherHideCommentReasonText = it
+                                                    hideCommentReasonError = null
+                                                }
+                                            },
+                                            placeholder = {
+                                                Text("Please describe the issue…", fontSize = 13.sp,
+                                                    color = TextSecondary.copy(alpha = 0.5f))
+                                            },
+                                            singleLine = false, maxLines = 3,
+                                            shape = RoundedCornerShape(10.dp),
+                                            colors = OutlinedTextFieldDefaults.colors(
+                                                focusedBorderColor = Amber500,
+                                                unfocusedBorderColor = DividerColor,
+                                                focusedTextColor = TextPrimary,
+                                                unfocusedTextColor = TextPrimary
+                                            ),
+                                            modifier = Modifier.fillMaxWidth()
+                                        )
+                                        Text(
+                                            "${otherHideCommentReasonText.length}/150",
+                                            fontSize = 10.sp,
+                                            color = if (otherHideCommentReasonText.length >= 140) AmberWarning else TextSecondary,
+                                            modifier = Modifier.align(Alignment.End)
+                                        )
+                                    }
+                                }
+                                AnimatedVisibility(visible = hideCommentReasonError != null) {
+                                    Text(hideCommentReasonError ?: "", fontSize = 12.sp, color = DangerRed)
+                                }
+                            }
+                        },
+                        confirmButton = {
+                            Column(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Button(
+                                    onClick = {
+                                        if (selectedHideCommentReason.isBlank()) {
+                                            hideCommentReasonError = "Please select a reason."
+                                            return@Button
+                                        }
+                                        if (selectedHideCommentReason == "Other" && otherHideCommentReasonText.trim().length < 10) {
+                                            hideCommentReasonError = "Please describe the issue (min 10 characters)."
+                                            return@Button
+                                        }
+                                        val finalReason = if (selectedHideCommentReason == "Other")
+                                            otherHideCommentReasonText.trim() else selectedHideCommentReason
+                                        val c = hideCommentReasonTarget ?: return@Button
+                                        showHideCommentReasonDialog = false
+                                        db.collection("posts").document(selectedPostId)
+                                            .collection("comments").document(c.id)
+                                            .update("status", "hidden")
+                                            .addOnSuccessListener {
+                                                db.collection("posts").document(selectedPostId)
+                                                    .update("comments", FieldValue.increment(-1))
+                                                db.collection("notifications").add(
+                                                    hashMapOf(
+                                                        "userName" to c.userName,
+                                                        "message" to "Your comment was hidden by an admin. Reason: $finalReason",
+                                                        "type" to "moderation",
+                                                        "timestamp" to System.currentTimeMillis(),
+                                                        "read" to false
+                                                    )
+                                                )
+                                                hideCommentReasonTarget = null
+                                                selectedHideCommentReason = ""
+                                                otherHideCommentReasonText = ""
+                                                hideCommentReasonError = null
+                                                contextMenuComment = null
+                                            }
+                                    },
+                                    modifier = Modifier.fillMaxWidth().height(48.dp),
+                                    shape = RoundedCornerShape(12.dp),
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = Amber500, contentColor = Color.White
+                                    )
+                                ) {
+                                    Text("Hide Comment", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                                }
+                                OutlinedButton(
+                                    onClick = {
+                                        showHideCommentReasonDialog = false
+                                        hideCommentReasonTarget = null
+                                        selectedHideCommentReason = ""
+                                        otherHideCommentReasonText = ""
+                                        hideCommentReasonError = null
+                                    },
+                                    modifier = Modifier.fillMaxWidth().height(44.dp),
+                                    shape = RoundedCornerShape(12.dp)
+                                ) {
+                                    Text("Cancel", color = TextSecondary, fontWeight = FontWeight.Medium)
+                                }
+                            }
+                        }
+                    )
+                }
+
+                // ── User comment report reason dialog ────────────────────────────────
+                if (showCommentReportDialog && commentReportTarget != null) {
+                    val commentReportReasons = listOf(
+                        "Swearing / Offensive Language",
+                        "Harassment",
+                        "Spam",
+                        "Personal Attack",
+                        "Inappropriate Content",
+                        "Other"
+                    )
+                    val c = commentReportTarget!!
+                    AlertDialog(
+                        onDismissRequest = {
+                            showCommentReportDialog = false
+                            commentReportTarget = null
+                            selectedCommentReportReason = ""
+                            otherCommentReportReasonText = ""
+                            commentReportReasonError = null
+                        },
+                        shape = RoundedCornerShape(20.dp),
+                        containerColor = SurfaceWhite,
+                        icon = {
+                            Box(
+                                Modifier.size(56.dp).background(Color(0xFFFFF7ED), CircleShape),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    Icons.Default.Flag, null,
+                                    tint = Orange600, modifier = Modifier.size(28.dp)
+                                )
+                            }
+                        },
+                        title = {
+                            Text(
+                                "Report Comment",
+                                fontWeight = FontWeight.ExtraBold, fontSize = 18.sp,
+                                color = TextPrimary, textAlign = TextAlign.Center,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        },
+                        text = {
+                            Column(
+                                verticalArrangement = Arrangement.spacedBy(10.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text(
+                                    "Why are you reporting this comment?",
+                                    fontSize = 13.sp, color = TextSecondary
+                                )
+                                commentReportReasons.forEach { reason ->
+                                    val isSelected = selectedCommentReportReason == reason
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clip(RoundedCornerShape(10.dp))
+                                            .background(if (isSelected) Color(0xFFFFF7ED) else Color(0xFFF3F4F6))
+                                            .clickable {
+                                                selectedCommentReportReason = reason
+                                                if (reason != "Other") otherCommentReportReasonText = ""
+                                                commentReportReasonError = null
+                                            }
+                                            .padding(horizontal = 14.dp, vertical = 12.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                    ) {
+                                        Box(
+                                            modifier = Modifier.size(20.dp).clip(CircleShape)
+                                                .background(if (isSelected) Orange600 else Color(0xFFD1D5DB)),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            if (isSelected) {
+                                                Icon(
+                                                    Icons.Rounded.Check, null,
+                                                    tint = Color.White, modifier = Modifier.size(12.dp)
+                                                )
+                                            }
+                                        }
+                                        Text(
+                                            reason, fontSize = 14.sp,
+                                            fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                                            color = TextPrimary
+                                        )
+                                    }
+                                }
+                                AnimatedVisibility(visible = selectedCommentReportReason == "Other") {
+                                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                        OutlinedTextField(
+                                            value = otherCommentReportReasonText,
+                                            onValueChange = {
+                                                if (it.length <= 150) {
+                                                    otherCommentReportReasonText = it
+                                                    commentReportReasonError = null
+                                                }
+                                            },
+                                            placeholder = {
+                                                Text("Please describe the issue…", fontSize = 13.sp,
+                                                    color = TextSecondary.copy(alpha = 0.5f))
+                                            },
+                                            singleLine = false, maxLines = 3,
+                                            shape = RoundedCornerShape(10.dp),
+                                            colors = OutlinedTextFieldDefaults.colors(
+                                                focusedBorderColor = Orange600,
+                                                unfocusedBorderColor = DividerColor,
+                                                focusedTextColor = TextPrimary,
+                                                unfocusedTextColor = TextPrimary
+                                            ),
+                                            modifier = Modifier.fillMaxWidth()
+                                        )
+                                        Text(
+                                            "${otherCommentReportReasonText.length}/150",
+                                            fontSize = 10.sp,
+                                            color = if (otherCommentReportReasonText.length >= 140) AmberWarning else TextSecondary,
+                                            modifier = Modifier.align(Alignment.End)
+                                        )
+                                    }
+                                }
+                                AnimatedVisibility(visible = commentReportReasonError != null) {
+                                    Text(commentReportReasonError ?: "", fontSize = 12.sp, color = DangerRed)
+                                }
+                            }
+                        },
+                        confirmButton = {
+                            Column(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Button(
+                                    onClick = {
+                                        if (selectedCommentReportReason.isBlank()) {
+                                            commentReportReasonError = "Please select a reason."
+                                            return@Button
+                                        }
+                                        if (selectedCommentReportReason == "Other" && otherCommentReportReasonText.trim().length < 10) {
+                                            commentReportReasonError = "Please describe the issue (min 10 characters)."
+                                            return@Button
+                                        }
+                                        val finalReason = if (selectedCommentReportReason == "Other")
+                                            otherCommentReportReasonText.trim() else selectedCommentReportReason
+                                        showCommentReportDialog = false
+                                        val reportRef = db.collection("reportedComments")
+                                        reportRef.add(
+                                            hashMapOf(
+                                                "commentId"  to c.id,
+                                                "postId"     to selectedPostId,
+                                                "reportedBy" to userName,
+                                                "userName"   to c.userName,
+                                                "text"       to c.text,
+                                                "reason"     to finalReason,
+                                                "timestamp"  to System.currentTimeMillis()
+                                            )
+                                        ).addOnSuccessListener {
+                                            Toast.makeText(context, "Comment reported.", Toast.LENGTH_SHORT).show()
+                                            reportRef.whereEqualTo("commentId", c.id).get()
+                                                .addOnSuccessListener { snap ->
+                                                    val count = snap.size()
+                                                    if (count >= 3) {
+                                                        db.collection("posts").document(selectedPostId)
+                                                            .collection("comments").document(c.id)
+                                                            .update("status", "hidden")
+                                                        db.collection("posts").document(selectedPostId)
+                                                            .update("comments", FieldValue.increment(-1))
+                                                        db.collection("users")
+                                                            .whereEqualTo("username", c.userName)
+                                                            .limit(1).get()
+                                                            .addOnSuccessListener { authorSnap ->
+                                                                val authorDisplay = authorSnap.documents.firstOrNull()
+                                                                    ?.getString("displayName")?.takeIf { it.isNotBlank() } ?: c.userName
+                                                                db.collection("notifications").add(hashMapOf(
+                                                                    "userName"  to "Admin",
+                                                                    "message"   to "⚠️ Comment by $authorDisplay was auto-hidden after $count reports. Last reason: $finalReason",
+                                                                    "type"      to "alert",
+                                                                    "timestamp" to System.currentTimeMillis(),
+                                                                    "read"      to false
+                                                                ))
+                                                                db.collection("notifications").add(hashMapOf(
+                                                                    "userName"  to c.userName,
+                                                                    "message"   to "Your comment was hidden by the community. Reason: $finalReason",
+                                                                    "type"      to "moderation",
+                                                                    "timestamp" to System.currentTimeMillis(),
+                                                                    "read"      to false
+                                                                ))
+                                                            }
+                                                    } else {
+                                                        db.collection("users")
+                                                            .whereEqualTo("username", userName)
+                                                            .limit(1).get()
+                                                            .addOnSuccessListener { reporterSnap ->
+                                                                val reporterDisplay = reporterSnap.documents.firstOrNull()
+                                                                    ?.getString("displayName")?.takeIf { it.isNotBlank() } ?: userName
+                                                                db.collection("users")
+                                                                    .whereEqualTo("username", c.userName)
+                                                                    .limit(1).get()
+                                                                    .addOnSuccessListener { authorSnap ->
+                                                                        val authorDisplay = authorSnap.documents.firstOrNull()
+                                                                            ?.getString("displayName")?.takeIf { it.isNotBlank() } ?: c.userName
+                                                                        db.collection("notifications").add(hashMapOf(
+                                                                            "userName"  to "Admin",
+                                                                            "message"   to "🚩 $reporterDisplay reported a comment by $authorDisplay. ($count/3 reports) Reason: $finalReason",
+                                                                            "type"      to "alert",
+                                                                            "timestamp" to System.currentTimeMillis(),
+                                                                            "read"      to false
+                                                                        ))
+                                                                    }
+                                                            }
+                                                    }
+                                                }
+                                            commentReportTarget = null
+                                            selectedCommentReportReason = ""
+                                            otherCommentReportReasonText = ""
+                                            commentReportReasonError = null
+                                        }
+                                    },
+                                    modifier = Modifier.fillMaxWidth().height(48.dp),
+                                    shape = RoundedCornerShape(12.dp),
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = Orange600, contentColor = Color.White
+                                    )
+                                ) {
+                                    Text("Submit Report", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                                }
+                                OutlinedButton(
+                                    onClick = {
+                                        showCommentReportDialog = false
+                                        commentReportTarget = null
+                                        selectedCommentReportReason = ""
+                                        otherCommentReportReasonText = ""
+                                        commentReportReasonError = null
+                                    },
+                                    modifier = Modifier.fillMaxWidth().height(44.dp),
+                                    shape = RoundedCornerShape(12.dp)
+                                ) {
+                                    Text("Cancel", color = TextSecondary, fontWeight = FontWeight.Medium)
+                                }
+                            }
+                        }
+                    )
+                }
+
                 // ── Long-press context sheet ──────────────────────────────────────────
                 if (contextMenuComment != null) {
                     val c = contextMenuComment!!
@@ -1498,96 +2129,33 @@
                                             indication = null,
                                             enabled = !isAlreadyReported.value && !isReporting.value
                                         ) {
-                                            isReporting.value = true
-                                            val reportRef = db.collection("reportedComments")
-                                            reportRef.add(
-                                                hashMapOf(
-                                                    "commentId" to c.id,
-                                                    "postId" to selectedPostId,
-                                                    "reportedBy" to userName,
-                                                    "userName" to c.userName,
-                                                    "text" to c.text,
-                                                    "timestamp" to System.currentTimeMillis()
-                                                )
-                                            ).addOnSuccessListener {
-                                                isAlreadyReported.value = true
-                                                isReporting.value = false
-                                                Toast.makeText(context, "Comment reported.", Toast.LENGTH_SHORT).show()
+                                            commentReportTarget = c
+                                            selectedCommentReportReason = ""
+                                            otherCommentReportReasonText = ""
+                                            commentReportReasonError = null
+                                            showCommentReportDialog = true
+                                            contextMenuComment = null
+                                        {
+                                            if (!isAlreadyReported.value && !isReporting.value) {
+                                                commentReportTarget = c
+                                                selectedCommentReportReason = ""
+                                                otherCommentReportReasonText = ""
+                                                commentReportReasonError = null
+                                                showCommentReportDialog = true
                                                 contextMenuComment = null
-                                                // Check total reports on this comment
-                                                reportRef.whereEqualTo("commentId", c.id).get()
-                                                    .addOnSuccessListener { snap ->
-                                                        val count = snap.size()
-                                                        if (count >= 3) {
-                                                            // Auto-hide the comment
-                                                            db.collection("posts")
-                                                                .document(selectedPostId)
-                                                                .collection("comments")
-                                                                .document(c.id)
-                                                                .update("status", "hidden")
-                                                            // Decrement comment count on post
-                                                            db.collection("posts")
-                                                                .document(selectedPostId)
-                                                                .update(
-                                                                    "comments",
-                                                                    FieldValue.increment(-1)
-                                                                )
-                                                            // Notify admin — fetch display name first
-                                                            db.collection("users")
-                                                                .whereEqualTo("username", c.userName)
-                                                                .limit(1).get()
-                                                                .addOnSuccessListener { authorSnap ->
-                                                                    val authorDisplay = authorSnap.documents.firstOrNull()
-                                                                        ?.getString("displayName")?.takeIf { it.isNotBlank() } ?: c.userName
-                                                                    db.collection("notifications").add(
-                                                                        hashMapOf(
-                                                                            "userName" to "Admin",
-                                                                            "message" to "⚠️ Comment by $authorDisplay was auto-hidden after $count reports: \"${c.text.take(60)}\"",
-                                                                            "type" to "alert",
-                                                                            "timestamp" to System.currentTimeMillis(),
-                                                                            "read" to false
-                                                                        )
-                                                                    )
-                                                                }
-                                                        } else {
-                                                            // Notify admin of new report — fetch display names first
-                                                            db.collection("users")
-                                                                .whereEqualTo("username", userName)
-                                                                .limit(1).get()
-                                                                .addOnSuccessListener { reporterSnap ->
-                                                                    val reporterDisplay = reporterSnap.documents.firstOrNull()
-                                                                        ?.getString("displayName")?.takeIf { it.isNotBlank() } ?: userName
-                                                                    db.collection("users")
-                                                                        .whereEqualTo("username", c.userName)
-                                                                        .limit(1).get()
-                                                                        .addOnSuccessListener { authorSnap ->
-                                                                            val authorDisplay = authorSnap.documents.firstOrNull()
-                                                                                ?.getString("displayName")?.takeIf { it.isNotBlank() } ?: c.userName
-                                                                            db.collection("notifications").add(
-                                                                                hashMapOf(
-                                                                                    "userName" to "Admin",
-                                                                                    "message" to "🚩 $reporterDisplay reported a comment by $authorDisplay. ($count/3 reports): \"${c.text.take(60)}\"",
-                                                                                    "type" to "alert",
-                                                                                    "timestamp" to System.currentTimeMillis(),
-                                                                                    "read" to false
-                                                                                )
-                                                                            )
-                                                                        }
-                                                                }
-                                                        }
-                                                    }
                                             }
-                                        }
-                                        .background(Color(0xFFF9FAFB))
-                                        .padding(horizontal = 16.dp, vertical = 16.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(14.dp)
-                                ) {
-                                    Box(
-                                        Modifier.size(40.dp).clip(RoundedCornerShape(12.dp))
-                                            .background(
-                                                when {
-                                                    isReporting.value -> Orange50
+                                 }
+                            }
+                                .background(Color(0xFFF9FAFB))
+                                .padding(horizontal = 16.dp, vertical = 16.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(14.dp)
+                            ) {
+                            Box(
+                                Modifier.size(40.dp).clip(RoundedCornerShape(12.dp))
+                                    .background(
+                                        when {
+                                            isReporting.value -> Orange50
                                                     isAlreadyReported.value -> Color(0xFFF3F4F6)
                                                     else -> Orange50
                                                 }
@@ -1645,23 +2213,11 @@
                                             interactionSource = remember { MutableInteractionSource() },
                                             indication = null
                                         ) {
-                                            db.collection("posts").document(selectedPostId)
-                                                .collection("comments").document(c.id)
-                                                .update("status", "hidden")
-                                                .addOnSuccessListener {
-                                                    db.collection("posts").document(selectedPostId)
-                                                        .update("comments", FieldValue.increment(-1))
-                                                    db.collection("notifications").add(
-                                                        hashMapOf(
-                                                            "userName" to c.userName,
-                                                            "message" to "Your comment was hidden by an admin for violating community guidelines.",
-                                                            "type" to "moderation",
-                                                            "timestamp" to System.currentTimeMillis(),
-                                                            "read" to false
-                                                        )
-                                                    )
-                                                    contextMenuComment = null
-                                                }
+                                            hideCommentReasonTarget = c
+                                            selectedHideCommentReason = ""
+                                            otherHideCommentReasonText = ""
+                                            hideCommentReasonError = null
+                                            showHideCommentReasonDialog = true
                                         }
                                         .background(Color(0xFFF9FAFB))
                                         .padding(horizontal = 16.dp, vertical = 16.dp),
@@ -1758,7 +2314,15 @@
                                         interactionSource = remember { MutableInteractionSource() },
                                         indication = null
                                     ) {
-                                        deletingComment = c
+                                        if (isAdmin && c.userName != userName) {
+                                            commentReasonTarget = c
+                                            selectedCommentReason = ""
+                                            otherCommentReasonText = ""
+                                            commentReasonError = null
+                                            showCommentReasonDialog = true
+                                        } else {
+                                            deletingComment = c
+                                        }
                                         contextMenuComment = null
                                     }
                                     .background(Color(0xFFF9FAFB))
@@ -2042,48 +2606,51 @@
                                                     fontSize = 10.sp,
                                                     color = TextMuted
                                                 )
-                                                Row(
-                                                    verticalAlignment = Alignment.CenterVertically,
-                                                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                                                    modifier = Modifier
-                                                        .clickable(
-                                                            interactionSource = remember { MutableInteractionSource() },
-                                                            indication = null
-                                                        ) { toggleCommentLike(comment) }
-                                                        .padding(vertical = 2.dp)
-                                                ) {
-                                                    Icon(
-                                                        if (isLiked) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
-                                                        null,
-                                                        tint = if (isLiked) Color(0xFFEF4444) else TextMuted,
-                                                        modifier = Modifier.size(13.dp)
-                                                    )
-                                                    if (comment.likes > 0) {
-                                                        Text(
-                                                            "${comment.likes}",
-                                                            fontSize = 11.sp,
-                                                            color = if (isLiked) Color(0xFFEF4444) else TextMuted
+                                                if (!isAdmin) {
+                                                    Row(
+                                                        verticalAlignment = Alignment.CenterVertically,
+                                                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                                        modifier = Modifier
+                                                            .clickable(
+                                                                interactionSource = remember { MutableInteractionSource() },
+                                                                indication = null
+                                                            ) { toggleCommentLike(comment) }
+                                                            .padding(vertical = 2.dp)
+                                                    ) {
+                                                        Icon(
+                                                            if (isLiked) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                                                            null,
+                                                            tint = if (isLiked) Color(0xFFEF4444) else TextMuted,
+                                                            modifier = Modifier.size(13.dp)
                                                         )
+                                                        if (comment.likes > 0) {
+                                                            Text(
+                                                                "${comment.likes}",
+                                                                fontSize = 11.sp,
+                                                                color = if (isLiked) Color(0xFFEF4444) else TextMuted
+                                                            )
+                                                        }
                                                     }
                                                 }
-                                                Text(
-                                                    "Reply",
-                                                    fontSize = 11.sp,
-                                                    fontWeight = FontWeight.SemiBold,
-                                                    color = TextMuted,
-                                                    modifier = Modifier
-                                                        .clickable(
-                                                            interactionSource = remember { MutableInteractionSource() },
-                                                            indication = null
-                                                        ) {
-                                                            replyingTo = comment
-                                                            replyParentId = comment.id
-                                                            // Auto-expand replies when user starts replying
-                                                            expandedReplies =
-                                                                expandedReplies + comment.id
-                                                        }
-                                                        .padding(vertical = 2.dp)
-                                                )
+                                                if (!isAdmin) {
+                                                    Text(
+                                                        "Reply",
+                                                        fontSize = 11.sp,
+                                                        fontWeight = FontWeight.SemiBold,
+                                                        color = TextMuted,
+                                                        modifier = Modifier
+                                                            .clickable(
+                                                                interactionSource = remember { MutableInteractionSource() },
+                                                                indication = null
+                                                            ) {
+                                                                replyingTo = comment
+                                                                replyParentId = comment.id
+                                                                expandedReplies =
+                                                                    expandedReplies + comment.id
+                                                            }
+                                                            .padding(vertical = 2.dp)
+                                                    )
+                                                }
                                             }
                                         }
                                     }
@@ -2290,34 +2857,30 @@
                                                                 fontSize = 10.sp,
                                                                 color = TextMuted
                                                             )
-                                                            Row(
-                                                                verticalAlignment = Alignment.CenterVertically,
-                                                                horizontalArrangement = Arrangement.spacedBy(
-                                                                    4.dp
-                                                                ),
-                                                                modifier = Modifier
-                                                                    .clickable(
-                                                                        interactionSource = remember { MutableInteractionSource() },
-                                                                        indication = null
-                                                                    ) { toggleCommentLike(reply) }
-                                                                    .padding(vertical = 2.dp)
-                                                            ) {
-                                                                Icon(
-                                                                    if (isReplyLiked) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
-                                                                    null,
-                                                                    tint = if (isReplyLiked) Color(
-                                                                        0xFFEF4444
-                                                                    ) else TextMuted,
-                                                                    modifier = Modifier.size(11.dp)
-                                                                )
-                                                                if (reply.likes > 0) {
-                                                                    Text(
-                                                                        "${reply.likes}",
-                                                                        fontSize = 10.sp,
-                                                                        color = if (isReplyLiked) Color(
-                                                                            0xFFEF4444
-                                                                        ) else TextMuted
+                                                            if (!isAdmin) {
+                                                                Row(
+                                                                    verticalAlignment = Alignment.CenterVertically,
+                                                                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                                                    modifier = Modifier
+                                                                        .clickable(
+                                                                            interactionSource = remember { MutableInteractionSource() },
+                                                                            indication = null
+                                                                        ) { toggleCommentLike(reply) }
+                                                                        .padding(vertical = 2.dp)
+                                                                ) {
+                                                                    Icon(
+                                                                        if (isReplyLiked) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                                                                        null,
+                                                                        tint = if (isReplyLiked) Color(0xFFEF4444) else TextMuted,
+                                                                        modifier = Modifier.size(11.dp)
                                                                     )
+                                                                    if (reply.likes > 0) {
+                                                                        Text(
+                                                                            "${reply.likes}",
+                                                                            fontSize = 10.sp,
+                                                                            color = if (isReplyLiked) Color(0xFFEF4444) else TextMuted
+                                                                        )
+                                                                    }
                                                                 }
                                                             }
                                                             Text(
@@ -2484,7 +3047,288 @@
 
             } // end Homepage
 
-            // ── Scaffold ──────────────────────────────────────────────────────────────
+            // ── Reason dialog (admin delete + user report) ────────────────────────────
+            if (showReasonDialog && reasonDialogPost != null) {
+                val isAdminDelete = reasonDialogMode == "admin_delete"
+                val reasons = if (isAdminDelete) deleteReasons else reportReasons
+                AlertDialog(
+                    onDismissRequest = {
+                        showReasonDialog = false
+                        reasonDialogPost = null
+                        selectedReason = ""
+                        otherReasonText = ""
+                        reasonDialogError = null
+                    },
+                    shape = RoundedCornerShape(20.dp),
+                    containerColor = SurfaceWhite,
+                    icon = {
+                        Box(
+                            Modifier.size(56.dp).background(
+                                if (isAdminDelete) DangerRedBg else Color(0xFFFFF7ED),
+                                CircleShape
+                            ),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                if (isAdminDelete) Icons.Rounded.DeleteForever else Icons.Rounded.Flag,
+                                null,
+                                tint = if (isAdminDelete) DangerRed else Color(0xFFEA580C),
+                                modifier = Modifier.size(28.dp)
+                            )
+                        }
+                    },
+                    title = {
+                        Text(
+                            if (isAdminDelete) "Delete Post" else "Report Post",
+                            fontWeight = FontWeight.ExtraBold,
+                            fontSize = 18.sp,
+                            color = TextPrimary,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    },
+                    text = {
+                        Column(
+                            verticalArrangement = Arrangement.spacedBy(10.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                if (isAdminDelete) "Select a reason for removing this post:"
+                                else "Why are you reporting this post?",
+                                fontSize = 13.sp,
+                                color = TextSecondary
+                            )
+                            reasons.forEach { reason ->
+                                val isSelected = selectedReason == reason
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(10.dp))
+                                        .background(
+                                            if (isSelected) {
+                                                if (isAdminDelete) DangerRedBg else Color(0xFFFFF7ED)
+                                            } else Color(0xFFF3F4F6)
+                                        )
+                                        .clickable {
+                                            selectedReason = reason
+                                            if (reason != "Other") otherReasonText = ""
+                                            reasonDialogError = null
+                                        }
+                                        .padding(horizontal = 14.dp, vertical = 12.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(20.dp)
+                                            .clip(CircleShape)
+                                            .background(
+                                                if (isSelected) {
+                                                    if (isAdminDelete) DangerRed else Color(0xFFEA580C)
+                                                } else Color(0xFFD1D5DB)
+                                            ),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        if (isSelected) {
+                                            Icon(
+                                                Icons.Rounded.Check, null,
+                                                tint = Color.White,
+                                                modifier = Modifier.size(12.dp)
+                                            )
+                                        }
+                                    }
+                                    Text(
+                                        reason,
+                                        fontSize = 14.sp,
+                                        fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                                        color = TextPrimary
+                                    )
+                                }
+                            }
+                            // "Other" free text field
+                            AnimatedVisibility(visible = selectedReason == "Other") {
+                                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    OutlinedTextField(
+                                        value = otherReasonText,
+                                        onValueChange = {
+                                            if (it.length <= 150) {
+                                                otherReasonText = it
+                                                reasonDialogError = null
+                                            }
+                                        },
+                                        placeholder = {
+                                            Text(
+                                                "Please describe the issue…",
+                                                fontSize = 13.sp,
+                                                color = TextSecondary.copy(alpha = 0.5f)
+                                            )
+                                        },
+                                        singleLine = false,
+                                        maxLines = 3,
+                                        shape = RoundedCornerShape(10.dp),
+                                        colors = OutlinedTextFieldDefaults.colors(
+                                            focusedBorderColor = if (isAdminDelete) DangerRed else Color(0xFFEA580C),
+                                            unfocusedBorderColor = DividerColor,
+                                            focusedTextColor = TextPrimary,
+                                            unfocusedTextColor = TextPrimary
+                                        ),
+                                        modifier = Modifier.fillMaxWidth()
+                                    )
+                                    Text(
+                                        "${otherReasonText.length}/150",
+                                        fontSize = 10.sp,
+                                        color = if (otherReasonText.length >= 140) AmberWarning else TextSecondary,
+                                        modifier = Modifier.align(Alignment.End)
+                                    )
+                                }
+                            }
+                            // Error
+                            AnimatedVisibility(visible = reasonDialogError != null) {
+                                Text(
+                                    reasonDialogError ?: "",
+                                    fontSize = 12.sp,
+                                    color = DangerRed
+                                )
+                            }
+                        }
+                    },
+                    confirmButton = {
+                        Column(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Button(
+                                onClick = {
+                                    // Validate
+                                    if (selectedReason.isBlank()) {
+                                        reasonDialogError = "Please select a reason."
+                                        return@Button
+                                    }
+                                    if (selectedReason == "Other" && otherReasonText.trim().length < 10) {
+                                        reasonDialogError = "Please describe the issue (min 10 characters)."
+                                        return@Button
+                                    }
+                                    val finalReason = if (selectedReason == "Other") otherReasonText.trim() else selectedReason
+                                    val post = reasonDialogPost ?: return@Button
+
+                                    if (isAdminDelete) {
+                                        deletingPost = post
+                                        showReasonDialog = false
+                                        deletePost(adminReason = finalReason)
+                                    } else {
+                                        // ── User report with reason ───────────────────────────
+                                        showReasonDialog = false
+                                        val db2 = FirebaseFirestore.getInstance()
+                                        db2.collection("reportedPosts").add(
+                                            hashMapOf(
+                                                "postId" to post.id,
+                                                "reportedBy" to userName,
+                                                "userName" to post.userName,
+                                                "displayName" to post.displayName.ifBlank { post.userName },
+                                                "reason" to finalReason,
+                                                "descriptionSnap" to post.description.take(200),
+                                                "timestamp" to System.currentTimeMillis()
+                                            )
+                                        ).addOnSuccessListener {
+                                            Toast.makeText(context, "Post reported.", Toast.LENGTH_SHORT).show()
+                                            db2.collection("reportedPosts")
+                                                .whereEqualTo("postId", post.id)
+                                                .get()
+                                                .addOnSuccessListener { snap ->
+                                                    val count = snap.size()
+                                                    db2.collection("users")
+                                                        .whereEqualTo("username", userName)
+                                                        .limit(1).get()
+                                                        .addOnSuccessListener { reporterSnap ->
+                                                            val reporterDisplay = reporterSnap.documents.firstOrNull()
+                                                                ?.getString("displayName")?.takeIf { it.isNotBlank() } ?: userName
+                                                            db2.collection("users")
+                                                                .whereEqualTo("username", post.userName)
+                                                                .limit(1).get()
+                                                                .addOnSuccessListener { authorSnap ->
+                                                                    val authorDisplay = authorSnap.documents.firstOrNull()
+                                                                        ?.getString("displayName")?.takeIf { it.isNotBlank() }
+                                                                        ?: post.displayName.ifBlank { post.userName }
+                                                                    if (count >= 3) {
+                                                                        db2.collection("posts")
+                                                                            .document(post.id)
+                                                                            .update("status", "hidden")
+                                                                        // Only notify user when threshold is reached, include reason
+                                                                        db2.collection("notifications").add(
+                                                                            hashMapOf(
+                                                                                "userName" to post.userName,
+                                                                                "message" to "Your post was hidden by the community. Reason: $finalReason",
+                                                                                "type" to "moderation",
+                                                                                "timestamp" to System.currentTimeMillis(),
+                                                                                "read" to false,
+                                                                                "postId" to post.id
+                                                                            )
+                                                                        )
+                                                                        db2.collection("notifications").add(
+                                                                            hashMapOf(
+                                                                                "userName" to "Admin",
+                                                                                "message" to "⚠️ Post by $authorDisplay was auto-hidden after $count reports. Last reason: $finalReason",
+                                                                                "type" to "alert",
+                                                                                "timestamp" to System.currentTimeMillis(),
+                                                                                "read" to false
+                                                                            )
+                                                                        )
+                                                                    } else {
+                                                                        // Notify admin only — no notification to post author yet
+                                                                        db2.collection("notifications").add(
+                                                                            hashMapOf(
+                                                                                "userName" to "Admin",
+                                                                                "message" to "🚩 $reporterDisplay reported a post by $authorDisplay. ($count/3 reports) Reason: $finalReason",
+                                                                                "type" to "alert",
+                                                                                "timestamp" to System.currentTimeMillis(),
+                                                                                "read" to false
+                                                                            )
+                                                                        )
+                                                                    }
+                                                                }
+                                                        }
+                                                }
+                                        }
+                                    }
+                                    selectedReason = ""
+                                    otherReasonText = ""
+                                    reasonDialogError = null
+                                    reasonDialogPost = null
+                                },
+                                modifier = Modifier.fillMaxWidth().height(48.dp),
+                                shape = RoundedCornerShape(12.dp),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = if (isAdminDelete) DangerRed else Color(0xFFEA580C),
+                                    contentColor = Color.White
+                                )
+                            ) {
+                                Text(
+                                    if (isAdminDelete) "Delete Post" else "Submit Report",
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 14.sp
+                                )
+                            }
+                            OutlinedButton(
+                                onClick = {
+                                    showReasonDialog = false
+                                    reasonDialogPost = null
+                                    selectedReason = ""
+                                    otherReasonText = ""
+                                    reasonDialogError = null
+                                },
+                                modifier = Modifier.fillMaxWidth().height(44.dp),
+                                shape = RoundedCornerShape(12.dp)
+                            ) {
+                                Text("Cancel", color = TextSecondary, fontWeight = FontWeight.Medium)
+                            }
+                        }
+                    }
+                )
+            }
+
+            // ─────────────────────────────────────────────────────────────────────────────
+            // Main Scaffold
+            // ─────────────────────────────────────────────────────────────────────────────
                 Scaffold(
                     topBar = {
                         TopAppBar(
@@ -2725,6 +3569,22 @@
                                             onDelete = {
                                                 deletingPost = post; showDeleteDialog = true
                                             },
+                                            onAdminDelete = {
+                                                reasonDialogPost = post
+                                                reasonDialogMode = "admin_delete"
+                                                selectedReason = ""
+                                                otherReasonText = ""
+                                                reasonDialogError = null
+                                                showReasonDialog = true
+                                            },
+                                            onReport = {
+                                                reasonDialogPost = post
+                                                reasonDialogMode = "user_report"
+                                                selectedReason = ""
+                                                otherReasonText = ""
+                                                reasonDialogError = null
+                                                showReasonDialog = true
+                                            },
                                             photoUrl = userPhotoCache[post.userName],
                                             isAdmin = isAdmin
                                         )
@@ -2763,6 +3623,22 @@
                                             },
                                             onDelete = {
                                                 deletingPost = post; showDeleteDialog = true
+                                            },
+                                            onAdminDelete = {
+                                                reasonDialogPost = post
+                                                reasonDialogMode = "admin_delete"
+                                                selectedReason = ""
+                                                otherReasonText = ""
+                                                reasonDialogError = null
+                                                showReasonDialog = true
+                                            },
+                                            onReport = {
+                                                reasonDialogPost = post
+                                                reasonDialogMode = "user_report"
+                                                selectedReason = ""
+                                                otherReasonText = ""
+                                                reasonDialogError = null
+                                                showReasonDialog = true
                                             },
                                             photoUrl = userPhotoCache[post.userName],
                                             isAdmin = isAdmin
@@ -3216,10 +4092,12 @@
                 currentUserDisplayName: String = "",
                 onLike: () -> Unit = {}, onComment: () -> Unit = {},
                 onEdit: () -> Unit = {}, onDelete: () -> Unit = {},
+                onAdminDelete: () -> Unit = {},
+                onReport: () -> Unit = {},
                 photoUrl: String? = null,
                 isAdmin: Boolean = false,
                 viewerIsAuthor: Boolean = post.userName == currentUser
-            ) {
+            )   {
                 val isOwner = viewerIsAuthor
                 val context = LocalContext.current
                 var menuExpanded by remember { mutableStateOf(false) }
@@ -3420,70 +4298,6 @@
                                                         Box(
                                                             Modifier.size(32.dp)
                                                                 .clip(RoundedCornerShape(8.dp))
-                                                                .background(Amber50),
-                                                            Alignment.Center
-                                                        ) {
-                                                            Icon(
-                                                                Icons.Default.VisibilityOff,
-                                                                null,
-                                                                tint = Amber500,
-                                                                modifier = Modifier.size(15.dp)
-                                                            )
-                                                        }
-                                                        Column {
-                                                            Text(
-                                                                "Hide post",
-                                                                fontWeight = FontWeight.Medium,
-                                                                fontSize = 14.sp,
-                                                                color = TextPrimary
-                                                            )
-                                                            Text(
-                                                                "Remove from feed, keeps data",
-                                                                fontSize = 11.sp,
-                                                                color = TextMuted
-                                                            )
-                                                        }
-                                                    }
-                                                },
-                                                onClick = {
-                                                    menuExpanded = false
-                                                    val db = FirebaseFirestore.getInstance()
-                                                    db.collection("posts").document(post.id)
-                                                        .update("status", "hidden")
-                                                        .addOnSuccessListener {
-                                                            Toast.makeText(context, "Post hidden from feed.", Toast.LENGTH_SHORT).show()
-                                                            db.collection("notifications").add(
-                                                                hashMapOf(
-                                                                    "userName" to post.userName,
-                                                                    "message" to "Your post was removed by an admin for violating community guidelines.",
-                                                                    "type" to "moderation",
-                                                                    "timestamp" to System.currentTimeMillis(),
-                                                                    "read" to false,
-                                                                    "postId" to post.id
-                                                                )
-                                                            )
-                                                        }
-                                                        .addOnFailureListener {
-                                                            Toast.makeText(context, "Failed to hide post.", Toast.LENGTH_SHORT).show()
-                                                        }
-                                                },
-                                                modifier = Modifier.padding(horizontal = 4.dp)
-                                            )
-                                            HorizontalDivider(
-                                                Modifier.padding(horizontal = 12.dp),
-                                                color = DividerColor
-                                            )
-                                            DropdownMenuItem(
-                                                text = {
-                                                    Row(
-                                                        verticalAlignment = Alignment.CenterVertically,
-                                                        horizontalArrangement = Arrangement.spacedBy(
-                                                            10.dp
-                                                        )
-                                                    ) {
-                                                        Box(
-                                                            Modifier.size(32.dp)
-                                                                .clip(RoundedCornerShape(8.dp))
                                                                 .background(Red50), Alignment.Center
                                                         ) {
                                                             Icon(
@@ -3510,7 +4324,7 @@
                                                 },
                                                 onClick = {
                                                     menuExpanded = false
-                                                    onDelete()
+                                                    onAdminDelete()
                                                 },
                                                 modifier = Modifier.padding(horizontal = 4.dp)
                                             )
@@ -3640,73 +4454,7 @@
                                                 onClick = {
                                                     if (!hasReported) {
                                                         menuExpanded = false
-                                                        val db = FirebaseFirestore.getInstance()
-                                                        db.collection("reportedPosts").add(
-                                                            hashMapOf(
-                                                                "postId" to post.id,
-                                                                "reportedBy" to currentUser,
-                                                                "reportedByDisplay" to currentUserDisplayName.ifBlank { currentUser },
-                                                                "userName" to post.userName,
-                                                                "displayName" to post.displayName.ifBlank { post.userName },
-                                                                "descriptionSnap" to post.description.take(
-                                                                    200
-                                                                ),
-                                                                "timestamp" to System.currentTimeMillis()
-                                                            )
-                                                        ).addOnSuccessListener {
-                                                            hasReported = true
-                                                            Toast.makeText(context, "Post reported.", Toast.LENGTH_SHORT).show()
-                                                            db.collection("reportedPosts")
-                                                                .whereEqualTo("postId", post.id)
-                                                                .get()
-                                                                .addOnSuccessListener { snap ->
-                                                                    val count = snap.size()
-                                                                    // Fetch reporter display name
-                                                                    db.collection("users")
-                                                                        .whereEqualTo("username", currentUser)
-                                                                        .limit(1).get()
-                                                                        .addOnSuccessListener { reporterSnap ->
-                                                                            val reporterDisplay = reporterSnap.documents.firstOrNull()
-                                                                                ?.getString("displayName")?.takeIf { it.isNotBlank() }
-                                                                                ?: currentUserDisplayName.ifBlank { currentUser }
-                                                                            // Fetch post author display name
-                                                                            db.collection("users")
-                                                                                .whereEqualTo("username", post.userName)
-                                                                                .limit(1).get()
-                                                                                .addOnSuccessListener { authorSnap ->
-                                                                                    val authorDisplay = authorSnap.documents.firstOrNull()
-                                                                                        ?.getString("displayName")?.takeIf { it.isNotBlank() }
-                                                                                        ?: post.displayName.ifBlank { post.userName }
-                                                                                    if (count >= 3) {
-                                                                                        db.collection("posts")
-                                                                                            .document(post.id)
-                                                                                            .update("status", "hidden")
-                                                                                        db.collection("notifications")
-                                                                                            .add(
-                                                                                                hashMapOf(
-                                                                                                    "userName" to "Admin",
-                                                                                                    "message" to "⚠️ Post by $authorDisplay was auto-hidden after $count reports.",
-                                                                                                    "type" to "alert",
-                                                                                                    "timestamp" to System.currentTimeMillis(),
-                                                                                                    "read" to false
-                                                                                                )
-                                                                                            )
-                                                                                    } else {
-                                                                                        db.collection("notifications")
-                                                                                            .add(
-                                                                                                hashMapOf(
-                                                                                                    "userName" to "Admin",
-                                                                                                    "message" to "🚩 $reporterDisplay reported a post by $authorDisplay. ($count/3 reports)",
-                                                                                                    "type" to "alert",
-                                                                                                    "timestamp" to System.currentTimeMillis(),
-                                                                                                    "read" to false
-                                                                                                )
-                                                                                            )
-                                                                                    }
-                                                                                }
-                                                                        }
-                                                                }
-                                                        }
+                                                        onReport()
                                                     } else {
                                                         menuExpanded = false
                                                     }
@@ -3814,7 +4562,18 @@
                         }
 
                         // ── Route preview — static image if available, canvas fallback ──
-                        if (post.routeImageUrl.isNotBlank()) {
+                        val routeBitmapFallback = remember(post.id) {
+                            if (post.routeImageUrl.isBlank() && post.polyline.size >= 2) {
+                                val pts = post.polyline.mapNotNull { pt ->
+                                    val lat = pt["lat"] ?: return@mapNotNull null
+                                    val lon = pt["lon"] ?: return@mapNotNull null
+                                    GeoPoint(lat, lon)
+                                }
+                                if (pts.size >= 2) renderRouteToBitmap(pts) else null
+                            } else null
+                        }
+
+                        if (post.routeImageUrl.isNotBlank() || routeBitmapFallback != null) {
                             Box(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -3827,229 +4586,21 @@
                                         indication = null
                                     ) { showRideDetail = true }
                             ) {
-                                coil.compose.AsyncImage(
-                                    model = post.routeImageUrl,
-                                    contentDescription = "Route preview",
-                                    contentScale = androidx.compose.ui.layout.ContentScale.Crop,
-                                    modifier = Modifier.fillMaxSize()
-                                )
-                            }
-                        } else if (post.polyline.size >= 2) {
-                            val points = post.polyline.mapNotNull { pt ->
-                                val lat = pt["lat"] ?: return@mapNotNull null
-                                val lon = pt["lon"] ?: return@mapNotNull null
-                                Pair(lat, lon)
-                            }
-                            if (points.size >= 2) {
-                                var routeBitmap by remember(post.id) { mutableStateOf<android.graphics.Bitmap?>(null) }
-                                var isRenderingMap by remember(post.id) { mutableStateOf(false) }
-                                var locationLabel by remember(post.id) { mutableStateOf<String?>(null) }
-
-                                LaunchedEffect(post.id) {
-                                    if (routeBitmap != null || isRenderingMap) return@LaunchedEffect
-                                    isRenderingMap = true
-                                    try {
-                                        val bitmap = withContext(kotlinx.coroutines.Dispatchers.IO) {
-                                            renderRouteToTiledBitmap(context, points)
-                                        }
-                                        routeBitmap = bitmap
-                                    } catch (e: Exception) {
-                                        routeBitmap = null
-                                    } finally {
-                                        isRenderingMap = false
-                                    }
+                                if (post.routeImageUrl.isNotBlank()) {
+                                    coil.compose.AsyncImage(
+                                        model = post.routeImageUrl,
+                                        contentDescription = "Route preview",
+                                        contentScale = ContentScale.Crop,
+                                        modifier = Modifier.fillMaxSize()
+                                    )
+                                } else if (routeBitmapFallback != null) {
+                                    androidx.compose.foundation.Image(
+                                        bitmap = routeBitmapFallback.asImageBitmap(),
+                                        contentDescription = "Route preview",
+                                        contentScale = ContentScale.Crop,
+                                        modifier = Modifier.fillMaxSize()
+                                    )
                                 }
-                                LaunchedEffect(post.id) {
-                                    if (locationLabel != null) return@LaunchedEffect
-                                    try {
-                                        val mid = points[points.size / 2]
-                                        val result = withContext(kotlinx.coroutines.Dispatchers.IO) {
-                                            val url = "https://nominatim.openstreetmap.org/reverse" +
-                                                    "?lat=${mid.first}&lon=${mid.second}" +
-                                                    "&format=json&zoom=10"
-                                            val conn = java.net.URL(url).openConnection() as java.net.HttpURLConnection
-                                            conn.setRequestProperty("User-Agent", "PedalConnect/1.0")
-                                            conn.connectTimeout = 5_000
-                                            conn.readTimeout = 5_000
-                                            val json = org.json.JSONObject(conn.inputStream.bufferedReader().readText())
-                                            conn.disconnect()
-                                            val address = json.optJSONObject("address")
-                                            val city = address?.optString("city")?.takeIf { it.isNotBlank() }
-                                                ?: address?.optString("town")?.takeIf { it.isNotBlank() }
-                                                ?: address?.optString("municipality")?.takeIf { it.isNotBlank() }
-                                                ?: address?.optString("county")?.takeIf { it.isNotBlank() }
-                                            val country = address?.optString("country_code")?.uppercase()
-                                            if (city != null && country != null) "$city, $country"
-                                            else if (city != null) city
-                                            else null
-                                        }
-                                        locationLabel = result
-                                    } catch (e: Exception) {
-                                        locationLabel = null
-                                    }
-                                }
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .height(140.dp)
-                                        .padding(horizontal = 14.dp, vertical = 6.dp)
-                                        .clip(RoundedCornerShape(12.dp))
-                                        .border(1.dp, DividerColor, RoundedCornerShape(12.dp))
-                                        .background(Color(0xFFF0F4F0))
-                                        .clickable(
-                                            interactionSource = remember { MutableInteractionSource() },
-                                            indication = null
-                                        ) { showRideDetail = true }
-                                ) {
-                                    if (routeBitmap != null) {
-                                        androidx.compose.foundation.Image(
-                                            bitmap = routeBitmap!!.asImageBitmap(),
-                                            contentDescription = "Route map",
-                                            contentScale = androidx.compose.ui.layout.ContentScale.Crop,
-                                            modifier = Modifier.fillMaxSize()
-                                        )
-                                    } else {
-                                        // Canvas fallback while bitmap is rendering
-                                        androidx.compose.foundation.Canvas(modifier = Modifier.fillMaxSize()) {
-                                        val minLat = points.minOf { it.first }
-                                        val maxLat = points.maxOf { it.first }
-                                        val minLon = points.minOf { it.second }
-                                        val maxLon = points.maxOf { it.second }
-                                        val latRange = (maxLat - minLat).takeIf { it > 0 } ?: 0.0001
-                                        val lonRange = (maxLon - minLon).takeIf { it > 0 } ?: 0.0001
-                                        val padding = 36f
-
-                                        fun toX(lon: Double) =
-                                            (padding + ((lon - minLon) / lonRange) * (size.width - padding * 2)).toFloat()
-                                        fun toY(lat: Double) =
-                                            (padding + ((maxLat - lat) / latRange) * (size.height - padding * 2)).toFloat()
-
-                                        // Subtle grid lines
-                                        val gridColor = Color(0xFF06402B).copy(alpha = 0.06f)
-                                        val gridCountX = 5
-                                        val gridCountY = 4
-                                        for (i in 1 until gridCountX) {
-                                            val x = size.width * i / gridCountX
-                                            drawLine(
-                                                color = gridColor,
-                                                start = androidx.compose.ui.geometry.Offset(x, 0f),
-                                                end = androidx.compose.ui.geometry.Offset(x, size.height),
-                                                strokeWidth = 1f
-                                            )
-                                        }
-                                        for (i in 1 until gridCountY) {
-                                            val y = size.height * i / gridCountY
-                                            drawLine(
-                                                color = gridColor,
-                                                start = androidx.compose.ui.geometry.Offset(0f, y),
-                                                end = androidx.compose.ui.geometry.Offset(size.width, y),
-                                                strokeWidth = 1f
-                                            )
-                                        }
-
-                                        // Route shadow for depth
-                                        val shadowPath = androidx.compose.ui.graphics.Path()
-                                        points.forEachIndexed { i, (lat, lon) ->
-                                            if (i == 0) shadowPath.moveTo(toX(lon), toY(lat) + 3f)
-                                            else shadowPath.lineTo(toX(lon), toY(lat) + 3f)
-                                        }
-                                        drawPath(
-                                            path = shadowPath,
-                                            color = Color(0xFF00B464).copy(alpha = 0.15f),
-                                            style = androidx.compose.ui.graphics.drawscope.Stroke(
-                                                width = 10f,
-                                                cap = androidx.compose.ui.graphics.StrokeCap.Round,
-                                                join = androidx.compose.ui.graphics.StrokeJoin.Round
-                                            )
-                                        )
-
-                                        // Main route line
-                                        val path = androidx.compose.ui.graphics.Path()
-                                        points.forEachIndexed { i, (lat, lon) ->
-                                            if (i == 0) path.moveTo(toX(lon), toY(lat))
-                                            else path.lineTo(toX(lon), toY(lat))
-                                        }
-                                        drawPath(
-                                            path = path,
-                                            color = Color(0xFF00B464),
-                                            style = androidx.compose.ui.graphics.drawscope.Stroke(
-                                                width = 7f,
-                                                cap = androidx.compose.ui.graphics.StrokeCap.Round,
-                                                join = androidx.compose.ui.graphics.StrokeJoin.Round
-                                            )
-                                        )
-
-                                        // Start dot — yellow with outer ring
-                                        points.firstOrNull()?.let { (lat, lon) ->
-                                            drawCircle(
-                                                color = Color(0xFFFFD600).copy(alpha = 0.25f),
-                                                radius = 18f,
-                                                center = androidx.compose.ui.geometry.Offset(toX(lon), toY(lat))
-                                            )
-                                            drawCircle(
-                                                color = Color(0xFFFFD600),
-                                                radius = 10f,
-                                                center = androidx.compose.ui.geometry.Offset(toX(lon), toY(lat))
-                                            )
-                                            drawCircle(
-                                                color = Color.White,
-                                                radius = 5f,
-                                                center = androidx.compose.ui.geometry.Offset(toX(lon), toY(lat))
-                                            )
-                                        }
-
-                                        // End dot — red with outer ring
-                                        points.lastOrNull()?.let { (lat, lon) ->
-                                            drawCircle(
-                                                color = Color(0xFFD32F2F).copy(alpha = 0.25f),
-                                                radius = 18f,
-                                                center = androidx.compose.ui.geometry.Offset(toX(lon), toY(lat))
-                                            )
-                                            drawCircle(
-                                                color = Color(0xFFD32F2F),
-                                                radius = 10f,
-                                                center = androidx.compose.ui.geometry.Offset(toX(lon), toY(lat))
-                                            )
-                                            drawCircle(
-                                                color = Color.White,
-                                                radius = 5f,
-                                                center = androidx.compose.ui.geometry.Offset(toX(lon), toY(lat))
-                                            )
-                                        }
-                                    }
-
-                                    } // end else (canvas fallback)
-
-                                    // Location chip — inside the Box so it overlays the map
-                                    if (locationLabel != null) {
-                                        Box(
-                                            Modifier
-                                                .align(Alignment.BottomStart)
-                                                .padding(8.dp)
-                                                .clip(RoundedCornerShape(6.dp))
-                                                .background(Color(0xFF111827).copy(alpha = 0.55f))
-                                                .padding(horizontal = 8.dp, vertical = 4.dp)
-                                        ) {
-                                            Row(
-                                                verticalAlignment = Alignment.CenterVertically,
-                                                horizontalArrangement = Arrangement.spacedBy(4.dp)
-                                            ) {
-                                                Icon(
-                                                    Icons.Default.LocationOn,
-                                                    null,
-                                                    tint = Color.White.copy(alpha = 0.9f),
-                                                    modifier = Modifier.size(10.dp)
-                                                )
-                                                Text(
-                                                    locationLabel!!,
-                                                    fontSize = 10.sp,
-                                                    fontWeight = FontWeight.SemiBold,
-                                                    color = Color.White.copy(alpha = 0.9f)
-                                                )
-                                            }
-                                        }
-                                    }
-                                } // end outer Box
                             }
                         }
 
@@ -4324,7 +4875,6 @@
                             val lon = pt["lon"] ?: return@mapNotNull null
                             Pair(lat, lon)
                         }
-
                         if (post.routeImageUrl.isNotBlank()) {
                             Box(
                                 modifier = Modifier
@@ -4334,74 +4884,36 @@
                                     .border(1.dp, DividerColor, RoundedCornerShape(16.dp))
                             ) {
                                 AsyncImage(
-                                    model = post.routeImageUrl,
+                                      model = post.routeImageUrl,
                                     contentDescription = "Route map",
                                     contentScale = ContentScale.Crop,
                                     modifier = Modifier.fillMaxSize()
                                 )
                             }
-                        } else if (points.size >= 2) {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(220.dp)
-                                    .clip(RoundedCornerShape(16.dp))
-                                    .border(1.dp, DividerColor, RoundedCornerShape(16.dp))
-                                    .background(Color(0xFFF0F4F0))
-                            ) {
-                                androidx.compose.foundation.Canvas(
-                                    modifier = Modifier.fillMaxSize()
-                                ) {
-                                    val minLat = points.minOf { it.first }
-                                    val maxLat = points.maxOf { it.first }
-                                    val minLon = points.minOf { it.second }
-                                    val maxLon = points.maxOf { it.second }
-                                    val latRange = (maxLat - minLat).takeIf { it > 0 } ?: 0.0001
-                                    val lonRange = (maxLon - minLon).takeIf { it > 0 } ?: 0.0001
-                                    val padding = 40f
-
-                                    fun toX(lon: Double) =
-                                        (padding + ((lon - minLon) / lonRange) * (size.width - padding * 2)).toFloat()
-
-                                    fun toY(lat: Double) =
-                                        (padding + ((maxLat - lat) / latRange) * (size.height - padding * 2)).toFloat()
-
-                                    val path = androidx.compose.ui.graphics.Path()
-                                    points.forEachIndexed { i, (lat, lon) ->
-                                        if (i == 0) path.moveTo(toX(lon), toY(lat))
-                                        else path.lineTo(toX(lon), toY(lat))
-                                    }
-                                    drawPath(
-                                        path = path,
-                                        color = Color(0xFF00B464),
-                                        style = androidx.compose.ui.graphics.drawscope.Stroke(
-                                            width = 8f,
-                                            cap = androidx.compose.ui.graphics.StrokeCap.Round,
-                                            join = androidx.compose.ui.graphics.StrokeJoin.Round
-                                        )
-                                    )
-                                    points.firstOrNull()?.let { (lat, lon) ->
-                                        drawCircle(
-                                            Color(0xFFFFD600),
-                                            12f,
-                                            androidx.compose.ui.geometry.Offset(toX(lon), toY(lat))
-                                        )
-                                        drawCircle(
-                                            Color.White,
-                                            6f,
-                                            androidx.compose.ui.geometry.Offset(toX(lon), toY(lat))
-                                        )
-                                    }
-                                    points.lastOrNull()?.let { (lat, lon) ->
-                                        drawCircle(
-                                            Color(0xFFD32F2F),
-                                            12f,
-                                            androidx.compose.ui.geometry.Offset(toX(lon), toY(lat))
-                                        )
-                                        drawCircle(
-                                            Color.White,
-                                            6f,
-                                            androidx.compose.ui.geometry.Offset(toX(lon), toY(lat))
+                        } else if (post.polyline.size >= 2) {
+                            val points = post.polyline.mapNotNull { pt ->
+                                val lat = pt["lat"] ?: return@mapNotNull null
+                                val lon = pt["lon"] ?: return@mapNotNull null
+                                Pair(lat, lon)
+                            }
+                            if (points.size >= 2) {
+                                val routeBitmap = remember(post.id) {
+                                    renderRouteToBitmap(points.map { (lat, lon) -> GeoPoint(lat, lon) })
+                                }
+                                if (routeBitmap != null) {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .height(160.dp)
+                                            .padding(horizontal = 14.dp, vertical = 6.dp)
+                                            .clip(RoundedCornerShape(12.dp))
+                                            .border(1.dp, DividerColor, RoundedCornerShape(12.dp))
+                                    ) {
+                                        androidx.compose.foundation.Image(
+                                            bitmap = routeBitmap.asImageBitmap(),
+                                            contentDescription = "Route map",
+                                            contentScale = ContentScale.Crop,
+                                            modifier = Modifier.fillMaxSize()
                                         )
                                     }
                                 }
@@ -4530,159 +5042,47 @@
             }
             // Profanity filtering delegated to ProfanityFilter singleton — see ProfanityFilter.kt
 
-        private val routeBitmapCache = java.util.concurrent.ConcurrentHashMap<String, android.graphics.Bitmap>()
+        private val routeMapUrlCache = java.util.concurrent.ConcurrentHashMap<String, String>()
 
-        suspend fun renderRouteToTiledBitmap(
-            context: android.content.Context,
-            points: List<Pair<Double, Double>>
-        ): android.graphics.Bitmap? = withContext(kotlinx.coroutines.Dispatchers.IO) {
-            val cacheKey = points.hashCode().toString()
-            routeBitmapCache[cacheKey]?.let { return@withContext it }
+        fun buildGeoapifyStaticMapUrl(points: List<Pair<Double, Double>>): String {
+            val apiKey = BuildConfig.GEOAPIFY_API_KEY
 
-            try {
-                val width  = 800
-                val height = 420
-                val bmp    = android.graphics.Bitmap.createBitmap(width, height, android.graphics.Bitmap.Config.ARGB_8888)
-                val canvas = android.graphics.Canvas(bmp)
-
-                // Coordinate bounds
-                val minLat = points.minOf { it.first }
-                val maxLat = points.maxOf { it.first }
-                val minLon = points.minOf { it.second }
-                val maxLon = points.maxOf { it.second }
-                val latRange = (maxLat - minLat).takeIf { it > 0 } ?: 0.0001
-                val lonRange = (maxLon - minLon).takeIf { it > 0 } ?: 0.0001
-
-                // Zoom level — pick based on route extent
-                val zoomLevel = when {
-                    latRange > 0.5 || lonRange > 0.5 -> 11
-                    latRange > 0.1 || lonRange > 0.1 -> 13
-                    latRange > 0.02 || lonRange > 0.02 -> 14
-                    else -> 15
-                }
-
-                // Center of route
-                val centerLat = (minLat + maxLat) / 2.0
-                val centerLon = (minLon + maxLon) / 2.0
-
-                // Tile math
-                val tileSize = 256
-                val tilesAcross = Math.pow(2.0, zoomLevel.toDouble()).toInt()
-                fun lonToTileX(lon: Double) = ((lon + 180.0) / 360.0 * tilesAcross)
-                fun latToTileY(lat: Double): Double {
-                    val rad = Math.toRadians(lat)
-                    return (1.0 - Math.log(Math.tan(rad) + 1.0 / Math.cos(rad)) / Math.PI) / 2.0 * tilesAcross
-                }
-
-                val centerTileX = lonToTileX(centerLon)
-                val centerTileY = latToTileY(centerLat)
-
-                // How many tiles we need
-                val tilesWide = (width.toDouble() / tileSize).toInt() + 2
-                val tilesHigh = (height.toDouble() / tileSize).toInt() + 2
-
-                val startTileX = centerTileX.toInt() - tilesWide / 2
-                val startTileY = centerTileY.toInt() - tilesHigh / 2
-
-                // Pixel offset so center tile aligns to canvas center
-                val offsetX = (width / 2.0 - (centerTileX - startTileX) * tileSize).toInt()
-                val offsetY = (height / 2.0 - (centerTileY - startTileY) * tileSize).toInt()
-
-                // Draw tiles
-                for (tx in 0..tilesWide) {
-                    for (ty in 0..tilesHigh) {
-                        val tileX = startTileX + tx
-                        val tileY = startTileY + ty
-                        if (tileX < 0 || tileY < 0 || tileX >= tilesAcross || tileY >= tilesAcross) continue
-                        val url = "https://tile.openstreetmap.org/$zoomLevel/$tileX/$tileY.png"
-                        try {
-                            val conn = java.net.URL(url).openConnection() as java.net.HttpURLConnection
-                            conn.setRequestProperty("User-Agent", "PedalConnect/1.0")
-                            conn.connectTimeout = 5_000
-                            conn.readTimeout    = 5_000
-                            val tileBmp = android.graphics.BitmapFactory.decodeStream(conn.inputStream)
-                            conn.disconnect()
-                            if (tileBmp != null) {
-                                val px = offsetX + tx * tileSize
-                                val py = offsetY + ty * tileSize
-                                canvas.drawBitmap(tileBmp, px.toFloat(), py.toFloat(), null)
-                                tileBmp.recycle()
-                            }
-                        } catch (e: Exception) { /* skip failed tile */ }
-                    }
-                }
-
-                // Coordinate → pixel helpers using tile math
-                fun toPixelX(lon: Double): Float {
-                    val tx = lonToTileX(lon)
-                    return (offsetX + (tx - startTileX) * tileSize).toFloat()
-                }
-                fun toPixelY(lat: Double): Float {
-                    val ty = latToTileY(lat)
-                    return (offsetY + (ty - startTileY) * tileSize).toFloat()
-                }
-
-                // Route shadow
-                val shadowPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
-                    color       = android.graphics.Color.argb(40, 0, 100, 60)
-                    strokeWidth = 14f
-                    strokeCap   = android.graphics.Paint.Cap.ROUND
-                    strokeJoin  = android.graphics.Paint.Join.ROUND
-                    style       = android.graphics.Paint.Style.STROKE
-                }
-                val shadowPath = android.graphics.Path()
-                points.forEachIndexed { i, (lat, lon) ->
-                    if (i == 0) shadowPath.moveTo(toPixelX(lon), toPixelY(lat) + 3f)
-                    else shadowPath.lineTo(toPixelX(lon), toPixelY(lat) + 3f)
-                }
-                canvas.drawPath(shadowPath, shadowPaint)
-
-                // Route line
-                val routePaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
-                    color       = android.graphics.Color.argb(230, 0, 180, 100)
-                    strokeWidth = 10f
-                    strokeCap   = android.graphics.Paint.Cap.ROUND
-                    strokeJoin  = android.graphics.Paint.Join.ROUND
-                    style       = android.graphics.Paint.Style.STROKE
-                }
-                val routePath = android.graphics.Path()
-                points.forEachIndexed { i, (lat, lon) ->
-                    if (i == 0) routePath.moveTo(toPixelX(lon), toPixelY(lat))
-                    else routePath.lineTo(toPixelX(lon), toPixelY(lat))
-                }
-                canvas.drawPath(routePath, routePaint)
-
-                val dotPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG)
-
-                // Start dot — yellow with glow
-                points.firstOrNull()?.let { (lat, lon) ->
-                    val x = toPixelX(lon); val y = toPixelY(lat)
-                    dotPaint.color = android.graphics.Color.argb(50, 255, 214, 0)
-                    canvas.drawCircle(x, y, 20f, dotPaint)
-                    dotPaint.color = android.graphics.Color.parseColor("#FFD600")
-                    canvas.drawCircle(x, y, 11f, dotPaint)
-                    dotPaint.color = android.graphics.Color.WHITE
-                    canvas.drawCircle(x, y, 5f, dotPaint)
-                }
-
-                // End dot — red with glow
-                points.lastOrNull()?.let { (lat, lon) ->
-                    val x = toPixelX(lon); val y = toPixelY(lat)
-                    dotPaint.color = android.graphics.Color.argb(50, 211, 47, 47)
-                    canvas.drawCircle(x, y, 20f, dotPaint)
-                    dotPaint.color = android.graphics.Color.parseColor("#D32F2F")
-                    canvas.drawCircle(x, y, 11f, dotPaint)
-                    dotPaint.color = android.graphics.Color.WHITE
-                    canvas.drawCircle(x, y, 5f, dotPaint)
-                }
-
-                routeBitmapCache[cacheKey] = bmp
-                bmp
-            } catch (e: Exception) {
-                null
+            // Build polyline string: "lon1,lat1,lon2,lat2,..."
+            val polylineCoords = points.joinToString(",") { (lat, lon) ->
+                "${String.format("%.6f", lon)},${String.format("%.6f", lat)}"
             }
-        }
 
+            // Center of route
+            val centerLat = (points.minOf { it.first } + points.maxOf { it.first }) / 2.0
+            val centerLon = (points.minOf { it.second } + points.maxOf { it.second }) / 2.0
+
+            // Zoom based on route extent
+            val latRange = points.maxOf { it.first } - points.minOf { it.first }
+            val lonRange = points.maxOf { it.second } - points.minOf { it.second }
+            val zoom = when {
+                latRange > 0.5 || lonRange > 0.5 -> 11
+                latRange > 0.1 || lonRange > 0.1 -> 13
+                latRange > 0.02 || lonRange > 0.02 -> 14
+                else -> 15
+            }
+
+            val startLat = points.first().first
+            val startLon = points.first().second
+            val endLat = points.last().first
+            val endLon = points.last().second
+
+
+            return "https://maps.geoapify.com/v1/staticmap" +
+                    "?style=osm-bright" +
+                    "&width=800&height=400" +
+                    "&center=lonlat:${String.format("%.6f", centerLon)},${String.format("%.6f", centerLat)}" +
+                    "&zoom=$zoom" +
+                    "&geometry=polyline:$polylineCoords%3Blinewidth:4%3Blinecolor:%2300B464%3Blineopacity:0.9" +
+                    "&marker=lonlat:${String.format("%.6f", startLon)},${String.format("%.6f", startLat)}%3Bcolor:%23FFD600%3Bsize:medium%3Btype:awesome" +
+                    "&marker=lonlat:${String.format("%.6f", endLon)},${String.format("%.6f", endLat)}%3Bcolor:%23D32F2F%3Bsize:medium%3Btype:awesome" +
+                    "&apiKey=$apiKey"
+
+        }
         fun formatTimestamp(timestamp: Long): String {
                 if (timestamp == 0L) return "Just now"
                 val diff = System.currentTimeMillis() - timestamp

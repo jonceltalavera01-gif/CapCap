@@ -907,7 +907,7 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
         mapViewRef?.let { map -> activePolylines.forEach { map.overlays.remove(it) } }
         val profiles = listOf(
             Triple("cycling-road",    "Fastest",  android.graphics.Color.argb(220, 25, 118, 210)),
-            Triple("cycling-regular", "Quietest", android.graphics.Color.argb(220, 46, 125,  50))
+            Triple("cycling-regular", "Less Congested", android.graphics.Color.argb(220, 46, 125,  50))
         )
         scope.launch(Dispatchers.IO) {
             val fetched = mutableListOf<RouteOption>()

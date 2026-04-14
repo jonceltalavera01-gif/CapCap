@@ -81,7 +81,8 @@ private data class ReportedComment(
     val text: String,
     val reportCount: Int,
     val timestamp: Long,
-    val reportedBy: String = "" // username of the person who filed the most recent report
+    val reportedBy: String = "",
+    val reasons: List<String> = emptyList()
 )
 
 private data class ModerationLog(
@@ -418,6 +419,7 @@ fun AdminScreen(paddingValues: PaddingValues) {
                         val text       = doc.getString("text")       ?: ""
                         val timestamp  = doc.getLong("timestamp")    ?: 0L
                         val reportedBy = doc.getString("reportedBy") ?: ""
+                        val reason     = doc.getString("reason")     ?: ""
                         commentId to ReportedComment(
                             commentId   = commentId,
                             postId      = postId,
@@ -425,13 +427,18 @@ fun AdminScreen(paddingValues: PaddingValues) {
                             text        = text,
                             reportCount = 1,
                             timestamp   = timestamp,
-                            reportedBy  = reportedBy
+                            reportedBy  = reportedBy,
+                            reasons     = if (reason.isNotBlank()) listOf(reason) else emptyList()
                         )
                     }
                     .groupBy { it.first }
                     .map { (_, reports) ->
                         val latest = reports.maxByOrNull { it.second.timestamp }!!.second
-                        latest.copy(reportCount = reports.size)
+                        val allReasons = reports
+                            .flatMap { it.second.reasons }
+                            .filter { it.isNotBlank() }
+                            .distinct()
+                        latest.copy(reportCount = reports.size, reasons = allReasons)
                     }
                     .sortedByDescending { it.reportCount }
                 reportedComments.clear()
@@ -2037,6 +2044,33 @@ private fun AdminCommentReportCard(
                         Text(authorDisplayName, fontWeight = FontWeight.SemiBold,
                             fontSize = 13.sp, color = AOnSurface)
                         Text("Reported comment", fontSize = 11.sp, color = AMuted)
+                    }
+                }
+
+                // Reason chips
+                if (reported.reasons.isNotEmpty()) {
+                    androidx.compose.foundation.layout.FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        reported.reasons.forEach { reason ->
+                            Box(
+                                Modifier
+                                    .clip(RoundedCornerShape(20.dp))
+                                    .background(
+                                        if (reason.contains("Swearing") || reason.contains("Harassment") || reason.contains("Attack"))
+                                            ARedLight else AAmber50
+                                    )
+                                    .padding(horizontal = 10.dp, vertical = 4.dp)
+                            ) {
+                                Text(
+                                    reason, fontSize = 11.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = if (reason.contains("Swearing") || reason.contains("Harassment") || reason.contains("Attack"))
+                                        ARedColor else AAmber500
+                                )
+                            }
+                        }
                     }
                 }
 

@@ -46,6 +46,7 @@ import org.osmdroid.views.overlay.Polyline
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.platform.LocalContext
 import java.util.Locale
+import com.darkhorses.PedalConnect.BuildConfig
 
 private val RSGreen900 = Color(0xFF06402B)
 private val RSGreen100 = Color(0xFFE8F5E9)
@@ -111,95 +112,6 @@ fun RideSummarySheet(
 
     // Renders the route polyline + markers to a bitmap and uploads to ImgBB.
     // Returns the image URL or null if it fails.
-    suspend fun renderAndUploadRouteImage(
-        ctx: Context,
-        points: List<GeoPoint>
-    ): String? = withContext(Dispatchers.IO) {
-        try {
-            val width  = 800
-            val height = 500
-            val bmp    = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-            val canvas = Canvas(bmp)
-
-            // Background
-            canvas.drawColor(android.graphics.Color.parseColor("#F0F4F0"))
-
-            // Coordinate mapping
-            val minLat = points.minOf { it.latitude }
-            val maxLat = points.maxOf { it.latitude }
-            val minLon = points.minOf { it.longitude }
-            val maxLon = points.maxOf { it.longitude }
-            val latRange = (maxLat - minLat).takeIf { it > 0 } ?: 0.0001
-            val lonRange = (maxLon - minLon).takeIf { it > 0 } ?: 0.0001
-            val pad = 60f
-
-            fun toX(lon: Double) = (pad + ((lon - minLon) / lonRange) * (width  - pad * 2)).toFloat()
-            fun toY(lat: Double) = (pad + ((maxLat - lat) / latRange) * (height - pad * 2)).toFloat()
-
-            // Draw route line
-            val routePaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
-                color       = android.graphics.Color.argb(220, 0, 180, 100)
-                strokeWidth = 10f
-                strokeCap   = android.graphics.Paint.Cap.ROUND
-                strokeJoin  = android.graphics.Paint.Join.ROUND
-                style       = android.graphics.Paint.Style.STROKE
-            }
-            val path = android.graphics.Path()
-            points.forEachIndexed { i, pt ->
-                if (i == 0) path.moveTo(toX(pt.longitude), toY(pt.latitude))
-                else        path.lineTo(toX(pt.longitude), toY(pt.latitude))
-            }
-            canvas.drawPath(path, routePaint)
-
-            // Draw start dot — yellow
-            val dotPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG)
-            points.firstOrNull()?.let { pt ->
-                dotPaint.color = android.graphics.Color.parseColor("#FFD600")
-                canvas.drawCircle(toX(pt.longitude), toY(pt.latitude), 18f, dotPaint)
-                dotPaint.color = android.graphics.Color.WHITE
-                canvas.drawCircle(toX(pt.longitude), toY(pt.latitude), 8f, dotPaint)
-            }
-
-            // Draw end dot — red
-            points.lastOrNull()?.let { pt ->
-                dotPaint.color = android.graphics.Color.parseColor("#D32F2F")
-                canvas.drawCircle(toX(pt.longitude), toY(pt.latitude), 18f, dotPaint)
-                dotPaint.color = android.graphics.Color.WHITE
-                canvas.drawCircle(toX(pt.longitude), toY(pt.latitude), 8f, dotPaint)
-            }
-
-            // Compress to JPEG
-            val output = ByteArrayOutputStream()
-            bmp.compress(Bitmap.CompressFormat.JPEG, 85, output)
-            bmp.recycle()
-            val bytes      = output.toByteArray()
-            val base64Data = Base64.encodeToString(bytes, Base64.NO_WRAP)
-
-            // Upload to ImgBB
-            val apiKey = com.darkhorses.PedalConnect.BuildConfig.IMGBB_API_KEY
-            val conn   = java.net.URL("https://api.imgbb.com/1/upload")
-                .openConnection() as HttpURLConnection
-            conn.requestMethod = "POST"
-            conn.doOutput      = true
-            conn.connectTimeout = 30_000
-            conn.readTimeout    = 30_000
-            conn.setRequestProperty("Content-Type", "application/x-www-form-urlencoded")
-            val body = "key=$apiKey&image=${java.net.URLEncoder.encode(base64Data, "UTF-8")}"
-            conn.outputStream.write(body.toByteArray())
-            conn.outputStream.flush()
-            val response = if (conn.responseCode == 200)
-                conn.inputStream.bufferedReader().readText()
-            else null
-            conn.disconnect()
-            if (response == null) return@withContext null
-            val json = org.json.JSONObject(response)
-            if (!json.getBoolean("success")) return@withContext null
-            json.getJSONObject("data").getString("url")
-        } catch (e: Exception) {
-            e.printStackTrace()
-            null
-        }
-    }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -531,23 +443,25 @@ fun RideSummarySheet(
                             isPosting = true
                             scope.launch {
                                 try {
-                                    // Render route to image and upload if we have points
-                                    val routeImageUrl = if (locationPoints.size >= 2)
-                                    renderAndUploadRouteImage(context, locationPoints)
-                                else null
+                                    // Render route polyline to bitmap and upload to ImgBB
+                                    val routeImageUrl = try {
+                                        val bitmap = renderRouteToBitmap(locationPoints)
+                                        if (bitmap != null) uploadBitmapToImgBB(context, bitmap)
+                                        else ""
+                                    } catch (e: Exception) { "" }
 
-                                val post = hashMapOf(
-                                    "userName"       to userName,
-                                    "displayName"    to displayName,
-                                    "description"    to postCaption.trim(),
-                                    "activity"       to "Cycling Ride",
-                                    "distance"       to String.format(Locale.getDefault(), "%.2f", distanceM / 1000.0),
-                                    "timestamp"      to System.currentTimeMillis(),
-                                    "likes"          to 0,
-                                    "comments"       to 0,
-                                    "likedBy"        to emptyList<String>(),
-                                    "status"         to "accepted",
-                                    "routeImageUrl"  to (routeImageUrl ?: ""),
+                                    val post = hashMapOf(
+                                        "userName"       to userName,
+                                        "displayName"    to displayName,
+                                        "description"    to postCaption.trim(),
+                                        "activity"       to "Cycling Ride",
+                                        "distance"       to String.format(Locale.getDefault(), "%.2f", distanceM / 1000.0),
+                                        "timestamp"      to System.currentTimeMillis(),
+                                        "likes"          to 0,
+                                        "comments"       to 0,
+                                        "likedBy"        to emptyList<String>(),
+                                        "status"         to "accepted",
+                                        "routeImageUrl"  to routeImageUrl,
                                     "rideStats"      to hashMapOf(
                                         "distanceKm"  to distanceM / 1000.0,
                                         "durationSec" to durationSeconds,
@@ -630,5 +544,80 @@ fun RideSummarySheet(
                 }
             }
         }
+    }
+}
+ fun renderRouteToBitmap(points: List<org.osmdroid.util.GeoPoint>): Bitmap? {
+    if (points.size < 2) return null
+    val width = 800
+    val height = 400
+    val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+    val canvas = Canvas(bitmap)
+
+    // Background
+    canvas.drawColor(android.graphics.Color.parseColor("#E8F4EA"))
+
+    // Project lat/lon to pixel
+    val minLat = points.minOf { it.latitude }
+    val maxLat = points.maxOf { it.latitude }
+    val minLon = points.minOf { it.longitude }
+    val maxLon = points.maxOf { it.longitude }
+    val latRange = (maxLat - minLat).takeIf { it > 0 } ?: 0.001
+    val lonRange = (maxLon - minLon).takeIf { it > 0 } ?: 0.001
+    val padding = 60f
+
+    fun toX(lon: Double) = (padding + ((lon - minLon) / lonRange) * (width - 2 * padding)).toFloat()
+    fun toY(lat: Double) = (padding + ((maxLat - lat) / latRange) * (height - 2 * padding)).toFloat()
+
+    // Draw route line
+    val linePaint = android.graphics.Paint().apply {
+        color = android.graphics.Color.parseColor("#00B464")
+        strokeWidth = 8f
+        style = android.graphics.Paint.Style.STROKE
+        strokeCap = android.graphics.Paint.Cap.ROUND
+        strokeJoin = android.graphics.Paint.Join.ROUND
+        isAntiAlias = true
+    }
+    val path = android.graphics.Path()
+    points.forEachIndexed { i, pt ->
+        if (i == 0) path.moveTo(toX(pt.longitude), toY(pt.latitude))
+        else path.lineTo(toX(pt.longitude), toY(pt.latitude))
+    }
+    canvas.drawPath(path, linePaint)
+
+    // Start marker — green circle
+    val startPaint = android.graphics.Paint().apply {
+        color = android.graphics.Color.parseColor("#FFD600")
+        style = android.graphics.Paint.Style.FILL
+        isAntiAlias = true
+    }
+    canvas.drawCircle(toX(points.first().longitude), toY(points.first().latitude), 14f, startPaint)
+
+    // End marker — red circle
+    val endPaint = android.graphics.Paint().apply {
+        color = android.graphics.Color.parseColor("#D32F2F")
+        style = android.graphics.Paint.Style.FILL
+        isAntiAlias = true
+    }
+    canvas.drawCircle(toX(points.last().longitude), toY(points.last().latitude), 14f, endPaint)
+
+    return bitmap
+}
+
+     suspend fun uploadBitmapToImgBB(context: android.content.Context, bitmap: Bitmap): String {
+    return withContext(Dispatchers.IO) {
+        val stream = ByteArrayOutputStream()
+        bitmap.compress(Bitmap.CompressFormat.PNG, 90, stream)
+        val encoded = Base64.encodeToString(stream.toByteArray(), Base64.DEFAULT)
+        val apiKey = BuildConfig.IMGBB_API_KEY
+        val url = java.net.URL("https://api.imgbb.com/1/upload?key=$apiKey")
+        val conn = url.openConnection() as HttpURLConnection
+        conn.requestMethod = "POST"
+        conn.doOutput = true
+        conn.setRequestProperty("Content-Type", "application/x-www-form-urlencoded")
+        conn.outputStream.write("image=$encoded".toByteArray())
+        val response = conn.inputStream.bufferedReader().readText()
+        conn.disconnect()
+        val json = org.json.JSONObject(response)
+        json.getJSONObject("data").getString("url")
     }
 }

@@ -28,6 +28,8 @@ android {
         buildConfigField("String", "IMGBB_API_KEY", "\"$imgbbKey\"")
         val orsKey = localProperties.getProperty("ORS_API_KEY") ?: ""
         buildConfigField("String", "ORS_API_KEY", "\"$orsKey\"")
+        val geoapifyKey = localProperties.getProperty("GEOAPIFY_API_KEY") ?: ""
+        buildConfigField("String", "GEOAPIFY_API_KEY", "\"$geoapifyKey\"")
 
     }
 

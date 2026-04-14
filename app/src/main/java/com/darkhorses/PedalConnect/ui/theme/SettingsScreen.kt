@@ -102,6 +102,7 @@ fun SettingsScreen(navController: NavController) {
     var settings          by remember { mutableStateOf(UserSettings()) }
     var userName         by remember { mutableStateOf("") }
     var isAdmin          by remember { mutableStateOf(false) }
+    var firestoreEmail   by remember { mutableStateOf("") }
 
     // ── Edit Profile draft state ──────────────────────────────────────────────
     var editProfileExpanded by remember { mutableStateOf(false) }
@@ -137,7 +138,7 @@ fun SettingsScreen(navController: NavController) {
             val doc = snap.documents.firstOrNull()
             if (doc != null) {
                 userDocId = doc.id
-                userName  = doc.getString("username") ?: ""
+                userName  = doc.getString("username").orEmpty()
                 isAdmin   = doc.getString("role") == "admin"
                 val prefs = doc.get("settings") as? Map<*, *>
                 // Graceful migration: bikeTypes may be an array (new) or a string (old)
@@ -149,6 +150,8 @@ fun SettingsScreen(navController: NavController) {
                         if (legacy.isNotBlank()) listOf(legacy) else emptyList()
                     }
                 }
+                firestoreEmail = doc.getString("email")?.takeIf { it.isNotBlank() }
+                    ?: currentUser.email.orEmpty()
                 settings = UserSettings(
                     displayName                = doc.getString("displayName")?.takeIf { it.isNotBlank() }
                         ?: currentUser.displayName?.takeIf { it.isNotBlank() }
@@ -575,7 +578,7 @@ fun SettingsScreen(navController: NavController) {
                                 else settings.displayName.ifBlank { userName.ifBlank { "Cyclist" } },
                                 fontWeight = FontWeight.Bold, fontSize = 16.sp, color = TextPrimary
                             )
-                            Text(currentUser?.email ?: "", fontSize = 13.sp, color = TextSecondary)
+                            Text(firestoreEmail, fontSize = 13.sp, color = TextSecondary)
                         }
                         // Edit / collapse icon — hidden for admin
                         if (!isAdmin) {
@@ -897,35 +900,18 @@ fun SettingsScreen(navController: NavController) {
                 HorizontalDivider(color = DividerColor, modifier = Modifier.padding(start = 56.dp))
                 SettingsRow(icon = Icons.Rounded.Map, label = "Map Style",
                     sublabel = "Standard", tint = SettingsGreen700) { }
-                HorizontalDivider(color = DividerColor, modifier = Modifier.padding(start = 56.dp))
-                SettingsRow(icon = Icons.Rounded.Language, label = "Language",
-                    sublabel = "English (PH)", tint = SettingsGreen700) { }
             }
 
             // ── Support & About ───────────────────────────────────────────────
             Spacer(Modifier.height(4.dp))
             SettingsSectionHeader("Support & About")
             SettingsGroup {
-                SettingsRow(icon = Icons.Rounded.HelpOutline, label = "Help & FAQ",
-                    sublabel = "Get answers and troubleshoot", tint = SettingsGreen700) {
-                    context.startActivity(Intent(Intent.ACTION_VIEW,
-                        Uri.parse("https://pedalconnect.app/help")))
-                }
-                HorizontalDivider(color = DividerColor, modifier = Modifier.padding(start = 56.dp))
                 SettingsRow(icon = Icons.Rounded.BugReport, label = "Report a Bug",
                     sublabel = "Help us improve PedalConnect", tint = SettingsGreen700) {
                     context.startActivity(Intent(Intent.ACTION_SENDTO).apply {
                         data = Uri.parse("mailto:support@pedalconnect.app")
                         putExtra(Intent.EXTRA_SUBJECT, "Bug Report - PedalConnect")
                     })
-                }
-                HorizontalDivider(color = DividerColor, modifier = Modifier.padding(start = 56.dp))
-                SettingsRow(icon = Icons.Rounded.Star, label = "Rate the App",
-                    sublabel = "Enjoying PedalConnect? Leave a review!", tint = AmberWarning) {
-                    try {
-                        context.startActivity(Intent(Intent.ACTION_VIEW,
-                            Uri.parse("market://details?id=com.darkhorses.PedalConnect")))
-                    } catch (_: Exception) { }
                 }
                 HorizontalDivider(color = DividerColor, modifier = Modifier.padding(start = 56.dp))
                 SettingsRow(icon = Icons.Rounded.Info, label = "About",
