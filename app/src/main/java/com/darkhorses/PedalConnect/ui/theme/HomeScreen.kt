@@ -2727,7 +2727,7 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
                                                                                     "severity"          to "HIGH",
                                                                                     "status"            to "active",
                                                                                     "responderName"     to "",
-                                                                                    "additionalDetails" to "⚠️ Triggered via hold — rider may be unconscious or in critical condition."
+                                                                                    "additionalDetails" to "⚠️ Triggered via hold — The rider may be in a critical condition."
                                                                                 )
                                                                                 withContext(Dispatchers.IO) {
                                                                                     db.collection("alerts")
