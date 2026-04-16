@@ -2815,7 +2815,7 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
                                                     )
                                                     Text(
                                                         if (hasActiveAlert) "Tap to cancel your active alert"
-                                                        else if (isHoldingSos) "Release to cancel · Sending in 3s…"
+                                                        else if (isHoldingSos) "Release to cancel"
                                                         else "Tap to send distress signal",
                                                         fontSize      = 9.sp,
                                                         fontWeight    = FontWeight.Medium,
