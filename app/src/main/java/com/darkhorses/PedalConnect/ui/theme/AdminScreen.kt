@@ -7,6 +7,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
@@ -37,6 +38,7 @@ import com.google.firebase.firestore.Query
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.*
+
 
 // ── Design tokens ─────────────────────────────────────────────────────────────
 private val AGreen900  = Color(0xFF06402B)
@@ -91,9 +93,9 @@ private data class ModerationLog(
     val originalText: String,
     val censoredText: String,
     val context: String,   // "comment", "post_edit", "comment_edit"
-    val timestamp: Long
+    val timestamp: Long,
+    val reviewed: Boolean = false
 )
-
 private data class AdminAlert(
     val id: String,
     val riderName: String,
@@ -105,6 +107,19 @@ private data class AdminAlert(
     val photoUrl: String?,
     val responderName: String?
 )
+private data class UserReport(
+    val id: String,
+    val reporterName: String,
+    val reportedName: String,
+    val reportedRole: String,   // "rider" or "helper"
+    val alertId: String,
+    val emergencyType: String,
+    val reason: String,
+    val comment: String,
+    val timestamp: Long,
+    val reviewed: Boolean
+)
+
 private data class AuditLogEntry(
     val id: String,
     val adminUserName: String,
@@ -115,6 +130,7 @@ private data class AuditLogEntry(
     val detail: String,
     val timestamp: Long
 )
+
 
 // ── Screen ────────────────────────────────────────────────────────────────────
 @OptIn(ExperimentalMaterial3Api::class)
@@ -161,10 +177,13 @@ fun AdminScreen(paddingValues: PaddingValues, adminUserName: String = "") {
     val moderationLogs = remember { mutableStateListOf<ModerationLog>() }
     val auditLogs = remember { mutableStateListOf<AuditLogEntry>() }
     var isLoadingAuditLogs by remember { mutableStateOf(true) }
+    val userReports = remember { mutableStateListOf<UserReport>() }
+    var isLoadingUserReports by remember { mutableStateOf(true) }
     var adminDisplayName by remember { mutableStateOf(adminUserName) }
 
-    var successMessage by remember { mutableStateOf<String?>(null) }
-    var errorMessage   by remember { mutableStateOf<String?>(null) }
+    var successMessage     by remember { mutableStateOf<String?>(null) }
+    var errorMessage       by remember { mutableStateOf<String?>(null) }
+    var selectedReportChip by remember { mutableStateOf("Posts") }
 
     // ── Eager badge count listeners (run once on launch) ─────────────────────
     LaunchedEffect(Unit) {
@@ -248,7 +267,7 @@ fun AdminScreen(paddingValues: PaddingValues, adminUserName: String = "") {
                 val grouped = snap.documents
                     .mapNotNull { doc -> doc.getString("commentId") }
                     .distinct()
-                if (selectedSection != 4) {
+                if (selectedSection != 3) {
                     reportedComments.clear()
                     grouped.forEach { commentId ->
                         reportedComments.add(ReportedComment(
@@ -266,7 +285,7 @@ fun AdminScreen(paddingValues: PaddingValues, adminUserName: String = "") {
             .whereNotEqualTo("status", "resolved")
             .addSnapshotListener { snap, _ ->
                 if (snap == null) return@addSnapshotListener
-                if (selectedSection != 6) {
+                if (selectedSection != 5) {
                     activeAlerts.clear()
                     for (doc in snap.documents) {
                         activeAlerts.add(AdminAlert(
@@ -283,6 +302,55 @@ fun AdminScreen(paddingValues: PaddingValues, adminUserName: String = "") {
                     }
                 }
                 isLoadingAlerts = false
+            }
+    }
+
+    LaunchedEffect(Unit) {
+        db.collection("moderationLogs")
+            .whereEqualTo("reviewed", false)
+            .addSnapshotListener { snap, _ ->
+                if (snap == null) return@addSnapshotListener
+                if (selectedSection != 6) {
+                    moderationLogs.clear()
+                    for (doc in snap.documents) {
+                        moderationLogs.add(ModerationLog(
+                            id           = doc.id,
+                            userName     = doc.getString("userName")     ?: "",
+                            originalText = doc.getString("originalText") ?: "",
+                            censoredText = doc.getString("censoredText") ?: "",
+                            context      = doc.getString("context")      ?: "comment",
+                            timestamp    = doc.getLong("timestamp")      ?: 0L,
+                            reviewed     = false
+                        ))
+                    }
+                }
+                isLoadingModerationLogs = false
+            }
+    }
+
+    LaunchedEffect(Unit) {
+        db.collection("userReports")
+            .whereEqualTo("reviewed", false)
+            .addSnapshotListener { snap, _ ->
+                if (snap == null) return@addSnapshotListener
+                if (selectedSection != 8) {
+                    userReports.clear()
+                    for (doc in snap.documents) {
+                        userReports.add(UserReport(
+                            id           = doc.id,
+                            reporterName = doc.getString("reporterName")  ?: "",
+                            reportedName = doc.getString("reportedName")  ?: "",
+                            reportedRole = doc.getString("reportedRole")  ?: "",
+                            alertId      = doc.getString("alertId")       ?: "",
+                            emergencyType= doc.getString("emergencyType") ?: "",
+                            reason       = doc.getString("reason")        ?: "",
+                            comment      = doc.getString("comment")       ?: "",
+                            timestamp    = doc.getLong("timestamp")       ?: 0L,
+                            reviewed     = doc.getBoolean("reviewed")     ?: false
+                        ))
+                    }
+                }
+                isLoadingUserReports = false
             }
     }
 
@@ -343,7 +411,7 @@ fun AdminScreen(paddingValues: PaddingValues, adminUserName: String = "") {
     }
 
     LaunchedEffect(selectedSection) {
-        if (selectedSection != 3) return@LaunchedEffect
+        if (selectedSection != 3) return@LaunchedEffect // shared with comment reports
         db.collection("reportedPosts")
             .orderBy("timestamp", Query.Direction.DESCENDING)
             .addSnapshotListener { snap, _ ->
@@ -389,7 +457,7 @@ fun AdminScreen(paddingValues: PaddingValues, adminUserName: String = "") {
 
 
     LaunchedEffect(selectedSection) {
-        if (selectedSection != 5) return@LaunchedEffect
+        if (selectedSection != 4) return@LaunchedEffect
         db.collection("reportedImages")
             .orderBy("timestamp", Query.Direction.DESCENDING)
             .addSnapshotListener { snap, _ ->
@@ -419,7 +487,7 @@ fun AdminScreen(paddingValues: PaddingValues, adminUserName: String = "") {
     }
 
     LaunchedEffect(selectedSection) {
-        if (selectedSection != 4) return@LaunchedEffect
+        if (selectedSection != 3) return@LaunchedEffect
         db.collection("reportedComments")
             .orderBy("timestamp", Query.Direction.DESCENDING)
             .addSnapshotListener { snap, _ ->
@@ -564,10 +632,10 @@ fun AdminScreen(paddingValues: PaddingValues, adminUserName: String = "") {
     }
 
     LaunchedEffect(selectedSection) {
-        if (selectedSection != 7) return@LaunchedEffect
+        if (selectedSection != 6) return@LaunchedEffect
         db.collection("moderationLogs")
+            .whereEqualTo("reviewed", false)
             .orderBy("timestamp", Query.Direction.DESCENDING)
-            .limit(50)
             .addSnapshotListener { snap, _ ->
                 if (snap == null) { isLoadingModerationLogs = false; return@addSnapshotListener }
                 moderationLogs.clear()
@@ -578,7 +646,8 @@ fun AdminScreen(paddingValues: PaddingValues, adminUserName: String = "") {
                         originalText = doc.getString("originalText") ?: "",
                         censoredText = doc.getString("censoredText") ?: "",
                         context      = doc.getString("context")      ?: "comment",
-                        timestamp    = doc.getLong("timestamp")      ?: 0L
+                        timestamp    = doc.getLong("timestamp")      ?: 0L,
+                        reviewed     = false
                     ))
                 }
                 isLoadingModerationLogs = false
@@ -586,6 +655,32 @@ fun AdminScreen(paddingValues: PaddingValues, adminUserName: String = "") {
     }
     LaunchedEffect(selectedSection) {
         if (selectedSection != 8) return@LaunchedEffect
+        db.collection("userReports")
+            .whereEqualTo("reviewed", false)
+            .orderBy("timestamp", Query.Direction.DESCENDING)
+            .addSnapshotListener { snap, _ ->
+                if (snap == null) { isLoadingUserReports = false; return@addSnapshotListener }
+                userReports.clear()
+                for (doc in snap.documents) {
+                    userReports.add(UserReport(
+                        id            = doc.id,
+                        reporterName  = doc.getString("reporterName")  ?: "",
+                        reportedName  = doc.getString("reportedName")  ?: "",
+                        reportedRole  = doc.getString("reportedRole")  ?: "",
+                        alertId       = doc.getString("alertId")       ?: "",
+                        emergencyType = doc.getString("emergencyType") ?: "",
+                        reason        = doc.getString("reason")        ?: "",
+                        comment       = doc.getString("comment")       ?: "",
+                        timestamp     = doc.getLong("timestamp")       ?: 0L,
+                        reviewed      = doc.getBoolean("reviewed")     ?: false
+                    ))
+                }
+                isLoadingUserReports = false
+            }
+    }
+
+    LaunchedEffect(selectedSection) {
+        if (selectedSection != 7) return@LaunchedEffect
         db.collection("moderationAuditLog")
             .orderBy("timestamp", Query.Direction.DESCENDING)
             .limit(100)
@@ -609,7 +704,7 @@ fun AdminScreen(paddingValues: PaddingValues, adminUserName: String = "") {
     }
 
     LaunchedEffect(selectedSection) {
-        if (selectedSection != 6) return@LaunchedEffect
+        if (selectedSection != 5) return@LaunchedEffect
         db.collection("alerts")
             .addSnapshotListener { snap, _ ->
                 if (snap == null) { isLoadingAlerts = false; return@addSnapshotListener }
@@ -860,15 +955,15 @@ fun AdminScreen(paddingValues: PaddingValues, adminUserName: String = "") {
         val badgeColor: Color
     )
     val sections = listOf(
-        NavSection("Dashboard",        Icons.Default.Dashboard,         0,                       AGreen700),
-        NavSection("Posts",            Icons.Default.Article,           pendingPosts.size,       AAmber500),
-        NavSection("Rides",            Icons.Default.DirectionsBike,    pendingRides.size,       Color(0xFF1976D2)),
-        NavSection("Post Reports",     Icons.Default.Flag,              reportedPosts.size,      ARedColor),
-        NavSection("Comment Reports",  Icons.Default.ChatBubbleOutline, reportedComments.size,   Color(0xFFEA580C)),
-        NavSection("Photo Reports",    Icons.Default.Image,             reportedImages.size,     Color(0xFFEA580C)),
-        NavSection("Alerts",           Icons.Default.Warning,           activeAlerts.size,       Color(0xFFEF4444)),
-        NavSection("Profanity Logs",   Icons.Default.Shield,            moderationLogs.size,     Color(0xFF7C3AED)),
-        NavSection("Audit Log",        Icons.Default.ManageAccounts,    auditLogs.size,          Color(0xFF0891B2))
+            NavSection("Dashboard",      Icons.Default.Dashboard,      0,                                          AGreen700),
+    NavSection("Posts",          Icons.Default.Article,        pendingPosts.size,                          AAmber500),
+    NavSection("Rides",          Icons.Default.DirectionsBike, pendingRides.size,                          Color(0xFF1976D2)),
+    NavSection("Reports",        Icons.Default.Flag,           reportedPosts.size + reportedComments.size, ARedColor),
+    NavSection("Photo Reports",  Icons.Default.Image,          reportedImages.size,                        Color(0xFFEA580C)),
+    NavSection("Alerts",         Icons.Default.Warning,        activeAlerts.size,                          Color(0xFFEF4444)),
+    NavSection("Profanity Logs", Icons.Default.Shield,         moderationLogs.size,                        Color(0xFF7C3AED)),
+    NavSection("Audit Log",      Icons.Default.ManageAccounts, auditLogs.size,                             Color(0xFF0891B2)),
+    NavSection("User Reports",   Icons.Default.PersonOff,      userReports.size,                           Color(0xFF7C3AED))
     )
     // ── Drawer state ──────────────────────────────────────────────────────────
     val drawerState = rememberDrawerState(DrawerValue.Closed)
@@ -897,7 +992,9 @@ fun AdminScreen(paddingValues: PaddingValues, adminUserName: String = "") {
                     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                            Box(Modifier.size(40.dp).clip(CircleShape)
+                            Box(Modifier
+                                .size(40.dp)
+                                .clip(CircleShape)
                                 .background(Color.White.copy(alpha = 0.15f)),
                                 contentAlignment = Alignment.Center) {
                                 Icon(Icons.Default.AdminPanelSettings, null,
@@ -957,9 +1054,15 @@ fun AdminScreen(paddingValues: PaddingValues, adminUserName: String = "") {
                 Spacer(Modifier.height(8.dp))
 
                 // Nav items
-                sections.forEachIndexed { index, sec ->
-                    val isSelected = selectedSection == index
-                    NavigationDrawerItem(
+                LazyColumn(
+                    modifier = Modifier.weight(1f),
+                    contentPadding = PaddingValues(
+                        bottom = paddingValues.calculateBottomPadding() + 24.dp
+                    )
+                ) {
+                    itemsIndexed(sections) { index: Int, sec: NavSection ->
+                        val isSelected = selectedSection == index
+                        NavigationDrawerItem(
                         modifier = Modifier.padding(horizontal = 12.dp, vertical = 2.dp),
                         label = {
                             Row(Modifier.fillMaxWidth(),
@@ -970,8 +1073,13 @@ fun AdminScreen(paddingValues: PaddingValues, adminUserName: String = "") {
                                     color = if (isSelected) AGreen900 else Color.White)
                                 if (sec.count > 0) {
                                     Box(
-                                        Modifier.clip(RoundedCornerShape(20.dp))
-                                            .background(if (isSelected) sec.badgeColor else sec.badgeColor.copy(alpha = 0.25f))
+                                        Modifier
+                                            .clip(RoundedCornerShape(20.dp))
+                                            .background(
+                                                if (isSelected) sec.badgeColor else sec.badgeColor.copy(
+                                                    alpha = 0.25f
+                                                )
+                                            )
                                             .padding(horizontal = 8.dp, vertical = 3.dp)
                                     ) {
                                         Text("${sec.count}", fontSize = 11.sp,
@@ -1001,7 +1109,8 @@ fun AdminScreen(paddingValues: PaddingValues, adminUserName: String = "") {
                             unselectedTextColor      = Color.White
                         ),
                         shape = RoundedCornerShape(12.dp)
-                    )
+                        )
+                    }
                 }
             }
         }
@@ -1013,7 +1122,9 @@ fun AdminScreen(paddingValues: PaddingValues, adminUserName: String = "") {
                         Row(verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                             // Section icon
-                            Box(Modifier.size(32.dp).clip(RoundedCornerShape(8.dp))
+                            Box(Modifier
+                                .size(32.dp)
+                                .clip(RoundedCornerShape(8.dp))
                                 .background(Color.White.copy(alpha = 0.15f)),
                                 contentAlignment = Alignment.Center) {
                                 Icon(sections[selectedSection].icon, null,
@@ -1027,12 +1138,12 @@ fun AdminScreen(paddingValues: PaddingValues, adminUserName: String = "") {
                                     0 -> "Overview"
                                     1 -> "${pendingPosts.size} pending"
                                     2 -> "${pendingRides.size} pending"
-                                    3 -> "${reportedPosts.size} reported"
-                                    4 -> "${reportedComments.size} reported"
-                                    5 -> "${reportedImages.size} reported"
-                                    6 -> "${activeAlerts.size} active"
-                                    7 -> "${moderationLogs.size} entries"
-                                    8 -> "${auditLogs.size} entries"
+                                    3 -> "${reportedPosts.size + reportedComments.size} reported"
+                                    4 -> "${reportedImages.size} reported"
+                                    5 -> "${activeAlerts.size} active"
+                                    6 -> "${moderationLogs.size} entries"
+                                    7 -> "${auditLogs.size} entries"
+                                    8 -> "${userReports.size} pending"
                                     else -> ""
                                 }, fontSize = 11.sp, color = Color.White.copy(alpha = 0.65f))
                             }
@@ -1068,7 +1179,9 @@ fun AdminScreen(paddingValues: PaddingValues, adminUserName: String = "") {
         ) { innerPadding ->
             Box(Modifier.fillMaxSize()) {
                 LazyColumn(
-                    modifier       = Modifier.fillMaxSize().padding(innerPadding),
+                    modifier       = Modifier
+                        .fillMaxSize()
+                        .padding(innerPadding),
                     contentPadding = PaddingValues(
                         start  = 16.dp, end = 16.dp, top = 12.dp,
                         bottom = paddingValues.calculateBottomPadding() + 24.dp
@@ -1083,9 +1196,17 @@ fun AdminScreen(paddingValues: PaddingValues, adminUserName: String = "") {
                                 // ── Dashboard ─────────────────────────────────────
                                 item {
                                     Box(
-                                        Modifier.fillMaxWidth()
+                                        Modifier
+                                            .fillMaxWidth()
                                             .clip(RoundedCornerShape(18.dp))
-                                            .background(Brush.horizontalGradient(listOf(AGreen900, Color(0xFF0A5C3D))))
+                                            .background(
+                                                Brush.horizontalGradient(
+                                                    listOf(
+                                                        AGreen900,
+                                                        Color(0xFF0A5C3D)
+                                                    )
+                                                )
+                                            )
                                             .padding(20.dp)
                                     ) {
                                         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -1119,17 +1240,17 @@ fun AdminScreen(paddingValues: PaddingValues, adminUserName: String = "") {
                                         modifier = Modifier.padding(start = 2.dp))
                                     Spacer(Modifier.height(8.dp))
                                     val attentionItems = listOf(
-                                        Triple("Posts",           pendingPosts.size,    1),
-                                        Triple("Rides",           pendingRides.size,    2),
-                                        Triple("Post Reports",    reportedPosts.size,   3),
-                                        Triple("Comment Reports", reportedComments.size,4),
-                                        Triple("Photo Reports",   reportedImages.size,  5),
-                                        Triple("Active Alerts",   activeAlerts.size,    6)
+                                        Triple("Posts",         pendingPosts.size,                          1),
+                                        Triple("Rides",         pendingRides.size,                          2),
+                                        Triple("Reports",       reportedPosts.size + reportedComments.size, 3),
+                                        Triple("Photo Reports", reportedImages.size,                        4),
+                                        Triple("Active Alerts", activeAlerts.size,                          5)
                                     ).filter { it.second > 0 }
 
                                     if (attentionItems.isEmpty()) {
                                         Box(
-                                            Modifier.fillMaxWidth()
+                                            Modifier
+                                                .fillMaxWidth()
                                                 .clip(RoundedCornerShape(14.dp))
                                                 .background(AGreen50)
                                                 .padding(20.dp),
@@ -1149,20 +1270,29 @@ fun AdminScreen(paddingValues: PaddingValues, adminUserName: String = "") {
                                             attentionItems.forEach { (label, count, sectionIdx) ->
                                                 val isUrgent = label.contains("Alert") || label.contains("Report")
                                                 Row(
-                                                    Modifier.fillMaxWidth()
+                                                    Modifier
+                                                        .fillMaxWidth()
                                                         .clip(RoundedCornerShape(12.dp))
                                                         .background(if (isUrgent) ARedLight else AAmber50)
                                                         .clickable { selectedSection = sectionIdx }
-                                                        .padding(horizontal = 14.dp, vertical = 12.dp),
+                                                        .padding(
+                                                            horizontal = 14.dp,
+                                                            vertical = 12.dp
+                                                        ),
                                                     verticalAlignment = Alignment.CenterVertically,
                                                     horizontalArrangement = Arrangement.SpaceBetween
                                                 ) {
                                                     Row(verticalAlignment = Alignment.CenterVertically,
                                                         horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                                                         Box(
-                                                            Modifier.size(36.dp)
+                                                            Modifier
+                                                                .size(36.dp)
                                                                 .clip(RoundedCornerShape(10.dp))
-                                                                .background(if (isUrgent) ARedColor.copy(alpha = 0.12f) else AAmber500.copy(alpha = 0.12f)),
+                                                                .background(
+                                                                    if (isUrgent) ARedColor.copy(
+                                                                        alpha = 0.12f
+                                                                    ) else AAmber500.copy(alpha = 0.12f)
+                                                                ),
                                                             Alignment.Center
                                                         ) {
                                                             Icon(
@@ -1184,9 +1314,13 @@ fun AdminScreen(paddingValues: PaddingValues, adminUserName: String = "") {
                                                     Row(verticalAlignment = Alignment.CenterVertically,
                                                         horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                                                         Box(
-                                                            Modifier.clip(RoundedCornerShape(20.dp))
+                                                            Modifier
+                                                                .clip(RoundedCornerShape(20.dp))
                                                                 .background(if (isUrgent) ARedColor else AAmber500)
-                                                                .padding(horizontal = 10.dp, vertical = 4.dp)
+                                                                .padding(
+                                                                    horizontal = 10.dp,
+                                                                    vertical = 4.dp
+                                                                )
                                                         ) {
                                                             Text("$count", fontSize = 12.sp,
                                                                 fontWeight = FontWeight.ExtraBold,
@@ -1220,7 +1354,9 @@ fun AdminScreen(paddingValues: PaddingValues, adminUserName: String = "") {
                                     ) {
                                         if (recentActivity.isEmpty()) {
                                             Column(
-                                                modifier = Modifier.fillMaxWidth().padding(vertical = 32.dp),
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .padding(vertical = 32.dp),
                                                 horizontalAlignment = Alignment.CenterHorizontally,
                                                 verticalArrangement = Arrangement.spacedBy(8.dp)
                                             ) {
@@ -1246,12 +1382,16 @@ fun AdminScreen(paddingValues: PaddingValues, adminUserName: String = "") {
                                                         Row(
                                                             Modifier
                                                                 .fillMaxWidth()
-                                                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                                                                .padding(
+                                                                    horizontal = 12.dp,
+                                                                    vertical = 10.dp
+                                                                ),
                                                             verticalAlignment = Alignment.CenterVertically,
                                                             horizontalArrangement = Arrangement.spacedBy(12.dp)
                                                         ) {
                                                             Box(
-                                                                Modifier.size(36.dp)
+                                                                Modifier
+                                                                    .size(36.dp)
                                                                     .clip(RoundedCornerShape(10.dp))
                                                                     .background(iconBg),
                                                                 Alignment.Center
@@ -1287,7 +1427,10 @@ fun AdminScreen(paddingValues: PaddingValues, adminUserName: String = "") {
                                                             .align(Alignment.BottomCenter)
                                                             .background(
                                                                 Brush.verticalGradient(
-                                                                    listOf(Color.Transparent, AWhite)
+                                                                    listOf(
+                                                                        Color.Transparent,
+                                                                        AWhite
+                                                                    )
                                                                 )
                                                             )
                                                     )
@@ -1321,7 +1464,9 @@ fun AdminScreen(paddingValues: PaddingValues, adminUserName: String = "") {
                                                     shape = RoundedCornerShape(20.dp),
                                                     containerColor = AWhite,
                                                     icon = {
-                                                        Box(Modifier.size(52.dp).clip(CircleShape)
+                                                        Box(Modifier
+                                                            .size(52.dp)
+                                                            .clip(CircleShape)
                                                             .background(AGreen50),
                                                             contentAlignment = Alignment.Center) {
                                                             Icon(Icons.Default.CheckCircle, null,
@@ -1348,7 +1493,9 @@ fun AdminScreen(paddingValues: PaddingValues, adminUserName: String = "") {
                                                                     showApproveAll = false
                                                                     pendingPosts.toList().forEach { approvePost(it) }
                                                                 },
-                                                                modifier = Modifier.fillMaxWidth().height(46.dp),
+                                                                modifier = Modifier
+                                                                    .fillMaxWidth()
+                                                                    .height(46.dp),
                                                                 shape  = RoundedCornerShape(12.dp),
                                                                 colors = ButtonDefaults.buttonColors(
                                                                     containerColor = AGreen900,
@@ -1356,7 +1503,9 @@ fun AdminScreen(paddingValues: PaddingValues, adminUserName: String = "") {
                                                             ) { Text("Approve all", fontWeight = FontWeight.Bold) }
                                                             OutlinedButton(
                                                                 onClick  = { showApproveAll = false },
-                                                                modifier = Modifier.fillMaxWidth().height(44.dp),
+                                                                modifier = Modifier
+                                                                    .fillMaxWidth()
+                                                                    .height(44.dp),
                                                                 shape    = RoundedCornerShape(12.dp)
                                                             ) { Text("Cancel", color = AMuted) }
                                                         }
@@ -1407,7 +1556,9 @@ fun AdminScreen(paddingValues: PaddingValues, adminUserName: String = "") {
                                                     shape = RoundedCornerShape(20.dp),
                                                     containerColor = AWhite,
                                                     icon = {
-                                                        Box(Modifier.size(52.dp).clip(CircleShape)
+                                                        Box(Modifier
+                                                            .size(52.dp)
+                                                            .clip(CircleShape)
                                                             .background(AGreen50),
                                                             contentAlignment = Alignment.Center) {
                                                             Icon(Icons.Default.CheckCircle, null,
@@ -1434,7 +1585,9 @@ fun AdminScreen(paddingValues: PaddingValues, adminUserName: String = "") {
                                                                     showApproveAll = false
                                                                     pendingRides.toList().forEach { approveRide(it) }
                                                                 },
-                                                                modifier = Modifier.fillMaxWidth().height(46.dp),
+                                                                modifier = Modifier
+                                                                    .fillMaxWidth()
+                                                                    .height(46.dp),
                                                                 shape  = RoundedCornerShape(12.dp),
                                                                 colors = ButtonDefaults.buttonColors(
                                                                     containerColor = AGreen900,
@@ -1442,7 +1595,9 @@ fun AdminScreen(paddingValues: PaddingValues, adminUserName: String = "") {
                                                             ) { Text("Approve all", fontWeight = FontWeight.Bold) }
                                                             OutlinedButton(
                                                                 onClick  = { showApproveAll = false },
-                                                                modifier = Modifier.fillMaxWidth().height(44.dp),
+                                                                modifier = Modifier
+                                                                    .fillMaxWidth()
+                                                                    .height(44.dp),
                                                                 shape    = RoundedCornerShape(12.dp)
                                                             ) { Text("Cancel", color = AMuted) }
                                                         }
@@ -1470,185 +1625,221 @@ fun AdminScreen(paddingValues: PaddingValues, adminUserName: String = "") {
                             }
                         }
                         3 -> {
-                            if (isLoadingReportedPosts) {
-                                item { AdminLoadingState() }
-                            } else if (reportedPosts.isEmpty()) {
-                                item { AdminEmptyState(Icons.Default.CheckCircle, "No reported posts", "All posts have been reviewed.") }
-                            } else {
-                                item {
-                                    Text("${reportedPosts.size} reported post${if (reportedPosts.size != 1) "s" else ""}",
-                                        fontSize = 12.sp, color = AMuted,
-                                        modifier = Modifier.padding(start = 4.dp, bottom = 2.dp))
-                                }
-                                items(reportedPosts, key = { it.id }) { post ->
-                                    AdminPostCard(
-                                        post      = post,
-                                        onDelete  = {
-                                            db.collection("posts").document(post.id).delete()
-                                            db.collection("reportedPosts")
-                                                .whereEqualTo("postId", post.id)
-                                                .get()
-                                                .addOnSuccessListener { snap ->
-                                                    snap.documents.forEach { it.reference.delete() }
-                                                }
-                                            db.collection("notifications").add(
-                                                hashMapOf(
-                                                    "userName" to post.userName,
-                                                    "message" to "Your post was permanently removed by an admin for violating community guidelines.",
-                                                    "type" to "moderation",
-                                                    "timestamp" to System.currentTimeMillis(),
-                                                    "read" to false
+                            val isLoadingReports = isLoadingReportedPosts || isLoadingReportedComments
+                            item {
+                                // ── Chip toggle ───────────────────────────────
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(bottom = 4.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    listOf(
+                                        "Posts"    to reportedPosts.size,
+                                        "Comments" to reportedComments.size
+                                    ).forEach { (label, count) ->
+                                        val selected = selectedReportChip == label
+                                        FilterChip(
+                                            selected = selected,
+                                            onClick  = { selectedReportChip = label },
+                                            label = {
+                                                Text(
+                                                    "$label ($count)",
+                                                    fontWeight = if (selected) FontWeight.Bold else FontWeight.SemiBold,
+                                                    fontSize   = 13.sp
                                                 )
-                                            )
-                                            reportedPosts.remove(post)
-                                        },
-                                        onApprove = {
-                                            // "Approve" here means dismiss reports — restore post to accepted
-                                            db.collection("posts").document(post.id)
-                                                .update("status", "accepted")
-                                            db.collection("reportedPosts")
-                                                .whereEqualTo("postId", post.id)
-                                                .get()
-                                                .addOnSuccessListener { snap ->
-                                                    snap.documents.forEach { it.reference.delete() }
-                                                }
-                                            reportedPosts.remove(post)
-                                        },
-                                        onReject  = {
-                                            // "Reject" means remove the post entirely
-                                            db.collection("posts").document(post.id).delete()
-                                            db.collection("reportedPosts")
-                                                .whereEqualTo("postId", post.id)
-                                                .get()
-                                                .addOnSuccessListener { snap ->
-                                                    snap.documents.forEach { it.reference.delete() }
-                                                }
-                                            db.collection("users")
-                                                .whereEqualTo("username", post.userName)
-                                                .limit(1).get()
-                                                .addOnSuccessListener { snap ->
-                                                    val displayName = snap.documents.firstOrNull()
-                                                        ?.getString("displayName")
-                                                        ?.takeIf { it.isNotBlank() } ?: post.userName
-                                                    db.collection("notifications").add(hashMapOf(
-                                                        "userName"  to post.userName,
-                                                        "message"   to "❌ Sorry $displayName, your post was removed after being reported for violating community guidelines.",
-                                                        "type"      to "rejected",
-                                                        "timestamp" to System.currentTimeMillis(),
-                                                        "read"      to false
-                                                    ))
-                                                }
-                                                .addOnFailureListener {
-                                                    db.collection("notifications").add(hashMapOf(
-                                                        "userName"  to post.userName,
-                                                        "message"   to "❌ Your post was removed after being reported for violating community guidelines.",
-                                                        "type"      to "rejected",
-                                                        "timestamp" to System.currentTimeMillis(),
-                                                        "read"      to false
-                                                    ))
-                                                }
-                                            reportedPosts.remove(post)
-                                        },
-                                    )
+                                            },
+                                            colors = FilterChipDefaults.filterChipColors(
+                                                selectedContainerColor = ARedColor,
+                                                selectedLabelColor     = Color.White,
+                                                containerColor         = ARedColor.copy(alpha = 0.08f),
+                                                labelColor             = ARedColor
+                                            ),
+                                            border = FilterChipDefaults.filterChipBorder(
+                                                enabled             = true,
+                                                selected            = selected,
+                                                borderColor         = ARedColor.copy(alpha = 0.4f),
+                                                selectedBorderColor = Color.Transparent,
+                                                borderWidth         = 1.dp,
+                                                selectedBorderWidth = 0.dp
+                                            ),
+                                            shape = RoundedCornerShape(10.dp)
+                                        )
+                                    }
+                                }
+                            }
+
+                            if (isLoadingReports) {
+                                item { AdminLoadingState() }
+                            } else if (selectedReportChip == "Posts") {
+                                if (reportedPosts.isEmpty()) {
+                                    item { AdminEmptyState(Icons.Default.CheckCircle, "No reported posts", "All posts have been reviewed.") }
+                                } else {
+                                    item {
+                                        Text("${reportedPosts.size} reported post${if (reportedPosts.size != 1) "s" else ""}",
+                                            fontSize = 12.sp, color = AMuted,
+                                            modifier = Modifier.padding(start = 4.dp, bottom = 2.dp))
+                                    }
+                                    items(reportedPosts, key = { it.id }) { post ->
+                                        AdminPostCard(
+                                            post      = post,
+                                            onDelete  = {
+                                                db.collection("posts").document(post.id).delete()
+                                                db.collection("reportedPosts")
+                                                    .whereEqualTo("postId", post.id)
+                                                    .get()
+                                                    .addOnSuccessListener { snap ->
+                                                        snap.documents.forEach { it.reference.delete() }
+                                                    }
+                                                db.collection("notifications").add(hashMapOf(
+                                                    "userName"  to post.userName,
+                                                    "message"   to "Your post was permanently removed by an admin for violating community guidelines.",
+                                                    "type"      to "moderation",
+                                                    "timestamp" to System.currentTimeMillis(),
+                                                    "read"      to false
+                                                ))
+                                                reportedPosts.remove(post)
+                                            },
+                                            onApprove = {
+                                                db.collection("posts").document(post.id)
+                                                    .update("status", "accepted")
+                                                db.collection("reportedPosts")
+                                                    .whereEqualTo("postId", post.id)
+                                                    .get()
+                                                    .addOnSuccessListener { snap ->
+                                                        snap.documents.forEach { it.reference.delete() }
+                                                    }
+                                                reportedPosts.remove(post)
+                                            },
+                                            onReject  = {
+                                                db.collection("posts").document(post.id).delete()
+                                                db.collection("reportedPosts")
+                                                    .whereEqualTo("postId", post.id)
+                                                    .get()
+                                                    .addOnSuccessListener { snap ->
+                                                        snap.documents.forEach { it.reference.delete() }
+                                                    }
+                                                db.collection("users")
+                                                    .whereEqualTo("username", post.userName)
+                                                    .limit(1).get()
+                                                    .addOnSuccessListener { snap ->
+                                                        val displayName = snap.documents.firstOrNull()
+                                                            ?.getString("displayName")
+                                                            ?.takeIf { it.isNotBlank() } ?: post.userName
+                                                        db.collection("notifications").add(hashMapOf(
+                                                            "userName"  to post.userName,
+                                                            "message"   to "❌ Sorry $displayName, your post was removed after being reported for violating community guidelines.",
+                                                            "type"      to "rejected",
+                                                            "timestamp" to System.currentTimeMillis(),
+                                                            "read"      to false
+                                                        ))
+                                                    }
+                                                    .addOnFailureListener {
+                                                        db.collection("notifications").add(hashMapOf(
+                                                            "userName"  to post.userName,
+                                                            "message"   to "❌ Your post was removed after being reported for violating community guidelines.",
+                                                            "type"      to "rejected",
+                                                            "timestamp" to System.currentTimeMillis(),
+                                                            "read"      to false
+                                                        ))
+                                                    }
+                                                reportedPosts.remove(post)
+                                            }
+                                        )
+                                    }
+                                }
+                            } else {
+                                // Comments chip
+                                if (reportedComments.isEmpty()) {
+                                    item { AdminEmptyState(Icons.Default.CheckCircle, "No reported comments", "All comments have been reviewed.") }
+                                } else {
+                                    item {
+                                        Text(
+                                            "${reportedComments.size} reported comment${if (reportedComments.size != 1) "s" else ""}",
+                                            fontSize = 12.sp, color = AMuted,
+                                            modifier = Modifier.padding(start = 4.dp, bottom = 2.dp)
+                                        )
+                                    }
+                                    items(reportedComments, key = { it.commentId }) { reported ->
+                                        AdminCommentReportCard(
+                                            reported  = reported,
+                                            onRestore = {
+                                                reportedComments.remove(reported)
+                                                db.collection("posts").document(reported.postId)
+                                                    .collection("comments").document(reported.commentId)
+                                                    .update("status", "visible")
+                                                    .addOnSuccessListener {
+                                                        db.collection("reportedComments")
+                                                            .whereEqualTo("commentId", reported.commentId)
+                                                            .get()
+                                                            .addOnSuccessListener { snap ->
+                                                                snap.documents.forEach { it.reference.delete() }
+                                                            }
+                                                        db.collection("posts").document(reported.postId)
+                                                            .update("comments", com.google.firebase.firestore.FieldValue.increment(1))
+                                                        db.collection("notifications").add(hashMapOf(
+                                                            "userName"  to reported.userName,
+                                                            "message"   to "✅ A report on your comment was reviewed and dismissed. Your comment is visible again.",
+                                                            "type"      to "moderation_restored",
+                                                            "timestamp" to System.currentTimeMillis(),
+                                                            "read"      to false
+                                                        ))
+                                                        toast("Comment restored.")
+                                                        logAudit("Restored comment", "comment", reported.userName, reported.text.take(80))
+                                                    }
+                                                    .addOnFailureListener {
+                                                        reportedComments.add(reported)
+                                                        toast("Failed to restore.", false)
+                                                    }
+                                            },
+                                            onDelete  = {
+                                                reportedComments.remove(reported)
+                                                db.collection("posts").document(reported.postId)
+                                                    .collection("comments").document(reported.commentId)
+                                                    .delete()
+                                                    .addOnSuccessListener {
+                                                        db.collection("reportedComments")
+                                                            .whereEqualTo("commentId", reported.commentId)
+                                                            .get()
+                                                            .addOnSuccessListener { snap ->
+                                                                snap.documents.forEach { it.reference.delete() }
+                                                            }
+                                                        db.collection("notifications").add(hashMapOf(
+                                                            "userName"  to reported.userName,
+                                                            "message"   to "❌ Your comment was removed by an admin for violating community guidelines.",
+                                                            "type"      to "rejected",
+                                                            "timestamp" to System.currentTimeMillis(),
+                                                            "read"      to false
+                                                        ))
+                                                        toast("Comment deleted.")
+                                                        logAudit("Deleted comment", "comment", reported.userName, reported.text.take(80))
+                                                    }
+                                                    .addOnFailureListener {
+                                                        reportedComments.add(reported)
+                                                        toast("Failed to delete.", false)
+                                                    }
+                                            },
+                                            onDismiss = {
+                                                reportedComments.remove(reported)
+                                                db.collection("reportedComments")
+                                                    .whereEqualTo("commentId", reported.commentId)
+                                                    .get()
+                                                    .addOnSuccessListener { snap ->
+                                                        snap.documents.forEach { it.reference.delete() }
+                                                        toast("Reports dismissed.")
+                                                        logAudit("Dismissed comment reports", "comment", reported.userName, reported.text.take(80))
+                                                    }
+                                                    .addOnFailureListener {
+                                                        reportedComments.add(reported)
+                                                        toast("Failed to dismiss.", false)
+                                                    }
+                                            }
+                                        )
+                                    }
                                 }
                             }
                         }
                         4 -> {
-                            if (isLoadingReportedComments) {
-                                item { AdminLoadingState() }
-                            } else if (reportedComments.isEmpty()) {
-                                item { AdminEmptyState(Icons.Default.CheckCircle, "No reported comments", "All comments have been reviewed.") }
-                            } else {
-                                item {
-                                    Text(
-                                        "${reportedComments.size} reported comment${if (reportedComments.size != 1) "s" else ""}",
-                                        fontSize = 12.sp, color = AMuted,
-                                        modifier = Modifier.padding(start = 4.dp, bottom = 2.dp)
-                                    )
-                                }
-                                items(reportedComments, key = { it.commentId }) { reported ->
-                                    AdminCommentReportCard(
-                                        reported = reported,
-                                        onRestore = {
-                                            reportedComments.remove(reported)
-                                            db.collection("posts").document(reported.postId)
-                                                .collection("comments").document(reported.commentId)
-                                                .update("status", "visible")
-                                                .addOnSuccessListener {
-
-                                                    // Clear all reports for this comment
-                                                    db.collection("reportedComments")
-                                                        .whereEqualTo("commentId", reported.commentId)
-                                                        .get()
-                                                        .addOnSuccessListener { snap ->
-                                                            snap.documents.forEach { it.reference.delete() }
-                                                        }
-                                                    // Restore comment count on post
-                                                    db.collection("posts").document(reported.postId)
-                                                        .update("comments", com.google.firebase.firestore.FieldValue.increment(1))
-                                                    // Notify the reporter(s) their report was dismissed
-                                                    db.collection("notifications").add(hashMapOf(
-                                                        "userName"  to reported.userName,
-                                                        "message"   to "✅ A report on your comment was reviewed and dismissed. Your comment is visible again.",
-                                                        "type"      to "moderation_restored",
-                                                        "timestamp" to System.currentTimeMillis(),
-                                                        "read"      to false
-                                                    ))
-                                                    toast("Comment restored.")
-                                                    logAudit("Restored comment", "comment", reported.userName, reported.text.take(80))
-                                                }
-                                                .addOnFailureListener {
-                                                    reportedComments.add(reported)
-                                                    toast("Failed to restore.", false)
-                                                }
-                                        },
-                                        onDelete = {
-                                            reportedComments.remove(reported)
-                                            db.collection("posts").document(reported.postId)
-                                                .collection("comments").document(reported.commentId)
-                                                .delete()
-                                                .addOnSuccessListener {
-                                                    db.collection("reportedComments")
-                                                        .whereEqualTo("commentId", reported.commentId)
-                                                        .get()
-                                                        .addOnSuccessListener { snap ->
-                                                            snap.documents.forEach { it.reference.delete() }
-                                                        }
-                                                    db.collection("notifications").add(hashMapOf(
-                                                        "userName"  to reported.userName,
-                                                        "message"   to "❌ Your comment was removed by an admin for violating community guidelines.",
-                                                        "type"      to "rejected",
-                                                        "timestamp" to System.currentTimeMillis(),
-                                                        "read"      to false
-                                                    ))
-                                                    toast("Comment deleted.")
-                                                    logAudit("Deleted comment", "comment", reported.userName, reported.text.take(80))
-                                                }
-                                                .addOnFailureListener {
-                                                    reportedComments.add(reported)
-                                                    toast("Failed to delete.", false)
-                                                }
-                                        },
-                                        onDismiss = {
-                                            reportedComments.remove(reported)
-                                            db.collection("reportedComments")
-                                                .whereEqualTo("commentId", reported.commentId)
-                                                .get()
-                                                .addOnSuccessListener { snap ->
-                                                    snap.documents.forEach { it.reference.delete() }
-                                                    toast("Reports dismissed.")
-                                                    logAudit("Dismissed comment reports", "comment", reported.userName, reported.text.take(80))
-                                                }
-                                                .addOnFailureListener {
-                                                    reportedComments.add(reported)
-                                                    toast("Failed to dismiss.", false)
-                                                }
-                                        }
-                                    )
-                                }
-                            }
-                        }
-                        5 -> {
                             if (isLoadingReports) {
                                 item { AdminLoadingState() }
                             } else if (reportedImages.isEmpty()) {
@@ -1668,25 +1859,114 @@ fun AdminScreen(paddingValues: PaddingValues, adminUserName: String = "") {
                                 }
                             }
                         }
-                        7 -> {
+                        6 -> {
                             if (isLoadingModerationLogs) {
                                 item { AdminLoadingState() }
                             } else if (moderationLogs.isEmpty()) {
                                 item { AdminEmptyState(Icons.Default.Shield, "No censored content", "The profanity filter has not triggered yet.") }
                             } else {
                                 item {
-                                    Text(
-                                        "${moderationLogs.size} auto-censored entr${if (moderationLogs.size != 1) "ies" else "y"}",
-                                        fontSize = 12.sp, color = AMuted,
-                                        modifier = Modifier.padding(start = 4.dp, bottom = 2.dp)
-                                    )
+                                    var showMarkAllDialog by remember { mutableStateOf(false) }
+
+                                    if (showMarkAllDialog) {
+                                        AlertDialog(
+                                            onDismissRequest = { showMarkAllDialog = false },
+                                            shape = RoundedCornerShape(20.dp),
+                                            containerColor = AWhite,
+                                            icon = {
+                                                Box(Modifier
+                                                    .size(52.dp)
+                                                    .clip(CircleShape)
+                                                    .background(AGreen50),
+                                                    contentAlignment = Alignment.Center) {
+                                                    Icon(Icons.Default.DoneAll, null,
+                                                        tint = AGreen900, modifier = Modifier.size(26.dp))
+                                                }
+                                            },
+                                            title = {
+                                                Text("Mark all as reviewed?",
+                                                    fontWeight = FontWeight.ExtraBold,
+                                                    fontSize = 17.sp, color = AOnSurface,
+                                                    textAlign = TextAlign.Center,
+                                                    modifier = Modifier.fillMaxWidth())
+                                            },
+                                            text = {
+                                                Text("All ${moderationLogs.size} entries will be marked as reviewed and removed from this queue. The records are preserved in Firestore.",
+                                                    fontSize = 13.sp, color = AMuted,
+                                                    textAlign = TextAlign.Center)
+                                            },
+                                            confirmButton = {
+                                                Column(Modifier.fillMaxWidth(),
+                                                    verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                                    Button(
+                                                        onClick = {
+                                                            showMarkAllDialog = false
+                                                            moderationLogs.toList().forEach { log ->
+                                                                db.collection("moderationLogs")
+                                                                    .document(log.id)
+                                                                    .update("reviewed", true)
+                                                            }
+                                                            moderationLogs.clear()
+                                                            toast("All entries marked as reviewed.")
+                                                            logAudit("Marked all profanity logs reviewed", "moderation", adminUserName, "${moderationLogs.size} entries")
+                                                        },
+                                                        modifier = Modifier.fillMaxWidth().height(46.dp),
+                                                        shape = RoundedCornerShape(12.dp),
+                                                        colors = ButtonDefaults.buttonColors(
+                                                            containerColor = AGreen900,
+                                                            contentColor = Color.White)
+                                                    ) { Text("Mark all reviewed", fontWeight = FontWeight.Bold) }
+                                                    OutlinedButton(
+                                                        onClick = { showMarkAllDialog = false },
+                                                        modifier = Modifier.fillMaxWidth().height(44.dp),
+                                                        shape = RoundedCornerShape(12.dp)
+                                                    ) { Text("Cancel", color = AMuted) }
+                                                }
+                                            }
+                                        )
+                                    }
+
+                                    Row(
+                                        Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            "${moderationLogs.size} unreviewed entr${if (moderationLogs.size != 1) "ies" else "y"}",
+                                            fontSize = 12.sp, color = AMuted,
+                                            modifier = Modifier.padding(start = 4.dp))
+                                        TextButton(onClick = { showMarkAllDialog = true }) {
+                                            Icon(Icons.Default.DoneAll, null,
+                                                modifier = Modifier.size(14.dp),
+                                                tint = AGreen900)
+                                            Spacer(Modifier.width(4.dp))
+                                            Text("Mark all reviewed", fontSize = 12.sp,
+                                                color = AGreen900, fontWeight = FontWeight.SemiBold)
+                                        }
+                                    }
                                 }
                                 items(moderationLogs, key = { it.id }) { log ->
-                                    AdminModerationLogCard(log = log)
+                                    AdminModerationLogCard(
+                                        log = log,
+                                        onDismiss = {
+                                            moderationLogs.remove(log)
+                                            db.collection("moderationLogs")
+                                                .document(log.id)
+                                                .update("reviewed", true)
+                                                .addOnSuccessListener {
+                                                    toast("Entry marked as reviewed.")
+                                                    logAudit("Reviewed profanity log", "moderation", log.userName, log.originalText.take(80))
+                                                }
+                                                .addOnFailureListener {
+                                                    moderationLogs.add(log)
+                                                    toast("Failed to dismiss.", false)
+                                                }
+                                        }
+                                    )
                                 }
                             }
                         }
-                        8 -> {
+                        7 -> {
                             if (isLoadingAuditLogs) {
                                 item { AdminLoadingState() }
                             } else if (auditLogs.isEmpty()) {
@@ -1705,7 +1985,7 @@ fun AdminScreen(paddingValues: PaddingValues, adminUserName: String = "") {
                             }
                         }
 
-                        6 -> {
+                        5 -> {
                             if (isLoadingAlerts) {
                                 item { AdminLoadingState() }
                             } else if (activeAlerts.isEmpty()) {
@@ -1720,6 +2000,54 @@ fun AdminScreen(paddingValues: PaddingValues, adminUserName: String = "") {
                                     AdminAlertCard(
                                         alert          = alert,
                                         onForceResolve = { forceResolveAlert(alert) }
+                                    )
+                                }
+                            }
+                        }
+
+                        8 -> {
+                            if (isLoadingUserReports) {
+                                item { AdminLoadingState() }
+                            } else if (userReports.isEmpty()) {
+                                item { AdminEmptyState(Icons.Default.PersonOff, "No user reports", "No riders or helpers have been reported.") }
+                            } else {
+                                item {
+                                    Text(
+                                        "${userReports.size} pending report${if (userReports.size != 1) "s" else ""}",
+                                        fontSize = 12.sp, color = AMuted,
+                                        modifier = Modifier.padding(start = 4.dp, bottom = 2.dp)
+                                    )
+                                }
+                                items(userReports, key = { it.id }) { report ->
+                                    AdminUserReportCard(
+                                        report    = report,
+                                        onDismiss = {
+                                            db.collection("userReports").document(report.id)
+                                                .update("reviewed", true)
+                                                .addOnSuccessListener {
+                                                    userReports.remove(report)
+                                                    toast("Report dismissed.")
+                                                    logAudit("Dismissed user report", "user_report", report.reportedName, report.reason)
+                                                }
+                                                .addOnFailureListener { toast("Failed to dismiss.", false) }
+                                        },
+                                        onWarn = {
+                                            db.collection("userReports").document(report.id)
+                                                .update("reviewed", true)
+                                                .addOnSuccessListener {
+                                                    userReports.remove(report)
+                                                    db.collection("notifications").add(hashMapOf(
+                                                        "userName"  to report.reportedName,
+                                                        "message"   to "⚠️ You have received a warning from an admin regarding your behavior on the platform. Please review community guidelines.",
+                                                        "type"      to "moderation",
+                                                        "timestamp" to System.currentTimeMillis(),
+                                                        "read"      to false
+                                                    ))
+                                                    toast("Warning sent to ${report.reportedName}.")
+                                                    logAudit("Warned user", "user_report", report.reportedName, report.reason)
+                                                }
+                                                .addOnFailureListener { toast("Failed to warn.", false) }
+                                        }
                                     )
                                 }
                             }
@@ -1780,7 +2108,10 @@ private fun AdminPostCard(
         AlertDialog(
             onDismissRequest = { showDeleteDialog = false },
             shape = RoundedCornerShape(20.dp), containerColor = AWhite,
-            icon = { Box(Modifier.size(52.dp).clip(CircleShape).background(ARedLight), Alignment.Center) {
+            icon = { Box(Modifier
+                .size(52.dp)
+                .clip(CircleShape)
+                .background(ARedLight), Alignment.Center) {
                 Icon(Icons.Default.DeleteForever, null, tint = ARedColor, modifier = Modifier.size(26.dp)) } },
             title = { Text("Delete Post?", fontWeight = FontWeight.ExtraBold, fontSize = 17.sp,
                 color = AOnSurface, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth()) },
@@ -1789,11 +2120,15 @@ private fun AdminPostCard(
             confirmButton = {
                 Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(onClick = { showDeleteDialog = false; onDelete() },
-                        modifier = Modifier.fillMaxWidth().height(46.dp), shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(46.dp), shape = RoundedCornerShape(12.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = ARedColor, contentColor = Color.White)) {
                         Text("Delete permanently", fontWeight = FontWeight.Bold, color = Color.White) }
                     OutlinedButton(onClick = { showDeleteDialog = false },
-                        modifier = Modifier.fillMaxWidth().height(44.dp), shape = RoundedCornerShape(12.dp)) {
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(44.dp), shape = RoundedCornerShape(12.dp)) {
                         Text("Cancel", color = AMuted) }
                 }
             }
@@ -1804,14 +2139,18 @@ private fun AdminPostCard(
         AlertDialog(
             onDismissRequest = { showRejectDialog = false },
             shape = RoundedCornerShape(20.dp), containerColor = AWhite,
-            icon = { Box(Modifier.size(52.dp).clip(CircleShape).background(AAmber50), Alignment.Center) {
+            icon = { Box(Modifier
+                .size(52.dp)
+                .clip(CircleShape)
+                .background(AAmber50), Alignment.Center) {
                 Icon(Icons.Default.Cancel, null, tint = AAmber500, modifier = Modifier.size(26.dp)) } },
             title = { Text("Reject Post?", fontWeight = FontWeight.ExtraBold, fontSize = 17.sp,
                 color = AOnSurface, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth()) },
             text  = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Box(
-                        Modifier.fillMaxWidth()
+                        Modifier
+                            .fillMaxWidth()
                             .clip(RoundedCornerShape(10.dp))
                             .background(Color(0xFFF9FAFB))
                             .padding(horizontal = 12.dp, vertical = 10.dp)
@@ -1834,32 +2173,44 @@ private fun AdminPostCard(
             confirmButton = {
                 Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(onClick = { showRejectDialog = false; onReject() },
-                        modifier = Modifier.fillMaxWidth().height(46.dp), shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(46.dp), shape = RoundedCornerShape(12.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = AAmber500, contentColor = Color.White)) {
                         Text("Reject post", fontWeight = FontWeight.Bold, color = Color.White) }
                     OutlinedButton(onClick = { showRejectDialog = false },
-                        modifier = Modifier.fillMaxWidth().height(44.dp), shape = RoundedCornerShape(12.dp)) {
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(44.dp), shape = RoundedCornerShape(12.dp)) {
                         Text("Cancel", color = AMuted) }
                 }
             }
         )
     }
 
-    Card(modifier = Modifier.fillMaxWidth().animateContentSize(), shape = RoundedCornerShape(16.dp),
+    Card(modifier = Modifier
+        .fillMaxWidth()
+        .animateContentSize(), shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = AWhite), elevation = CardDefaults.cardElevation(2.dp)) {
         Column(Modifier.fillMaxWidth()) {
             if (post.imageUrl.isNotBlank()) {
                 AsyncImage(model = post.imageUrl, contentDescription = "Post image",
                     contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxWidth().height(160.dp)
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(160.dp)
                         .clip(RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp)))
             }
-            Column(modifier = Modifier.fillMaxWidth().padding(14.dp),
+            Column(modifier = Modifier
+                .fillMaxWidth()
+                .padding(14.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
                     Row(verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Box(Modifier.size(36.dp).clip(CircleShape)
+                        Box(Modifier
+                            .size(36.dp)
+                            .clip(CircleShape)
                             .background(Brush.linearGradient(listOf(AGreen900, AGreen700))), Alignment.Center) {
                             Text(postDisplayName.take(1).uppercase(), fontSize = 14.sp,
                                 fontWeight = FontWeight.Bold, color = Color.White) }
@@ -1868,7 +2219,9 @@ private fun AdminPostCard(
                             Text(formatAdminTime(post.timestamp), fontSize = 11.sp, color = AMuted)
                         }
                     }
-                    Box(Modifier.clip(RoundedCornerShape(6.dp)).background(AGreen50)
+                    Box(Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(AGreen50)
                         .padding(horizontal = 8.dp, vertical = 3.dp)) {
                         Text(post.activity, fontSize = 10.sp, color = AGreen900, fontWeight = FontWeight.Medium) }
                 }
@@ -1881,13 +2234,17 @@ private fun AdminPostCard(
                         Text("${post.distance} km", fontSize = 11.sp, color = AMuted) } }
                 HorizontalDivider(color = ADivider, thickness = 0.5.dp)
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(onClick = onApprove, modifier = Modifier.weight(1f).height(40.dp),
+                    Button(onClick = onApprove, modifier = Modifier
+                        .weight(1f)
+                        .height(40.dp),
                         shape = RoundedCornerShape(10.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = AGreen900, contentColor = Color.White)) {
                         Icon(Icons.Default.CheckCircle, null, modifier = Modifier.size(14.dp))
                         Spacer(Modifier.width(4.dp))
                         Text("Approve", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color.White) }
-                    OutlinedButton(onClick = { showRejectDialog = true }, modifier = Modifier.weight(1f).height(40.dp),
+                    OutlinedButton(onClick = { showRejectDialog = true }, modifier = Modifier
+                        .weight(1f)
+                        .height(40.dp),
                         shape = RoundedCornerShape(10.dp),
                         colors = ButtonDefaults.outlinedButtonColors(contentColor = AAmber500),
                         border = androidx.compose.foundation.BorderStroke(1.5.dp, AAmber500)) {
@@ -1946,7 +2303,10 @@ private fun AdminCommentReportCard(
             onDismissRequest = { showRestoreDialog = false },
             shape = RoundedCornerShape(20.dp), containerColor = AWhite,
             icon = {
-                Box(Modifier.size(52.dp).clip(CircleShape).background(AGreen50), Alignment.Center) {
+                Box(Modifier
+                    .size(52.dp)
+                    .clip(CircleShape)
+                    .background(AGreen50), Alignment.Center) {
                     Icon(Icons.Default.CheckCircle, null, tint = AGreen900, modifier = Modifier.size(26.dp))
                 }
             },
@@ -1956,8 +2316,11 @@ private fun AdminCommentReportCard(
             },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp))
-                        .background(Color(0xFFF9FAFB)).padding(12.dp)) {
+                    Box(Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(Color(0xFFF9FAFB))
+                        .padding(12.dp)) {
                         Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
                             Text(authorDisplayName, fontSize = 13.sp,
                                 fontWeight = FontWeight.SemiBold, color = AOnSurface)
@@ -1973,13 +2336,17 @@ private fun AdminCommentReportCard(
                 Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(
                         onClick = { showRestoreDialog = false; onRestore() },
-                        modifier = Modifier.fillMaxWidth().height(46.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(46.dp),
                         shape = RoundedCornerShape(12.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = AGreen900, contentColor = Color.White)
                     ) { Text("Restore comment", fontWeight = FontWeight.Bold, color = Color.White) }
                     OutlinedButton(
                         onClick = { showRestoreDialog = false },
-                        modifier = Modifier.fillMaxWidth().height(44.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(44.dp),
                         shape = RoundedCornerShape(12.dp)
                     ) { Text("Cancel", color = AMuted) }
                 }
@@ -1992,7 +2359,10 @@ private fun AdminCommentReportCard(
             onDismissRequest = { showDeleteDialog = false },
             shape = RoundedCornerShape(20.dp), containerColor = AWhite,
             icon = {
-                Box(Modifier.size(52.dp).clip(CircleShape).background(ARedLight), Alignment.Center) {
+                Box(Modifier
+                    .size(52.dp)
+                    .clip(CircleShape)
+                    .background(ARedLight), Alignment.Center) {
                     Icon(Icons.Default.DeleteForever, null, tint = ARedColor, modifier = Modifier.size(26.dp))
                 }
             },
@@ -2002,8 +2372,11 @@ private fun AdminCommentReportCard(
             },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp))
-                        .background(Color(0xFFF9FAFB)).padding(12.dp)) {
+                    Box(Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(Color(0xFFF9FAFB))
+                        .padding(12.dp)) {
                         Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
                             Text(authorDisplayName, fontSize = 13.sp,
                                 fontWeight = FontWeight.SemiBold, color = AOnSurface)
@@ -2019,13 +2392,17 @@ private fun AdminCommentReportCard(
                 Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(
                         onClick = { showDeleteDialog = false; onDelete() },
-                        modifier = Modifier.fillMaxWidth().height(46.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(46.dp),
                         shape = RoundedCornerShape(12.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = ARedColor, contentColor = Color.White)
                     ) { Text("Delete permanently", fontWeight = FontWeight.Bold, color = Color.White) }
                     OutlinedButton(
                         onClick = { showDeleteDialog = false },
-                        modifier = Modifier.fillMaxWidth().height(44.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(44.dp),
                         shape = RoundedCornerShape(12.dp)
                     ) { Text("Cancel", color = AMuted) }
                 }
@@ -2038,7 +2415,10 @@ private fun AdminCommentReportCard(
             onDismissRequest = { showDismissDialog = false },
             shape = RoundedCornerShape(20.dp), containerColor = AWhite,
             icon = {
-                Box(Modifier.size(52.dp).clip(CircleShape).background(AAmber50), Alignment.Center) {
+                Box(Modifier
+                    .size(52.dp)
+                    .clip(CircleShape)
+                    .background(AAmber50), Alignment.Center) {
                     Icon(Icons.Default.Close, null, tint = AAmber500, modifier = Modifier.size(26.dp))
                 }
             },
@@ -2054,13 +2434,17 @@ private fun AdminCommentReportCard(
                 Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(
                         onClick = { showDismissDialog = false; onDismiss() },
-                        modifier = Modifier.fillMaxWidth().height(46.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(46.dp),
                         shape = RoundedCornerShape(12.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = AAmber500, contentColor = Color.White)
                     ) { Text("Dismiss reports", fontWeight = FontWeight.Bold, color = Color.White) }
                     OutlinedButton(
                         onClick = { showDismissDialog = false },
-                        modifier = Modifier.fillMaxWidth().height(44.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(44.dp),
                         shape = RoundedCornerShape(12.dp)
                     ) { Text("Cancel", color = AMuted) }
                 }
@@ -2076,14 +2460,19 @@ private fun AdminCommentReportCard(
         Column(Modifier.fillMaxWidth()) {
             // Coloured top bar
             Box(
-                Modifier.fillMaxWidth()
-                    .background(Color(0xFFFFF7ED), RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp))
+                Modifier
+                    .fillMaxWidth()
+                    .background(
+                        Color(0xFFFFF7ED),
+                        RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp)
+                    )
                     .padding(horizontal = 14.dp, vertical = 8.dp)
             ) {
                 Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
                     Row(verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Box(Modifier.clip(RoundedCornerShape(6.dp))
+                        Box(Modifier
+                            .clip(RoundedCornerShape(6.dp))
                             .background(if (reported.reportCount >= 3) ARedLight else AAmber50)
                             .padding(horizontal = 8.dp, vertical = 3.dp)) {
                             Row(verticalAlignment = Alignment.CenterVertically,
@@ -2097,7 +2486,9 @@ private fun AdminCommentReportCard(
                             }
                         }
                         if (reported.reportCount >= 3) {
-                            Box(Modifier.clip(RoundedCornerShape(6.dp)).background(ARedColor)
+                            Box(Modifier
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(ARedColor)
                                 .padding(horizontal = 6.dp, vertical = 2.dp)) {
                                 Text("AUTO-HIDDEN", fontSize = 9.sp,
                                     fontWeight = FontWeight.ExtraBold, color = Color.White,
@@ -2118,11 +2509,15 @@ private fun AdminCommentReportCard(
                 }
             }
 
-            Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(Modifier
+                .fillMaxWidth()
+                .padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 // Author row
                 Row(verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Box(Modifier.size(36.dp).clip(CircleShape)
+                    Box(Modifier
+                        .size(36.dp)
+                        .clip(CircleShape)
                         .background(Brush.linearGradient(listOf(AGreen900, AGreen700))),
                         Alignment.Center) {
                         Text(authorDisplayName.take(1).uppercase(), fontSize = 14.sp,
@@ -2146,7 +2541,10 @@ private fun AdminCommentReportCard(
                                 Modifier
                                     .clip(RoundedCornerShape(20.dp))
                                     .background(
-                                        if (reason.contains("Swearing") || reason.contains("Harassment") || reason.contains("Attack"))
+                                        if (reason.contains("Swearing") || reason.contains("Harassment") || reason.contains(
+                                                "Attack"
+                                            )
+                                        )
                                             ARedLight else AAmber50
                                     )
                                     .padding(horizontal = 10.dp, vertical = 4.dp)
@@ -2163,10 +2561,15 @@ private fun AdminCommentReportCard(
                 }
 
                 // Comment text preview
-                Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp))
-                    .background(Color(0xFFF3F4F6)).padding(horizontal = 12.dp, vertical = 10.dp)) {
+                Box(Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(Color(0xFFF3F4F6))
+                    .padding(horizontal = 12.dp, vertical = 10.dp)) {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Box(Modifier.width(3.dp).fillMaxHeight()
+                        Box(Modifier
+                            .width(3.dp)
+                            .fillMaxHeight()
                             .clip(RoundedCornerShape(2.dp))
                             .background(if (reported.reportCount >= 3) ARedColor else AAmber500))
                         Text(reported.text, fontSize = 13.sp, color = Color(0xFF374151),
@@ -2181,7 +2584,9 @@ private fun AdminCommentReportCard(
                     // Restore — false report
                     Button(
                         onClick = { showRestoreDialog = true },
-                        modifier = Modifier.weight(1f).height(40.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(40.dp),
                         shape = RoundedCornerShape(10.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = AGreen900, contentColor = Color.White)
                     ) {
@@ -2192,7 +2597,9 @@ private fun AdminCommentReportCard(
                     // Delete — confirmed violation
                     OutlinedButton(
                         onClick = { showDeleteDialog = true },
-                        modifier = Modifier.weight(1f).height(40.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(40.dp),
                         shape = RoundedCornerShape(10.dp),
                         colors = ButtonDefaults.outlinedButtonColors(contentColor = ARedColor),
                         border = androidx.compose.foundation.BorderStroke(1.5.dp, ARedColor)
@@ -2243,7 +2650,10 @@ private fun AdminReportCard(
         AlertDialog(
             onDismissRequest = { showDeleteDialog = false },
             shape = RoundedCornerShape(20.dp), containerColor = AWhite,
-            icon = { Box(Modifier.size(52.dp).clip(CircleShape).background(ARedLight), Alignment.Center) {
+            icon = { Box(Modifier
+                .size(52.dp)
+                .clip(CircleShape)
+                .background(ARedLight), Alignment.Center) {
                 Icon(Icons.Default.DeleteForever, null, tint = ARedColor, modifier = Modifier.size(26.dp)) } },
             title = { Text("Remove Photo?", fontWeight = FontWeight.ExtraBold, fontSize = 17.sp,
                 color = AOnSurface, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth()) },
@@ -2252,11 +2662,15 @@ private fun AdminReportCard(
             confirmButton = {
                 Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(onClick = { showDeleteDialog = false; onDeletePhoto() },
-                        modifier = Modifier.fillMaxWidth().height(46.dp), shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(46.dp), shape = RoundedCornerShape(12.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = ARedColor, contentColor = Color.White)) {
                         Text("Remove photo", fontWeight = FontWeight.Bold, color = Color.White) }
                     OutlinedButton(onClick = { showDeleteDialog = false },
-                        modifier = Modifier.fillMaxWidth().height(44.dp), shape = RoundedCornerShape(12.dp)) {
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(44.dp), shape = RoundedCornerShape(12.dp)) {
                         Text("Cancel", color = AMuted) }
                 }
             }
@@ -2267,7 +2681,10 @@ private fun AdminReportCard(
         AlertDialog(
             onDismissRequest = { showDismissDialog = false },
             shape = RoundedCornerShape(20.dp), containerColor = AWhite,
-            icon = { Box(Modifier.size(52.dp).clip(CircleShape).background(AGreen50), Alignment.Center) {
+            icon = { Box(Modifier
+                .size(52.dp)
+                .clip(CircleShape)
+                .background(AGreen50), Alignment.Center) {
                 Icon(Icons.Default.CheckCircle, null, tint = AGreen900, modifier = Modifier.size(26.dp)) } },
             title = { Text("Dismiss Reports?", fontWeight = FontWeight.ExtraBold, fontSize = 17.sp,
                 color = AOnSurface, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth()) },
@@ -2276,11 +2693,15 @@ private fun AdminReportCard(
             confirmButton = {
                 Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(onClick = { showDismissDialog = false; onDismissReport() },
-                        modifier = Modifier.fillMaxWidth().height(46.dp), shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(46.dp), shape = RoundedCornerShape(12.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = AGreen900, contentColor = Color.White)) {
                         Text("Dismiss reports", fontWeight = FontWeight.Bold, color = Color.White) }
                     OutlinedButton(onClick = { showDismissDialog = false },
-                        modifier = Modifier.fillMaxWidth().height(44.dp), shape = RoundedCornerShape(12.dp)) {
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(44.dp), shape = RoundedCornerShape(12.dp)) {
                         Text("Cancel", color = AMuted) }
                 }
             }
@@ -2289,10 +2710,13 @@ private fun AdminReportCard(
 
     Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = AWhite), elevation = CardDefaults.cardElevation(2.dp)) {
-        Column(modifier = Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Column(modifier = Modifier
+            .fillMaxWidth()
+            .padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Box(Modifier.clip(RoundedCornerShape(8.dp))
+                    Box(Modifier
+                        .clip(RoundedCornerShape(8.dp))
                         .background(if (report.reportCount >= 3) ARedLight else AAmber50)
                         .padding(horizontal = 8.dp, vertical = 4.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -2302,7 +2726,9 @@ private fun AdminReportCard(
                                 fontSize = 11.sp, fontWeight = FontWeight.Bold,
                                 color = if (report.reportCount >= 3) ARedColor else AAmber500) } }
                     if (report.reportCount >= 3) {
-                        Box(Modifier.clip(RoundedCornerShape(6.dp)).background(ARedColor)
+                        Box(Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(ARedColor)
                             .padding(horizontal = 6.dp, vertical = 2.dp)) {
                             Text("AUTO-HIDDEN", fontSize = 9.sp, fontWeight = FontWeight.ExtraBold,
                                 color = Color.White, letterSpacing = 0.5.sp) } } }
@@ -2310,14 +2736,20 @@ private fun AdminReportCard(
             }
             Text("Reported by: $reportedByDisplay", fontSize = 12.sp, color = AMuted)
             if (report.photoUrl.isNotBlank()) {
-                Box(modifier = Modifier.fillMaxWidth().height(180.dp)
-                    .clip(RoundedCornerShape(12.dp)).background(Color(0xFFF3F4F6))) {
+                Box(modifier = Modifier
+                    .fillMaxWidth()
+                    .height(180.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(Color(0xFFF3F4F6))) {
                     AsyncImage(model = report.photoUrl, contentDescription = "Reported photo",
                         contentScale = ContentScale.Crop,
-                        modifier = Modifier.fillMaxSize()
+                        modifier = Modifier
+                            .fillMaxSize()
                             .then(if (!imageRevealed) Modifier.blur(20.dp) else Modifier))
                     if (!imageRevealed) {
-                        Box(modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.4f))
+                        Box(modifier = Modifier
+                            .fillMaxSize()
+                            .background(Color.Black.copy(alpha = 0.4f))
                             .clickable { imageRevealed = true }, contentAlignment = Alignment.Center) {
                             Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(6.dp)) {
                                 Icon(Icons.Default.VisibilityOff, null, tint = Color.White, modifier = Modifier.size(24.dp))
@@ -2326,13 +2758,17 @@ private fun AdminReportCard(
             }
             HorizontalDivider(color = ADivider, thickness = 0.5.dp)
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = { showDeleteDialog = true }, modifier = Modifier.weight(1f).height(40.dp),
+                Button(onClick = { showDeleteDialog = true }, modifier = Modifier
+                    .weight(1f)
+                    .height(40.dp),
                     shape = RoundedCornerShape(10.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = ARedColor, contentColor = Color.White)) {
                     Icon(Icons.Default.Delete, null, modifier = Modifier.size(14.dp))
                     Spacer(Modifier.width(4.dp))
                     Text("Remove", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color.White) }
-                OutlinedButton(onClick = { showDismissDialog = true }, modifier = Modifier.weight(1f).height(40.dp),
+                OutlinedButton(onClick = { showDismissDialog = true }, modifier = Modifier
+                    .weight(1f)
+                    .height(40.dp),
                     shape = RoundedCornerShape(10.dp),
                     colors = ButtonDefaults.outlinedButtonColors(contentColor = AGreen900),
                     border = androidx.compose.foundation.BorderStroke(1.5.dp, AGreen900)) {
@@ -2374,7 +2810,10 @@ private fun AdminAlertCard(alert: AdminAlert, onForceResolve: () -> Unit) {
         AlertDialog(
             onDismissRequest = { showResolveDialog = false },
             shape = RoundedCornerShape(20.dp), containerColor = AWhite,
-            icon = { Box(Modifier.size(52.dp).clip(CircleShape).background(AGreen50), Alignment.Center) {
+            icon = { Box(Modifier
+                .size(52.dp)
+                .clip(CircleShape)
+                .background(AGreen50), Alignment.Center) {
                 Icon(Icons.Default.CheckCircle, null, tint = AGreen900, modifier = Modifier.size(26.dp)) } },
             title = { Text("Force Resolve?", fontWeight = FontWeight.ExtraBold, fontSize = 17.sp,
                 color = AOnSurface, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth()) },
@@ -2383,11 +2822,15 @@ private fun AdminAlertCard(alert: AdminAlert, onForceResolve: () -> Unit) {
             confirmButton = {
                 Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(onClick = { showResolveDialog = false; onForceResolve() },
-                        modifier = Modifier.fillMaxWidth().height(46.dp), shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(46.dp), shape = RoundedCornerShape(12.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = AGreen900, contentColor = Color.White)) {
                         Text("Force resolve", fontWeight = FontWeight.Bold, color = Color.White) }
                     OutlinedButton(onClick = { showResolveDialog = false },
-                        modifier = Modifier.fillMaxWidth().height(44.dp), shape = RoundedCornerShape(12.dp)) {
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(44.dp), shape = RoundedCornerShape(12.dp)) {
                         Text("Cancel", color = AMuted) }
                 }
             }
@@ -2397,26 +2840,36 @@ private fun AdminAlertCard(alert: AdminAlert, onForceResolve: () -> Unit) {
     Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = AWhite), elevation = CardDefaults.cardElevation(2.dp)) {
         Column(Modifier.fillMaxWidth()) {
-            Box(modifier = Modifier.fillMaxWidth()
+            Box(modifier = Modifier
+                .fillMaxWidth()
                 .background(severityBg, RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp))
                 .padding(horizontal = 14.dp, vertical = 8.dp)) {
                 Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Box(Modifier.clip(RoundedCornerShape(6.dp)).background(severityColor)
+                        Box(Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(severityColor)
                             .padding(horizontal = 7.dp, vertical = 2.dp)) {
                             Text(alert.severity.uppercase(), fontSize = 9.sp, fontWeight = FontWeight.ExtraBold,
                                 color = Color.White, letterSpacing = 0.8.sp) }
                         Text(alert.emergencyType, fontWeight = FontWeight.Bold, fontSize = 13.sp, color = severityColor) }
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         if (alert.status == "responding") {
-                            Box(Modifier.clip(RoundedCornerShape(6.dp)).background(Color(0xFF1565C0))
+                            Box(Modifier
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(Color(0xFF1565C0))
                                 .padding(horizontal = 6.dp, vertical = 2.dp)) {
                                 Text("Responding", fontSize = 9.sp, fontWeight = FontWeight.Bold, color = Color.White) } }
                         Text(formatAdminTime(alert.timestamp), fontSize = 11.sp, color = AMuted) } }
             }
-            Column(modifier = Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(modifier = Modifier
+                .fillMaxWidth()
+                .padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Box(Modifier.size(38.dp).clip(CircleShape).background(severityBg), Alignment.Center) {
+                    Box(Modifier
+                        .size(38.dp)
+                        .clip(CircleShape)
+                        .background(severityBg), Alignment.Center) {
                         Text(alertRiderDisplayName.take(1).uppercase(), fontWeight = FontWeight.ExtraBold,
                             fontSize = 16.sp, color = severityColor) }
                     Column {
@@ -2426,11 +2879,15 @@ private fun AdminAlertCard(alert: AdminAlert, onForceResolve: () -> Unit) {
                                 color = Color(0xFF1565C0), fontWeight = FontWeight.Medium) } } }
                 Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
                     Icon(Icons.Default.LocationOn, null, tint = AMuted,
-                        modifier = Modifier.size(13.dp).padding(top = 1.dp))
+                        modifier = Modifier
+                            .size(13.dp)
+                            .padding(top = 1.dp))
                     Text(alert.locationName, fontSize = 12.sp, color = AMuted,
                         lineHeight = 17.sp, modifier = Modifier.weight(1f)) }
                 HorizontalDivider(color = ADivider, thickness = 0.5.dp)
-                Button(onClick = { showResolveDialog = true }, modifier = Modifier.fillMaxWidth().height(40.dp),
+                Button(onClick = { showResolveDialog = true }, modifier = Modifier
+                    .fillMaxWidth()
+                    .height(40.dp),
                     shape = RoundedCornerShape(10.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = AGreen900, contentColor = Color.White)) {
                     Icon(Icons.Default.CheckCircle, null, modifier = Modifier.size(14.dp))
@@ -2477,7 +2934,10 @@ private fun AdminRideCard(
             onDismissRequest = { showRejectDialog = false },
             shape = RoundedCornerShape(20.dp), containerColor = AWhite,
             icon = {
-                Box(Modifier.size(52.dp).clip(CircleShape).background(AAmber50), Alignment.Center) {
+                Box(Modifier
+                    .size(52.dp)
+                    .clip(CircleShape)
+                    .background(AAmber50), Alignment.Center) {
                     Icon(Icons.Default.Cancel, null, tint = AAmber500, modifier = Modifier.size(26.dp))
                 }
             },
@@ -2487,7 +2947,8 @@ private fun AdminRideCard(
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Box(
-                        Modifier.fillMaxWidth()
+                        Modifier
+                            .fillMaxWidth()
                             .clip(RoundedCornerShape(10.dp))
                             .background(Color(0xFFF9FAFB))
                             .padding(horizontal = 12.dp, vertical = 10.dp)
@@ -2532,13 +2993,17 @@ private fun AdminRideCard(
                 Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(
                         onClick = { showRejectDialog = false; onReject() },
-                        modifier = Modifier.fillMaxWidth().height(46.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(46.dp),
                         shape = RoundedCornerShape(12.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = AAmber500, contentColor = Color.White)
                     ) { Text("Reject ride", fontWeight = FontWeight.Bold, color = Color.White) }
                     OutlinedButton(
                         onClick = { showRejectDialog = false },
-                        modifier = Modifier.fillMaxWidth().height(44.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(44.dp),
                         shape = RoundedCornerShape(12.dp)
                     ) { Text("Cancel", color = AMuted) }
                 }
@@ -2555,8 +3020,12 @@ private fun AdminRideCard(
         Column(Modifier.fillMaxWidth()) {
             // Coloured top bar
             Box(
-                modifier = Modifier.fillMaxWidth()
-                    .background(Color(0xFFEEF2FF), RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp))
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(
+                        Color(0xFFEEF2FF),
+                        RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp)
+                    )
                     .padding(horizontal = 14.dp, vertical = 8.dp)
             ) {
                 Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
@@ -2567,7 +3036,9 @@ private fun AdminRideCard(
                         Text("Ride Event", fontSize = 11.sp,
                             color = Color(0xFF1976D2), fontWeight = FontWeight.SemiBold)
                     }
-                    Box(Modifier.clip(RoundedCornerShape(6.dp)).background(diffBg)
+                    Box(Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(diffBg)
                         .padding(horizontal = 7.dp, vertical = 2.dp)) {
                         Text(ride.difficulty, fontSize = 10.sp,
                             fontWeight = FontWeight.SemiBold, color = diffColor)
@@ -2576,7 +3047,9 @@ private fun AdminRideCard(
             }
 
             Column(
-                modifier = Modifier.fillMaxWidth().padding(14.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(14.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 // Title + organizer
@@ -2584,7 +3057,9 @@ private fun AdminRideCard(
                     fontSize = 15.sp, color = AOnSurface, lineHeight = 21.sp)
                 Row(verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Box(Modifier.size(22.dp).clip(CircleShape)
+                    Box(Modifier
+                        .size(22.dp)
+                        .clip(CircleShape)
                         .background(Brush.linearGradient(listOf(AGreen900, AGreen700))),
                         contentAlignment = Alignment.Center) {
                         Text(organizerDisplayName.take(1).uppercase(),
@@ -2659,7 +3134,9 @@ private fun AdminRideCard(
                     if (!showMap) {
                         OutlinedButton(
                             onClick  = { showMap = true },
-                            modifier = Modifier.fillMaxWidth().height(38.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(38.dp),
                             shape    = RoundedCornerShape(10.dp),
                             border   = androidx.compose.foundation.BorderStroke(1.dp, ADivider),
                             colors   = ButtonDefaults.outlinedButtonColors(contentColor = AMuted)
@@ -2700,7 +3177,9 @@ private fun AdminRideCard(
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(
                         onClick   = onApprove,
-                        modifier  = Modifier.weight(1f).height(40.dp),
+                        modifier  = Modifier
+                            .weight(1f)
+                            .height(40.dp),
                         shape     = RoundedCornerShape(10.dp),
                         colors    = ButtonDefaults.buttonColors(
                             containerColor = AGreen900, contentColor = Color.White)
@@ -2711,7 +3190,9 @@ private fun AdminRideCard(
                     }
                     OutlinedButton(
                         onClick  = { showRejectDialog = true },
-                        modifier = Modifier.weight(1f).height(40.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(40.dp),
                         shape    = RoundedCornerShape(10.dp),
                         colors   = ButtonDefaults.outlinedButtonColors(contentColor = AAmber500),
                         border   = androidx.compose.foundation.BorderStroke(1.5.dp, AAmber500)
@@ -2740,7 +3221,10 @@ private fun DashboardStat(value: String, label: String, icon: ImageVector, color
 
 @Composable
 private fun DashboardStatDivider() {
-    Box(Modifier.width(1.dp).height(36.dp).background(Color.White.copy(alpha = 0.15f)))
+    Box(Modifier
+        .width(1.dp)
+        .height(36.dp)
+        .background(Color.White.copy(alpha = 0.15f)))
 }
 
 @Composable
@@ -2754,21 +3238,31 @@ private fun AdminStat(value: String, label: String, icon: ImageVector, color: Co
 
 @Composable
 private fun AdminStatDivider() {
-    Box(Modifier.width(1.dp).height(36.dp).background(Color.White.copy(alpha = 0.15f)))
+    Box(Modifier
+        .width(1.dp)
+        .height(36.dp)
+        .background(Color.White.copy(alpha = 0.15f)))
 }
 
 @Composable
 private fun AdminLoadingState() {
-    Box(Modifier.fillMaxWidth().padding(vertical = 48.dp), Alignment.Center) {
+    Box(Modifier
+        .fillMaxWidth()
+        .padding(vertical = 48.dp), Alignment.Center) {
         CircularProgressIndicator(color = AGreen900, strokeWidth = 2.5.dp, modifier = Modifier.size(32.dp))
     }
 }
 
 @Composable
 private fun AdminEmptyState(icon: ImageVector, title: String, message: String) {
-    Column(modifier = Modifier.fillMaxWidth().padding(vertical = 48.dp, horizontal = 32.dp),
+    Column(modifier = Modifier
+        .fillMaxWidth()
+        .padding(vertical = 48.dp, horizontal = 32.dp),
         horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Box(Modifier.size(64.dp).clip(CircleShape).background(AGreen50), Alignment.Center) {
+        Box(Modifier
+            .size(64.dp)
+            .clip(CircleShape)
+            .background(AGreen50), Alignment.Center) {
             Icon(icon, null, tint = AGreen900, modifier = Modifier.size(28.dp)) }
         Text(title, fontSize = 15.sp, fontWeight = FontWeight.SemiBold,
             color = AOnSurface, textAlign = TextAlign.Center)
@@ -2777,7 +3271,7 @@ private fun AdminEmptyState(icon: ImageVector, title: String, message: String) {
 }
 
 @Composable
-private fun AdminModerationLogCard(log: ModerationLog) {
+private fun AdminModerationLogCard(log: ModerationLog, onDismiss: () -> Unit = {}) {
     var userDisplayName by remember(log.userName) { mutableStateOf(log.userName) }
 
     LaunchedEffect(log.userName) {
@@ -2812,8 +3306,12 @@ private fun AdminModerationLogCard(log: ModerationLog) {
         Column(Modifier.fillMaxWidth()) {
             // Top bar
             Box(
-                Modifier.fillMaxWidth()
-                    .background(Color(0xFFF5F3FF), RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp))
+                Modifier
+                    .fillMaxWidth()
+                    .background(
+                        Color(0xFFF5F3FF),
+                        RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp)
+                    )
                     .padding(horizontal = 14.dp, vertical = 8.dp)
             ) {
                 Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
@@ -2822,7 +3320,8 @@ private fun AdminModerationLogCard(log: ModerationLog) {
                         Icon(Icons.Default.Shield, null,
                             tint = Color(0xFF7C3AED), modifier = Modifier.size(13.dp))
                         Box(
-                            Modifier.clip(RoundedCornerShape(6.dp))
+                            Modifier
+                                .clip(RoundedCornerShape(6.dp))
                                 .background(contextColor.copy(alpha = 0.12f))
                                 .padding(horizontal = 7.dp, vertical = 2.dp)
                         ) {
@@ -2835,14 +3334,18 @@ private fun AdminModerationLogCard(log: ModerationLog) {
             }
 
             Column(
-                Modifier.fillMaxWidth().padding(14.dp),
+                Modifier
+                    .fillMaxWidth()
+                    .padding(14.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 // User row
                 Row(verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Box(
-                        Modifier.size(34.dp).clip(CircleShape)
+                        Modifier
+                            .size(34.dp)
+                            .clip(CircleShape)
                             .background(Brush.linearGradient(listOf(AGreen900, AGreen700))),
                         Alignment.Center
                     ) {
@@ -2860,7 +3363,8 @@ private fun AdminModerationLogCard(log: ModerationLog) {
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     // Original
                     Column(
-                        Modifier.fillMaxWidth()
+                        Modifier
+                            .fillMaxWidth()
                             .clip(RoundedCornerShape(10.dp))
                             .background(ARedLight)
                             .padding(horizontal = 12.dp, vertical = 8.dp),
@@ -2880,7 +3384,8 @@ private fun AdminModerationLogCard(log: ModerationLog) {
                     }
                     // Censored
                     Column(
-                        Modifier.fillMaxWidth()
+                        Modifier
+                            .fillMaxWidth()
                             .clip(RoundedCornerShape(10.dp))
                             .background(AGreen50)
                             .padding(horizontal = 12.dp, vertical = 8.dp),
@@ -2892,6 +3397,264 @@ private fun AdminModerationLogCard(log: ModerationLog) {
                         Text(log.censoredText, fontSize = 13.sp,
                             color = AGreen900, lineHeight = 18.sp,
                             maxLines = 3, overflow = TextOverflow.Ellipsis)
+                    }
+                }
+
+                HorizontalDivider(color = ADivider, thickness = 0.5.dp)
+
+                OutlinedButton(
+                    onClick  = onDismiss,
+                    modifier = Modifier.fillMaxWidth().height(40.dp),
+                    shape    = RoundedCornerShape(10.dp),
+                    colors   = ButtonDefaults.outlinedButtonColors(contentColor = AGreen900),
+                    border   = androidx.compose.foundation.BorderStroke(1.5.dp, AGreen900)
+                ) {
+                    Icon(Icons.Default.Check, null, modifier = Modifier.size(14.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("Mark as Reviewed", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AdminUserReportCard(
+    report    : UserReport,
+    onDismiss : () -> Unit,
+    onWarn    : () -> Unit
+) {
+    var showWarnDialog    by remember { mutableStateOf(false) }
+    var showDismissDialog by remember { mutableStateOf(false) }
+    var reporterDisplay   by remember(report.reporterName) { mutableStateOf(report.reporterName) }
+    var reportedDisplay   by remember(report.reportedName) { mutableStateOf(report.reportedName) }
+
+    LaunchedEffect(report.reporterName) {
+        FirebaseFirestore.getInstance().collection("users")
+            .whereEqualTo("username", report.reporterName).limit(1).get()
+            .addOnSuccessListener { snap ->
+                val d = snap.documents.firstOrNull()?.getString("displayName")
+                    ?.takeIf { it.isNotBlank() } ?: report.reporterName
+                reporterDisplay = d
+            }
+    }
+    LaunchedEffect(report.reportedName) {
+        FirebaseFirestore.getInstance().collection("users")
+            .whereEqualTo("username", report.reportedName).limit(1).get()
+            .addOnSuccessListener { snap ->
+                val d = snap.documents.firstOrNull()?.getString("displayName")
+                    ?.takeIf { it.isNotBlank() } ?: report.reportedName
+                reportedDisplay = d
+            }
+    }
+
+    val roleColor = if (report.reportedRole == "rider") Color(0xFF1565C0) else Color(0xFF6A1B9A)
+    val roleBg    = if (report.reportedRole == "rider") Color(0xFFE3F2FD) else Color(0xFFF3E5F5)
+
+    if (showWarnDialog) {
+        AlertDialog(
+            onDismissRequest = { showWarnDialog = false },
+            shape = RoundedCornerShape(20.dp), containerColor = AWhite,
+            icon = {
+                Box(Modifier
+                    .size(52.dp)
+                    .clip(CircleShape)
+                    .background(AAmber50), Alignment.Center) {
+                    Icon(Icons.Default.Warning, null, tint = AAmber500, modifier = Modifier.size(26.dp))
+                }
+            },
+            title = {
+                Text("Send Warning?", fontWeight = FontWeight.ExtraBold, fontSize = 17.sp,
+                    color = AOnSurface, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+            },
+            text = {
+                Text(
+                    "$reportedDisplay will receive a warning notification about their behavior and the report will be marked as reviewed.",
+                    fontSize = 13.sp, color = AMuted, textAlign = TextAlign.Center
+                )
+            },
+            confirmButton = {
+                Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        onClick = { showWarnDialog = false; onWarn() },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(46.dp),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = AAmber500, contentColor = Color.White)
+                    ) { Text("Send warning", fontWeight = FontWeight.Bold, color = Color.White) }
+                    OutlinedButton(
+                        onClick = { showWarnDialog = false },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(44.dp),
+                        shape = RoundedCornerShape(12.dp)
+                    ) { Text("Cancel", color = AMuted) }
+                }
+            }
+        )
+    }
+
+    if (showDismissDialog) {
+        AlertDialog(
+            onDismissRequest = { showDismissDialog = false },
+            shape = RoundedCornerShape(20.dp), containerColor = AWhite,
+            icon = {
+                Box(Modifier
+                    .size(52.dp)
+                    .clip(CircleShape)
+                    .background(AGreen50), Alignment.Center) {
+                    Icon(Icons.Default.CheckCircle, null, tint = AGreen900, modifier = Modifier.size(26.dp))
+                }
+            },
+            title = {
+                Text("Dismiss Report?", fontWeight = FontWeight.ExtraBold, fontSize = 17.sp,
+                    color = AOnSurface, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+            },
+            text = {
+                Text(
+                    "This report will be marked as reviewed and removed from the queue. No action will be taken against $reportedDisplay.",
+                    fontSize = 13.sp, color = AMuted, textAlign = TextAlign.Center
+                )
+            },
+            confirmButton = {
+                Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        onClick = { showDismissDialog = false; onDismiss() },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(46.dp),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = AGreen900, contentColor = Color.White)
+                    ) { Text("Dismiss report", fontWeight = FontWeight.Bold, color = Color.White) }
+                    OutlinedButton(
+                        onClick = { showDismissDialog = false },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(44.dp),
+                        shape = RoundedCornerShape(12.dp)
+                    ) { Text("Cancel", color = AMuted) }
+                }
+            }
+        )
+    }
+
+    Card(
+        modifier  = Modifier.fillMaxWidth(),
+        shape     = RoundedCornerShape(16.dp),
+        colors    = CardDefaults.cardColors(containerColor = AWhite),
+        elevation = CardDefaults.cardElevation(2.dp)
+    ) {
+        Column(Modifier.fillMaxWidth()) {
+            // Top bar
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .background(roleBg, RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp))
+                    .padding(horizontal = 14.dp, vertical = 8.dp)
+            ) {
+                Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
+                    Row(verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Icon(Icons.Default.Flag, null,
+                            tint = roleColor, modifier = Modifier.size(13.dp))
+                        Box(Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(roleColor.copy(alpha = 0.12f))
+                            .padding(horizontal = 7.dp, vertical = 2.dp)) {
+                            Text(
+                                report.reportedRole.replaceFirstChar { it.uppercase() } + " Reported",
+                                fontSize = 10.sp, fontWeight = FontWeight.SemiBold, color = roleColor
+                            )
+                        }
+                        Text("· ${report.emergencyType}", fontSize = 11.sp, color = roleColor.copy(alpha = 0.7f))
+                    }
+                    Text(formatAdminTime(report.timestamp), fontSize = 11.sp, color = AMuted)
+                }
+            }
+
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                // Reported user row
+                Row(verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Box(Modifier
+                        .size(40.dp)
+                        .clip(CircleShape)
+                        .background(roleBg), Alignment.Center) {
+                        Text(reportedDisplay.take(1).uppercase(),
+                            fontWeight = FontWeight.ExtraBold, fontSize = 16.sp, color = roleColor)
+                    }
+                    Column {
+                        Text(reportedDisplay, fontWeight = FontWeight.Bold,
+                            fontSize = 14.sp, color = AOnSurface)
+                        Text("Reported by $reporterDisplay",
+                            fontSize = 11.sp, color = AMuted)
+                    }
+                }
+
+                // Reason chip
+                Box(Modifier
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(ARedLight)
+                    .padding(horizontal = 12.dp, vertical = 5.dp)) {
+                    Text(report.reason, fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold, color = ARedColor)
+                }
+
+                // Optional comment
+                if (report.comment.isNotBlank()) {
+                    Box(Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(Color(0xFFF3F4F6))
+                        .padding(horizontal = 12.dp, vertical = 10.dp)) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Box(Modifier
+                                .width(3.dp)
+                                .fillMaxHeight()
+                                .clip(RoundedCornerShape(2.dp))
+                                .background(ARedColor.copy(alpha = 0.4f)))
+                            Text(report.comment, fontSize = 13.sp, color = Color(0xFF374151),
+                                lineHeight = 19.sp, maxLines = 4,
+                                overflow = TextOverflow.Ellipsis)
+                        }
+                    }
+                }
+
+                HorizontalDivider(color = ADivider, thickness = 0.5.dp)
+
+                // Action buttons
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        onClick  = { showWarnDialog = true },
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(40.dp),
+                        shape    = RoundedCornerShape(10.dp),
+                        colors   = ButtonDefaults.buttonColors(
+                            containerColor = AAmber500, contentColor = Color.White)
+                    ) {
+                        Icon(Icons.Default.Warning, null, modifier = Modifier.size(14.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("Warn User", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                    }
+                    OutlinedButton(
+                        onClick  = { showDismissDialog = true },
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(40.dp),
+                        shape    = RoundedCornerShape(10.dp),
+                        colors   = ButtonDefaults.outlinedButtonColors(contentColor = AGreen900),
+                        border   = androidx.compose.foundation.BorderStroke(1.5.dp, AGreen900)
+                    ) {
+                        Icon(Icons.Default.Check, null, modifier = Modifier.size(14.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("Dismiss", fontSize = 12.sp, fontWeight = FontWeight.Bold)
                     }
                 }
             }
@@ -2938,13 +3701,18 @@ private fun AdminAuditCard(entry: AuditLogEntry) {
         elevation = CardDefaults.cardElevation(1.dp)
     ) {
         Row(
-            modifier = Modifier.fillMaxWidth().padding(12.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalAlignment = Alignment.Top
         ) {
             // Action icon
             Box(
-                Modifier.size(40.dp).clip(RoundedCornerShape(12.dp)).background(actionBg),
+                Modifier
+                    .size(40.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(actionBg),
                 Alignment.Center
             ) {
                 Icon(actionIcon, null, tint = actionColor, modifier = Modifier.size(18.dp))
@@ -2960,7 +3728,8 @@ private fun AdminAuditCard(entry: AuditLogEntry) {
                         fontSize = 13.sp, color = actionColor
                     )
                     Box(
-                        Modifier.clip(RoundedCornerShape(4.dp))
+                        Modifier
+                            .clip(RoundedCornerShape(4.dp))
                             .background(Color(0xFFF3F4F6))
                             .padding(horizontal = 5.dp, vertical = 1.dp)
                     ) {

@@ -828,6 +828,19 @@ fun AlertsScreen(
     alertToRate?.let { alert ->
         val responderDisplay = alert.responderDisplayName
             .takeIf { it.isNotBlank() } ?: alert.responderName ?: "the responder"
+        var hasReportedHelper by remember(alert.id) { mutableStateOf(false) }
+        LaunchedEffect(alert.id) {
+            FirebaseFirestore.getInstance()
+                .collection("userReports")
+                .whereEqualTo("reporterName", helperName)
+                .whereEqualTo("alertId", alert.id)
+                .whereEqualTo("reportedRole", "helper")
+                .limit(1)
+                .get()
+                .addOnSuccessListener { snap ->
+                    hasReportedHelper = !snap.isEmpty
+                }
+        }
         AlertDialog(
             onDismissRequest = { /* blocked — must interact with buttons */ },
             shape          = RoundedCornerShape(20.dp),
@@ -859,12 +872,41 @@ fun AlertsScreen(
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Text(
-                        "How was $responderDisplay's response?",
-                        fontSize  = 14.sp,
-                        color     = Color.Gray,
-                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                    )
+                    Box(modifier = Modifier.fillMaxWidth()) {
+                        Text(
+                            "How was $responderDisplay's response?",
+                            fontSize  = 14.sp,
+                            color     = Color.Gray,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                            modifier  = Modifier.fillMaxWidth()
+                        )
+                        IconButton(
+                            onClick  = {
+                                if (hasReportedHelper) return@IconButton
+                                val helper = alert.responderName ?: return@IconButton
+                                reportTargetName     = alert.responderDisplayName
+                                    .takeIf { it.isNotBlank() } ?: helper
+                                reportTargetRole     = "helper"
+                                reportAlertRef       = alert
+                                selectedReportReason = ""
+                                reportOtherText      = ""
+                                showReportDialog     = true
+                            },
+                            enabled  = !hasReportedHelper,
+                            modifier = Modifier
+                                .size(28.dp)
+                                .align(Alignment.CenterEnd)
+                        ) {
+                            Icon(
+                                Icons.Default.Flag, null,
+                                tint     = if (hasReportedHelper)
+                                    Color(0xFFBDBDBD)
+                                else
+                                    Color(0xFFD32F2F).copy(alpha = 0.6f),
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    }
                     // Star row
                     Row(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -931,45 +973,6 @@ fun AlertsScreen(
                             color      = Color(0xFFD32F2F),
                             fontWeight = FontWeight.Medium,
                             textAlign  = androidx.compose.ui.text.style.TextAlign.Center
-                        )
-                    }
-                    // ── Report helper option ──────────────────────────────────
-                    HorizontalDivider(
-                        color     = Color(0xFFEEEEEE),
-                        thickness = 0.5.dp
-                    )
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(10.dp))
-                            .clickable(
-                                interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
-                                indication        = null
-                            ) {
-                                val helper = alert.responderName ?: return@clickable
-                                reportTargetName     = alert.responderDisplayName
-                                    .takeIf { it.isNotBlank() } ?: helper
-                                reportTargetRole     = "helper"
-                                reportAlertRef       = alert
-                                selectedReportReason = ""
-                                reportOtherText      = ""
-                                showReportDialog     = true
-                            }
-                            .padding(horizontal = 4.dp, vertical = 6.dp),
-                        verticalAlignment     = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.Center
-                    ) {
-                        Icon(
-                            Icons.Default.Flag, null,
-                            tint     = Color(0xFFD32F2F).copy(alpha = 0.7f),
-                            modifier = Modifier.size(14.dp)
-                        )
-                        Spacer(Modifier.width(5.dp))
-                        Text(
-                            "Report this helper",
-                            fontSize   = 12.sp,
-                            color      = Color(0xFFD32F2F).copy(alpha = 0.7f),
-                            fontWeight = FontWeight.Medium
                         )
                     }
                 }
@@ -1628,21 +1631,40 @@ fun AlertCard(
 
             // ── Card body ─────────────────────────────────────────────────────
             Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(modifier = Modifier.size(40.dp).clip(CircleShape).background(severityBg),
-                        contentAlignment = Alignment.Center) {
-                        Text(alert.riderDisplayName.ifBlank { alert.riderName }.take(1).uppercase(),
-                            fontWeight = FontWeight.ExtraBold, fontSize = 16.sp, color = severityColor)
-                    }
-                    Spacer(Modifier.width(10.dp))
-                    Column {
-                        Text(alert.riderDisplayName.ifBlank { alert.riderName }, fontWeight = FontWeight.Bold, fontSize = 16.sp, color = OnSurface)
-                        if (!alert.contactNumber.isNullOrEmpty()) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Default.Phone, null, tint = Color.Gray, modifier = Modifier.size(12.dp))
-                                Spacer(Modifier.width(3.dp))
-                                Text(alert.contactNumber, fontSize = 12.sp, color = Color.Gray)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                        Box(modifier = Modifier.size(40.dp).clip(CircleShape).background(severityBg),
+                            contentAlignment = Alignment.Center) {
+                            Text(alert.riderDisplayName.ifBlank { alert.riderName }.take(1).uppercase(),
+                                fontWeight = FontWeight.ExtraBold, fontSize = 16.sp, color = severityColor)
+                        }
+                        Spacer(Modifier.width(10.dp))
+                        Column {
+                            Text(alert.riderDisplayName.ifBlank { alert.riderName }, fontWeight = FontWeight.Bold, fontSize = 16.sp, color = OnSurface)
+                            if (!alert.contactNumber.isNullOrEmpty()) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(Icons.Default.Phone, null, tint = Color.Gray, modifier = Modifier.size(12.dp))
+                                    Spacer(Modifier.width(3.dp))
+                                    Text(alert.contactNumber, fontSize = 12.sp, color = Color.Gray)
+                                }
                             }
+                        }
+                    }
+                    val isClaimedByMe = alert.status == "responding" && alert.responderName == helperName
+                    if (isClaimedByMe) {
+                        IconButton(
+                            onClick  = { onReportRider(alert) },
+                            modifier = Modifier.size(32.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.Flag, null,
+                                tint     = Color(0xFFD32F2F).copy(alpha = 0.7f),
+                                modifier = Modifier.size(18.dp)
+                            )
                         }
                     }
                 }
@@ -1937,34 +1959,7 @@ fun AlertCard(
                                     Spacer(Modifier.width(6.dp))
                                     Text("Cancel Response", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
                                 }
-                                // ── Report rider option ───────────────────────
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clip(RoundedCornerShape(10.dp))
-                                        .clickable(
-                                            interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
-                                            indication        = null
-                                        ) {
-                                            onReportRider(alert)
-                                        }
-                                        .padding(horizontal = 4.dp, vertical = 6.dp),
-                                    verticalAlignment     = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.Center
-                                ) {
-                                    Icon(
-                                        Icons.Default.Flag, null,
-                                        tint     = Color(0xFFD32F2F).copy(alpha = 0.7f),
-                                        modifier = Modifier.size(14.dp)
-                                    )
-                                    Spacer(Modifier.width(5.dp))
-                                    Text(
-                                        "Report this rider",
-                                        fontSize   = 12.sp,
-                                        color      = Color(0xFFD32F2F).copy(alpha = 0.7f),
-                                        fontWeight = FontWeight.Medium
-                                    )
-                                }
+
                             }
                         }
 
