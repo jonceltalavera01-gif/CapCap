@@ -64,6 +64,7 @@
         import androidx.compose.material.icons.rounded.DeleteForever
         import androidx.compose.material.icons.rounded.Flag
         import com.darkhorses.PedalConnect.BuildConfig
+        import androidx.compose.material.ripple.rememberRipple
 
         // ─────────────────────────────────────────────────────────────────────────────
         // Design Tokens — shared with RidingEventsScreen
@@ -234,6 +235,9 @@
             var isRefreshing by remember { mutableStateOf(false) }
             var isLoadingFeed by remember { mutableStateOf(true) }
             var errorMessage by remember { mutableStateOf<String?>(null) }
+            // Tracks whether the one-time count correction pass has already run
+            // so that writes coming back from Firestore don't re-trigger it
+            var countCorrectionDone by remember { mutableStateOf(false) }
             var weather by remember { mutableStateOf(WeatherState()) }
 
             var nextEvent by remember { mutableStateOf<RideEvent?>(null) }
@@ -246,6 +250,32 @@
             LaunchedEffect(errorMessage) {
                 errorMessage?.let {
                     Toast.makeText(context, it, Toast.LENGTH_LONG).show(); errorMessage = null
+                }
+            }
+
+            // One-time comment count correction — runs once after feed finishes loading.
+            // Uses countCorrectionDone flag to prevent re-triggering when corrected
+            // writes come back through the snapshot listener.
+            LaunchedEffect(isLoadingFeed) {
+                if (isLoadingFeed) return@LaunchedEffect
+                if (countCorrectionDone) return@LaunchedEffect
+                countCorrectionDone = true
+                kotlinx.coroutines.delay(1500)
+                // Snapshot to plain list to avoid iterator ambiguity on mutableStateListOf
+                val postsToCheck: List<PostItem> = posts.toList()
+                for (post in postsToCheck) {
+                    db.collection("posts").document(post.id)
+                        .collection("comments")
+                        .whereNotEqualTo("status", "hidden")
+                        .get()
+                        .addOnSuccessListener { snap ->
+                            val trueCount = snap.size()
+                            if (trueCount != post.comments) {
+                                db.collection("posts").document(post.id)
+                                    .update("comments", trueCount)
+                            }
+                        }
+                    kotlinx.coroutines.delay(200)
                 }
             }
 
@@ -712,20 +742,31 @@
             fun deletePost(adminReason: String? = null) {
                 val post = deletingPost ?: return
                 isDeletingPost = true
-                db.collection("posts").document(post.id).delete()
-                    .addOnSuccessListener {
-                        isDeletingPost = false; showDeleteDialog = false; deletingPost = null
-                        posts.removeAll { it.id == post.id }
-                        Toast.makeText(context, "Post deleted.", Toast.LENGTH_SHORT).show()
-                        if (isAdmin) {
-                            val message = if (adminReason != null)
-                                "Your post was removed by an admin. Reason: $adminReason"
-                            else
-                                "Your post was permanently removed by an admin for violating community guidelines."
+                if (isAdmin && adminReason != null) {
+                    // Admin delete — move to trash instead of hard delete
+                    val now = System.currentTimeMillis()
+                    db.collection("adminTrash").add(hashMapOf(
+                        "type"       to "post",
+                        "originalId" to post.id,
+                        "postId"     to "",
+                        "userName"   to post.userName,
+                        "content"    to post.description,
+                        "imageUrl"   to post.imageUrl,
+                        "reason"     to adminReason,
+                        "deletedBy"  to userName,
+                        "deletedAt"  to now,
+                        "expiresAt"  to (now + 30L * 24 * 60 * 60 * 1000)
+                    ))
+                    db.collection("posts").document(post.id)
+                        .update("status", "trashed")
+                        .addOnSuccessListener {
+                            isDeletingPost = false; showDeleteDialog = false; deletingPost = null
+                            posts.removeAll { it.id == post.id }
+                            Toast.makeText(context, "Post moved to trash.", Toast.LENGTH_SHORT).show()
                             db.collection("notifications").add(
                                 hashMapOf(
                                     "userName" to post.userName,
-                                    "message" to message,
+                                    "message" to "Your post was removed by an admin. Reason: $adminReason",
                                     "type" to "moderation",
                                     "timestamp" to System.currentTimeMillis(),
                                     "read" to false,
@@ -733,25 +774,36 @@
                                 )
                             )
                         }
-                        // Clean up ImgBB image if one exists
-                        if (post.imageDeleteUrl.isNotBlank()) {
-                            scope.launch(Dispatchers.IO) {
-                                try {
-                                    val conn = java.net.URL(post.imageDeleteUrl)
-                                        .openConnection() as java.net.HttpURLConnection
-                                    conn.requestMethod = "GET"
-                                    conn.connectTimeout = 10_000
-                                    conn.responseCode // fire and forget
-                                    conn.disconnect()
-                                } catch (e: Exception) { /* ignore — image cleanup is best-effort */
+                        .addOnFailureListener {
+                            isDeletingPost = false
+                            Toast.makeText(context, "Failed to delete.", Toast.LENGTH_SHORT).show()
+                        }
+                } else {
+                    // Regular user delete — hard delete as before
+                    db.collection("posts").document(post.id).delete()
+                        .addOnSuccessListener {
+                            isDeletingPost = false; showDeleteDialog = false; deletingPost = null
+                            posts.removeAll { it.id == post.id }
+                            Toast.makeText(context, "Post deleted.", Toast.LENGTH_SHORT).show()
+                            // Clean up ImgBB image if one exists
+                            if (post.imageDeleteUrl.isNotBlank()) {
+                                scope.launch(Dispatchers.IO) {
+                                    try {
+                                        val conn = java.net.URL(post.imageDeleteUrl)
+                                            .openConnection() as java.net.HttpURLConnection
+                                        conn.requestMethod = "GET"
+                                        conn.connectTimeout = 10_000
+                                        conn.responseCode
+                                        conn.disconnect()
+                                    } catch (e: Exception) { }
                                 }
                             }
                         }
-                    }
-                    .addOnFailureListener {
-                        isDeletingPost = false
-                        Toast.makeText(context, "Failed to delete.", Toast.LENGTH_SHORT).show()
-                    }
+                        .addOnFailureListener {
+                            isDeletingPost = false
+                            Toast.makeText(context, "Failed to delete.", Toast.LENGTH_SHORT).show()
+                        }
+                }
             }
 
             fun toggleLike(post: PostItem) {
@@ -1665,6 +1717,18 @@
                                             .addOnSuccessListener {
                                                 db.collection("posts").document(selectedPostId)
                                                     .update("comments", FieldValue.increment(-1))
+                                                // Write to reportedComments so admin panel
+                                                // can track and review admin-hidden comments
+                                                db.collection("reportedComments").add(hashMapOf(
+                                                    "commentId"  to c.id,
+                                                    "postId"     to selectedPostId,
+                                                    "userName"   to c.userName,
+                                                    "text"       to c.text,
+                                                    "reason"     to finalReason,
+                                                    "reportedBy" to userName,
+                                                    "source"     to "admin",
+                                                    "timestamp"  to System.currentTimeMillis()
+                                                ))
                                                 db.collection("notifications").add(
                                                     hashMapOf(
                                                         "userName" to c.userName,
@@ -3432,6 +3496,7 @@
                                         if (nextEvent?.organizer == userName) onExploreRides(null)
                                         else onExploreRides(nextEvent?.id)
                                     },
+                                    onCreateRide = { onExploreRides(null) },
                                     nextEvent = nextEvent,
                                     isLoading = isLoadingEvent,
                                     isOrganizer = nextEvent?.organizer == userName
@@ -3861,12 +3926,14 @@
             // ─────────────────────────────────────────────────────────────────────────────
             @Composable
             fun RidingEventsCard(
-                onExploreRides: () -> Unit = {},
+                onExploreRides: (eventId: String?) -> Unit = {},
+                onCreateRide: () -> Unit = {},
                 nextEvent: RideEvent? = null,
                 isLoading: Boolean = false,
                 isOrganizer: Boolean = false
             ) {
                 val hasEvent = nextEvent != null
+                var isExpanded by remember { mutableStateOf(false) }
                 val title = nextEvent?.title?.takeIf { it.isNotBlank() } ?: "Community Ride"
                 val route = nextEvent?.route?.takeIf { it.isNotBlank() } ?: "Metro Manila & nearby"
                 val dateText = if (nextEvent != null && nextEvent.date > 0)
@@ -3878,7 +3945,13 @@
                 val riderCount = nextEvent?.participants?.size ?: 0
 
                 Card(
-                    Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp)
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null
+                        ) { onExploreRides(null) },
                     colors = CardDefaults.cardColors(containerColor = Green900),
                     shape = RoundedCornerShape(18.dp),
                     elevation = CardDefaults.cardElevation(3.dp)
@@ -4021,9 +4094,90 @@
                             }
                         }
 
+                        // Expanded detail section
+                        androidx.compose.animation.AnimatedVisibility(visible = isExpanded && hasEvent) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(bottom = 12.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                HorizontalDivider(color = Color.White.copy(alpha = 0.12f))
+                                Spacer(Modifier.height(4.dp))
+                                // Difficulty
+                                nextEvent?.difficulty?.let { difficulty ->
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Icon(Icons.Default.Speed, null,
+                                            tint = Color.White.copy(alpha = 0.7f),
+                                            modifier = Modifier.size(14.dp))
+                                        Text("Difficulty: $difficulty",
+                                            fontSize = 12.sp,
+                                            color = Color.White.copy(alpha = 0.85f))
+                                    }
+                                }
+                                // Distance
+                                if ((nextEvent?.distanceKm ?: 0.0) > 0.0) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Icon(Icons.Default.Route, null,
+                                            tint = Color.White.copy(alpha = 0.7f),
+                                            modifier = Modifier.size(14.dp))
+                                        Text(String.format("%.1f km route", nextEvent!!.distanceKm),
+                                            fontSize = 12.sp,
+                                            color = Color.White.copy(alpha = 0.85f))
+                                    }
+                                }
+                                // Max participants
+                                if ((nextEvent?.maxParticipants ?: 0) > 0) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Icon(Icons.Default.Groups, null,
+                                            tint = Color.White.copy(alpha = 0.7f),
+                                            modifier = Modifier.size(14.dp))
+                                        Text("${nextEvent!!.participants.size} / ${nextEvent.maxParticipants} riders joined",
+                                            fontSize = 12.sp,
+                                            color = Color.White.copy(alpha = 0.85f))
+                                    }
+                                }
+                                // Organizer
+                                nextEvent?.organizer?.takeIf { it.isNotBlank() }?.let { organizer ->
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Icon(Icons.Default.Person, null,
+                                            tint = Color.White.copy(alpha = 0.7f),
+                                            modifier = Modifier.size(14.dp))
+                                        Text("Organized by $organizer",
+                                            fontSize = 12.sp,
+                                            color = Color.White.copy(alpha = 0.85f))
+                                    }
+                                }
+                                // Tap hint
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.End
+                                ) {
+                                    Text(
+                                        "Tap the button below to join →",
+                                        fontSize = 11.sp,
+                                        color = Color.White.copy(alpha = 0.45f),
+                                        fontStyle = androidx.compose.ui.text.font.FontStyle.Italic
+                                    )
+                                }
+                            }
+                        }
+
                         Spacer(Modifier.height(14.dp))
                         Button(
-                            onClick = onExploreRides,
+                            onClick = { if (!hasEvent) onCreateRide() else onExploreRides(nextEvent?.id) },
                             colors = ButtonDefaults.buttonColors(
                                 containerColor = Color.White,
                                 contentColor = Green900
@@ -4109,6 +4263,8 @@
                 var localLikes by remember(post.id) { mutableIntStateOf(post.likes) }
                 var hasReported by remember { mutableStateOf(false) }
                 var showRideDetail by remember { mutableStateOf(false) }
+
+
 
                 // Check if current user already reported this post
                 LaunchedEffect(post.id) {
@@ -4318,7 +4474,7 @@
                                                                 color = Red600
                                                             )
                                                             Text(
-                                                                "Permanently remove",
+                                                                "Move to trash",
                                                                 fontSize = 11.sp,
                                                                 color = TextMuted
                                                             )

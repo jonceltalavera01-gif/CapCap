@@ -1238,7 +1238,7 @@ private fun AvatarStack(participants: List<String>, maxParticipants: Int) {
 // ─────────────────────────────────────────────────────────────────────────────
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun EventDetailSheet(
+internal fun EventDetailSheet(
     event: RideEvent, userName: String,
     onJoin: () -> Unit, onDelete: () -> Unit = {}, onEdit: () -> Unit = {},
     onCheckIn: () -> Unit = {}, onToggleAttendance: (String) -> Unit = {},

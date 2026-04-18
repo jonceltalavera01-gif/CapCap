@@ -872,41 +872,13 @@ fun AlertsScreen(
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Box(modifier = Modifier.fillMaxWidth()) {
-                        Text(
-                            "How was $responderDisplay's response?",
-                            fontSize  = 14.sp,
-                            color     = Color.Gray,
-                            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                            modifier  = Modifier.fillMaxWidth()
-                        )
-                        IconButton(
-                            onClick  = {
-                                if (hasReportedHelper) return@IconButton
-                                val helper = alert.responderName ?: return@IconButton
-                                reportTargetName     = alert.responderDisplayName
-                                    .takeIf { it.isNotBlank() } ?: helper
-                                reportTargetRole     = "helper"
-                                reportAlertRef       = alert
-                                selectedReportReason = ""
-                                reportOtherText      = ""
-                                showReportDialog     = true
-                            },
-                            enabled  = !hasReportedHelper,
-                            modifier = Modifier
-                                .size(28.dp)
-                                .align(Alignment.CenterEnd)
-                        ) {
-                            Icon(
-                                Icons.Default.Flag, null,
-                                tint     = if (hasReportedHelper)
-                                    Color(0xFFBDBDBD)
-                                else
-                                    Color(0xFFD32F2F).copy(alpha = 0.6f),
-                                modifier = Modifier.size(16.dp)
-                            )
-                        }
-                    }
+                    Text(
+                        "How was $responderDisplay's response?",
+                        fontSize  = 14.sp,
+                        color     = Color.Gray,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                        modifier  = Modifier.fillMaxWidth()
+                    )
                     // Star row
                     Row(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -966,6 +938,49 @@ fun AlertsScreen(
                         ),
                         maxLines = 3
                     )
+                    // Contextual report link — only appears on low ratings
+                    androidx.compose.animation.AnimatedVisibility(
+                        visible = pendingRating in 1..2
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(Color(0xFFFFEBEE))
+                                .clickable(
+                                    interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                                    indication        = null
+                                ) {
+                                    if (!hasReportedHelper) {
+                                        val helper = alert.responderName ?: return@clickable
+                                        reportTargetName     = alert.responderDisplayName
+                                            .takeIf { it.isNotBlank() } ?: helper
+                                        reportTargetRole     = "helper"
+                                        reportAlertRef       = alert
+                                        selectedReportReason = ""
+                                        reportOtherText      = ""
+                                        showReportDialog     = true
+                                    }
+                                }
+                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                            verticalAlignment     = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Icon(
+                                if (hasReportedHelper) Icons.Default.Check else Icons.Default.Flag,
+                                null,
+                                tint     = if (hasReportedHelper) Color(0xFF2E7D32) else Color(0xFFD32F2F),
+                                modifier = Modifier.size(15.dp)
+                            )
+                            Text(
+                                if (hasReportedHelper) "Report already submitted"
+                                else "Having issues? Report this helper",
+                                fontSize   = 12.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color      = if (hasReportedHelper) Color(0xFF2E7D32) else Color(0xFFD32F2F)
+                            )
+                        }
+                    }
                     if (pendingRating == 0) {
                         Text(
                             "Please select a star rating to close this alert.",
@@ -1002,7 +1017,7 @@ fun AlertsScreen(
                         )
                     ) {
                         Text(
-                            "Submit Rating & Close Alert",
+                            "Submit Rating",
                             fontWeight = FontWeight.Bold,
                             fontSize   = 14.sp
                         )
@@ -1014,7 +1029,7 @@ fun AlertsScreen(
                         border   = androidx.compose.foundation.BorderStroke(
                             1.dp, Color(0xFFDDDDDD))
                     ) {
-                        Text("Go Back", color = Color.Gray, fontSize = 14.sp)
+                        Text("Cancel", color = Color.Gray, fontSize = 14.sp)
                     }
                 }
             }

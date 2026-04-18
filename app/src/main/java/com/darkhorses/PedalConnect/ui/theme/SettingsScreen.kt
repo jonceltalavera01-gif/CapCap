@@ -781,7 +781,7 @@ fun SettingsScreen(navController: NavController) {
                 }
             }
 
-            // ── Notifications ─────────────────────────────────────────────────
+            // ── Notifications & Location ──────────────────────────────────────
             Spacer(Modifier.height(4.dp))
             SettingsSectionHeader("Notifications")
             SettingsGroup {
@@ -795,7 +795,6 @@ fun SettingsScreen(navController: NavController) {
                         settings = settings.copy(notificationsEnabled = v)
                         saveToggle("notificationsEnabled", v)
                         if (!v) {
-                            // Cascade off
                             settings = settings.copy(
                                 sosAlertsEnabled           = false,
                                 nearbyCyclistAlertsEnabled = false
@@ -838,21 +837,20 @@ fun SettingsScreen(navController: NavController) {
                 }
             }
 
-            // ── Privacy & Safety ──────────────────────────────────────────────
+            // ── Privacy & Location ────────────────────────────────────────────
             Spacer(Modifier.height(4.dp))
-            SettingsSectionHeader("Privacy & Safety")
+            SettingsSectionHeader("Privacy & Location")
             SettingsGroup {
                 SettingsToggleRow(
                     icon     = Icons.Rounded.ShareLocation,
                     label    = "Share My Location",
-                    sublabel = "Off stops broadcasting and hides you from nearby cylists",
+                    sublabel = "Turning off hides you from nearby cyclists",
                     tint     = SettingsGreen700,
                     checked  = settings.locationSharingEnabled,
                     onCheckedChange = { v ->
                         settings = settings.copy(locationSharingEnabled = v)
                         saveToggle("locationSharingEnabled", v)
                         if (!v) {
-                            // Remove from userLocations immediately so map hides user right away
                             scope.launch {
                                 try {
                                     val docId = userDocId ?: return@launch
@@ -864,25 +862,11 @@ fun SettingsScreen(navController: NavController) {
                         }
                     }
                 )
-                HorizontalDivider(color = DividerColor, modifier = Modifier.padding(start = 56.dp))
-                SettingsRow(
-                    icon     = Icons.Rounded.Shield,
-                    label    = "Blocked Users",
-                    sublabel = "Manage who can see your activity",
-                    tint     = SettingsGreen700
-                ) { /* TODO */ }
-                HorizontalDivider(color = DividerColor, modifier = Modifier.padding(start = 56.dp))
-                SettingsRow(
-                    icon     = Icons.Rounded.VisibilityOff,
-                    label    = "Data & Privacy",
-                    sublabel = "Control what data is collected",
-                    tint     = SettingsGreen700
-                ) { /* TODO */ }
             }
 
-            // ── App Preferences ───────────────────────────────────────────────
+            // ── Appearance ────────────────────────────────────────────────────
             Spacer(Modifier.height(4.dp))
-            SettingsSectionHeader("App Preferences")
+            SettingsSectionHeader("Appearance")
             SettingsGroup {
                 SettingsToggleRow(
                     icon     = Icons.Rounded.DarkMode,
@@ -897,25 +881,23 @@ fun SettingsScreen(navController: NavController) {
                             "Dark mode will apply on next launch", Toast.LENGTH_SHORT).show()
                     }
                 )
-                HorizontalDivider(color = DividerColor, modifier = Modifier.padding(start = 56.dp))
-                SettingsRow(icon = Icons.Rounded.Map, label = "Map Style",
-                    sublabel = "Standard", tint = SettingsGreen700) { }
             }
 
-            // ── Support & About ───────────────────────────────────────────────
+            // ── Support ───────────────────────────────────────────────────────
             Spacer(Modifier.height(4.dp))
-            SettingsSectionHeader("Support & About")
+            SettingsSectionHeader("Support")
             SettingsGroup {
-                SettingsRow(icon = Icons.Rounded.BugReport, label = "Report a Bug",
-                    sublabel = "Help us improve PedalConnect", tint = SettingsGreen700) {
+                SettingsRow(
+                    icon     = Icons.Rounded.BugReport,
+                    label    = "Report a Bug",
+                    sublabel = "Help us improve PedalConnect",
+                    tint     = SettingsGreen700
+                ) {
                     context.startActivity(Intent(Intent.ACTION_SENDTO).apply {
                         data = Uri.parse("mailto:support@pedalconnect.app")
                         putExtra(Intent.EXTRA_SUBJECT, "Bug Report - PedalConnect")
                     })
                 }
-                HorizontalDivider(color = DividerColor, modifier = Modifier.padding(start = 56.dp))
-                SettingsRow(icon = Icons.Rounded.Info, label = "About",
-                    sublabel = "Version 1.0.0 · PedalConnect", tint = SettingsGreen700) { }
             }
 
             // ── Danger zone ───────────────────────────────────────────────────

@@ -99,6 +99,7 @@ fun ProfileScreen(navController: NavController, userName: String, paddingValues:
     var subTab           by remember { mutableIntStateOf(0) }
     var showRidesSheet   by remember { mutableStateOf(false) }
     val ridesSheetState  = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    var selectedEvent    by remember { mutableStateOf<RideEvent?>(null) }
 
     val myPosts      = remember { mutableStateListOf<ProfilePost>() }
     // Tracks optimistic like state independently of the snapshot listener
@@ -1027,13 +1028,73 @@ fun ProfileScreen(navController: NavController, userName: String, paddingValues:
                         }
                     } else {
                         items(joinedEvents, key = { "event_${it.id}" }) { event ->
-                            EventCard(event = event, formatEventDate = ::formatEventDate)
+                            val rideEvent = RideEvent(
+                                id             = event.id,
+                                title          = event.title,
+                                route          = event.route,
+                                date           = event.date,
+                                time           = event.time,
+                                difficulty     = event.difficulty,
+                                distanceKm     = event.distanceKm,
+                                status         = event.status,
+                                participants   = if (event.isOrganizer)
+                                    listOf(userName) else listOf(userName),
+                                organizer      = if (event.isOrganizer) userName else ""
+                            )
+                            EventCard(
+                                event           = event,
+                                formatEventDate = ::formatEventDate,
+                                onTap           = { selectedEvent = rideEvent }
+                            )
                             Spacer(Modifier.height(12.dp))
                         }
                     }
                 }
             } // end LazyColumn
         } // end Column
+
+        // ── Event Detail Sheet ────────────────────────────────────────────────
+        selectedEvent?.let { event ->
+            EventDetailSheet(
+                event               = event,
+                userName            = userName,
+                onJoin              = {
+                    val db2 = FirebaseFirestore.getInstance()
+                    val ref = db2.collection("rideEvents").document(event.id)
+                    if (event.participants.contains(userName)) {
+                        ref.update("participants", com.google.firebase.firestore.FieldValue.arrayRemove(userName))
+                            .addOnSuccessListener {
+                                Toast.makeText(context, "Left the ride.", Toast.LENGTH_SHORT).show()
+                            }
+                    } else {
+                        ref.update("participants", com.google.firebase.firestore.FieldValue.arrayUnion(userName))
+                            .addOnSuccessListener {
+                                Toast.makeText(context, "Joined! 🚴", Toast.LENGTH_SHORT).show()
+                            }
+                    }
+                },
+                onDelete            = {},
+                onEdit              = {},
+                onCheckIn           = {
+                    val db2 = FirebaseFirestore.getInstance()
+                    db2.collection("rideEvents").document(event.id)
+                        .update("attendees", com.google.firebase.firestore.FieldValue.arrayUnion(userName))
+                        .addOnSuccessListener {
+                            Toast.makeText(context, "Checked in! See you on the road 🚴", Toast.LENGTH_SHORT).show()
+                        }
+                },
+                onToggleAttendance  = {},
+                onToggleCheckInOpen = {},
+                onDismiss           = { selectedEvent = null },
+                onNavigate          = { destination ->
+                    val prefs = context.getSharedPreferences("PedalConnectPrefs", android.content.Context.MODE_PRIVATE)
+                    prefs.edit().putString("pending_destination", destination).apply()
+                    navController.navigate("home/$userName") {
+                        popUpTo("home/$userName") { inclusive = false }
+                    }
+                }
+            )
+        }
 
         // ── Saved Rides bottom sheet ──────────────────────────────────────────
         if (showRidesSheet) {
@@ -1221,7 +1282,7 @@ private fun PEmptyState(icon: ImageVector, title: String, message: String) {
 
 // ── Event card ────────────────────────────────────────────────────────────────
 @Composable
-private fun EventCard(event: JoinedEvent, formatEventDate: (Long) -> String) {
+private fun EventCard(event: JoinedEvent, formatEventDate: (Long) -> String, onTap: () -> Unit = {}) {
     val diffFg = when (event.difficulty) {
         "Easy"     -> Color(0xFF166534)
         "Moderate" -> Color(0xFF9A3412)
@@ -1254,7 +1315,7 @@ private fun EventCard(event: JoinedEvent, formatEventDate: (Long) -> String) {
     val accentColor = if (isPast) Color(0xFF9CA3AF) else diffFg
 
     Card(
-        modifier  = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+        modifier  = Modifier.fillMaxWidth().padding(horizontal = 16.dp).clickable { onTap() },
         shape     = RoundedCornerShape(16.dp),
         colors    = CardDefaults.cardColors(containerColor = cardBg),
         elevation = CardDefaults.cardElevation(if (isPast) 0.dp else 3.dp)

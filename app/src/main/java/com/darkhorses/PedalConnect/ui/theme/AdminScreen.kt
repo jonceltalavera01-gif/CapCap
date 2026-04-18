@@ -84,9 +84,9 @@ private data class ReportedComment(
     val reportCount: Int,
     val timestamp: Long,
     val reportedBy: String = "",
-    val reasons: List<String> = emptyList()
+    val reasons: List<String> = emptyList(),
+    val source: String = "user"  // "user" = reported by users, "admin" = hidden by admin
 )
-
 private data class ModerationLog(
     val id: String,
     val userName: String,
@@ -129,6 +129,20 @@ private data class AuditLogEntry(
     val targetUser: String,
     val detail: String,
     val timestamp: Long
+)
+
+private data class TrashItem(
+    val id: String,
+    val type: String,           // "post" or "comment"
+    val originalId: String,
+    val postId: String,         // empty for posts, parent postId for comments
+    val userName: String,
+    val content: String,        // description for posts, text for comments
+    val imageUrl: String,       // only for posts
+    val reason: String,
+    val deletedBy: String,
+    val deletedAt: Long,
+    val expiresAt: Long
 )
 
 
@@ -179,6 +193,9 @@ fun AdminScreen(paddingValues: PaddingValues, adminUserName: String = "") {
     var isLoadingAuditLogs by remember { mutableStateOf(true) }
     val userReports = remember { mutableStateListOf<UserReport>() }
     var isLoadingUserReports by remember { mutableStateOf(true) }
+    val trashItems = remember { mutableStateListOf<TrashItem>() }
+    var isLoadingTrash by remember { mutableStateOf(true) }
+    var selectedTrashChip by remember { mutableStateOf("Posts") }
     var adminDisplayName by remember { mutableStateOf(adminUserName) }
 
     var successMessage     by remember { mutableStateOf<String?>(null) }
@@ -280,30 +297,6 @@ fun AdminScreen(paddingValues: PaddingValues, adminUserName: String = "") {
             }
     }
 
-    LaunchedEffect(Unit) {
-        db.collection("alerts")
-            .whereNotEqualTo("status", "resolved")
-            .addSnapshotListener { snap, _ ->
-                if (snap == null) return@addSnapshotListener
-                if (selectedSection != 5) {
-                    activeAlerts.clear()
-                    for (doc in snap.documents) {
-                        activeAlerts.add(AdminAlert(
-                            id            = doc.id,
-                            riderName     = doc.getString("riderName")     ?: "",
-                            emergencyType = doc.getString("emergencyType") ?: "",
-                            locationName  = doc.getString("locationName")  ?: "",
-                            status        = doc.getString("status")        ?: "active",
-                            severity      = doc.getString("severity")      ?: "HIGH",
-                            timestamp     = doc.getLong("timestamp")       ?: 0L,
-                            photoUrl      = doc.getString("photoUrl"),
-                            responderName = doc.getString("responderName")
-                        ))
-                    }
-                }
-                isLoadingAlerts = false
-            }
-    }
 
     LaunchedEffect(Unit) {
         db.collection("moderationLogs")
@@ -351,6 +344,32 @@ fun AdminScreen(paddingValues: PaddingValues, adminUserName: String = "") {
                     }
                 }
                 isLoadingUserReports = false
+            }
+    }
+
+    LaunchedEffect(Unit) {
+        db.collection("adminTrash")
+            .addSnapshotListener { snap, _ ->
+                if (snap == null) return@addSnapshotListener
+                if (selectedSection != 9) {
+                    trashItems.clear()
+                    for (doc in snap.documents) {
+                        trashItems.add(TrashItem(
+                            id         = doc.id,
+                            type       = doc.getString("type")       ?: "",
+                            originalId = doc.getString("originalId") ?: "",
+                            postId     = doc.getString("postId")     ?: "",
+                            userName   = doc.getString("userName")   ?: "",
+                            content    = doc.getString("content")    ?: "",
+                            imageUrl   = doc.getString("imageUrl")   ?: "",
+                            reason     = doc.getString("reason")     ?: "",
+                            deletedBy  = doc.getString("deletedBy")  ?: "",
+                            deletedAt  = doc.getLong("deletedAt")    ?: 0L,
+                            expiresAt  = doc.getLong("expiresAt")    ?: 0L
+                        ))
+                    }
+                }
+                isLoadingTrash = false
             }
     }
 
@@ -410,22 +429,36 @@ fun AdminScreen(paddingValues: PaddingValues, adminUserName: String = "") {
             }
     }
 
+    // Store report metadata alongside the posts
+    val reportedPostMeta = remember { mutableStateMapOf<String, Pair<List<String>, List<String>>>() }
+    // Key: postId → Pair(reasons, reportedByList)
+
     LaunchedEffect(selectedSection) {
-        if (selectedSection != 3) return@LaunchedEffect // shared with comment reports
+        if (selectedSection != 3) return@LaunchedEffect
         db.collection("reportedPosts")
             .orderBy("timestamp", Query.Direction.DESCENDING)
             .addSnapshotListener { snap, _ ->
                 if (snap == null) { isLoadingReportedPosts = false; return@addSnapshotListener }
                 val grouped = snap.documents
                     .mapNotNull { doc ->
-                        val postId   = doc.getString("postId")   ?: return@mapNotNull null
-                        val userName = doc.getString("userName") ?: return@mapNotNull null
-                        postId to (userName to (doc.getLong("timestamp") ?: 0L))
+                        val postId     = doc.getString("postId")     ?: return@mapNotNull null
+                        val reportedBy = doc.getString("reportedBy") ?: ""
+                        val reason     = doc.getString("reason")     ?: ""
+                        postId to Pair(reason, reportedBy)
                     }
                     .groupBy { it.first }
+
+                // Build meta map: postId → (reasons, reporters)
+                reportedPostMeta.clear()
+                grouped.forEach { (postId, entries) ->
+                    val reasons   = entries.map { it.second.first }.filter { it.isNotBlank() }.distinct()
+                    val reporters = entries.map { it.second.second }.filter { it.isNotBlank() }.distinct()
+                    reportedPostMeta[postId] = Pair(reasons, reporters)
+                }
+
                 val postIds = grouped.keys.toList()
                 if (postIds.isEmpty()) { isLoadingReportedPosts = false; return@addSnapshotListener }
-                // Fetch the actual post documents
+
                 reportedPosts.clear()
                 var fetched = 0
                 postIds.forEach { postId ->
@@ -501,6 +534,7 @@ fun AdminScreen(paddingValues: PaddingValues, adminUserName: String = "") {
                         val timestamp  = doc.getLong("timestamp")    ?: 0L
                         val reportedBy = doc.getString("reportedBy") ?: ""
                         val reason     = doc.getString("reason")     ?: ""
+                        val source     = doc.getString("source")     ?: "user"
                         commentId to ReportedComment(
                             commentId   = commentId,
                             postId      = postId,
@@ -509,7 +543,8 @@ fun AdminScreen(paddingValues: PaddingValues, adminUserName: String = "") {
                             reportCount = 1,
                             timestamp   = timestamp,
                             reportedBy  = reportedBy,
-                            reasons     = if (reason.isNotBlank()) listOf(reason) else emptyList()
+                            reasons     = if (reason.isNotBlank()) listOf(reason) else emptyList(),
+                            source      = source
                         )
                     }
                     .groupBy { it.first }
@@ -519,6 +554,7 @@ fun AdminScreen(paddingValues: PaddingValues, adminUserName: String = "") {
                             .flatMap { it.second.reasons }
                             .filter { it.isNotBlank() }
                             .distinct()
+                        // For admin-hidden comments, source is preserved from the single record
                         latest.copy(reportCount = reports.size, reasons = allReasons)
                     }
                     .sortedByDescending { it.reportCount }
@@ -566,68 +602,39 @@ fun AdminScreen(paddingValues: PaddingValues, adminUserName: String = "") {
 
     // Dashboard — recent activity feed (last 10 across posts, alerts, reports)
     LaunchedEffect(Unit) {
-        db.collection("posts")
+        db.collection("moderationAuditLog")
             .orderBy("timestamp", Query.Direction.DESCENDING)
-            .limit(5)
+            .limit(10)
             .addSnapshotListener { snap, _ ->
-                val items = snap?.documents?.mapNotNull { doc ->
-                    val status = doc.getString("status") ?: return@mapNotNull null
-                    ActivityItem(
-                        id        = doc.id,
-                        type      = "post",
-                        title     = when (status) {
-                            "accepted" -> "Post approved"
-                            "pending"  -> "New post pending"
-                            "rejected" -> "Post rejected"
-                            else       -> "Post updated"
-                        },
-                        subtitle  = "by ${doc.getString("userName") ?: "Unknown"}",
-                        timestamp = doc.getLong("timestamp") ?: 0L
-                    )
-                } ?: emptyList()
-                recentActivity.removeAll { it.type == "post" }
-                recentActivity.addAll(items)
-                recentActivity.sortByDescending { it.timestamp }
-            }
-    }
+                if (snap == null) return@addSnapshotListener
+                recentActivity.clear()
+                snap.documents.forEach { doc ->
+                    val action     = doc.getString("action")           ?: return@forEach
+                    val targetType = doc.getString("targetType")       ?: ""
+                    val targetUser = doc.getString("targetUser")       ?: "Unknown"
+                    val adminName  = doc.getString("adminDisplayName") ?: doc.getString("adminUserName") ?: "Admin"
+                    val timestamp  = doc.getLong("timestamp")          ?: 0L
 
-    LaunchedEffect(Unit) {
-        db.collection("alerts")
-            .orderBy("timestamp", Query.Direction.DESCENDING)
-            .limit(5)
-            .addSnapshotListener { snap, _ ->
-                val items = snap?.documents?.mapNotNull { doc ->
-                    ActivityItem(
-                        id        = doc.id,
-                        type      = "alert",
-                        title     = "${doc.getString("emergencyType") ?: "Emergency"} alert",
-                        subtitle  = "by ${doc.getString("riderName") ?: "Unknown"} · ${doc.getString("status") ?: "active"}",
-                        timestamp = doc.getLong("timestamp") ?: 0L
-                    )
-                } ?: emptyList()
-                recentActivity.removeAll { it.type == "alert" }
-                recentActivity.addAll(items)
-                recentActivity.sortByDescending { it.timestamp }
-            }
-    }
+                    val type = when {
+                        action.contains("Approved", ignoreCase = true)  -> "post"
+                        action.contains("Rejected", ignoreCase = true)  -> "report"
+                        action.contains("Deleted", ignoreCase = true) ||
+                                action.contains("Trashed", ignoreCase = true) ||
+                                action.contains("Removed", ignoreCase = true)   -> "report"
+                        action.contains("Resolved", ignoreCase = true)  -> "alert"
+                        action.contains("Restored", ignoreCase = true)  -> "post"
+                        action.contains("Warned", ignoreCase = true)    -> "report"
+                        else                                             -> "post"
+                    }
 
-    LaunchedEffect(Unit) {
-        db.collection("reportedPosts")
-            .orderBy("timestamp", Query.Direction.DESCENDING)
-            .limit(5)
-            .addSnapshotListener { snap, _ ->
-                val items = snap?.documents?.mapNotNull { doc ->
-                    ActivityItem(
-                        id        = doc.id,
-                        type      = "report",
-                        title     = "Post reported",
-                        subtitle  = "by ${doc.getString("reportedBy") ?: "Unknown"}",
-                        timestamp = doc.getLong("timestamp") ?: 0L
-                    )
-                } ?: emptyList()
-                recentActivity.removeAll { it.type == "report" }
-                recentActivity.addAll(items)
-                recentActivity.sortByDescending { it.timestamp }
+                    recentActivity.add(ActivityItem(
+                        id       = doc.id,
+                        type     = type,
+                        title    = action,
+                        subtitle = "by $adminName · re: $targetUser",
+                        timestamp = timestamp
+                    ))
+                }
             }
     }
 
@@ -654,7 +661,7 @@ fun AdminScreen(paddingValues: PaddingValues, adminUserName: String = "") {
             }
     }
     LaunchedEffect(selectedSection) {
-        if (selectedSection != 8) return@LaunchedEffect
+        if (selectedSection != 5) return@LaunchedEffect
         db.collection("userReports")
             .whereEqualTo("reviewed", false)
             .orderBy("timestamp", Query.Direction.DESCENDING)
@@ -704,29 +711,38 @@ fun AdminScreen(paddingValues: PaddingValues, adminUserName: String = "") {
     }
 
     LaunchedEffect(selectedSection) {
-        if (selectedSection != 5) return@LaunchedEffect
-        db.collection("alerts")
+        if (selectedSection != 8) return@LaunchedEffect
+        db.collection("adminTrash")
+            .orderBy("deletedAt", Query.Direction.DESCENDING)
             .addSnapshotListener { snap, _ ->
-                if (snap == null) { isLoadingAlerts = false; return@addSnapshotListener }
-                activeAlerts.clear()
+                if (snap == null) { isLoadingTrash = false; return@addSnapshotListener }
+                val now = System.currentTimeMillis()
+                trashItems.clear()
                 for (doc in snap.documents) {
-                    if ((doc.getString("status") ?: "active") == "resolved") continue
-                    activeAlerts.add(AdminAlert(
-                        id            = doc.id,
-                        riderName     = doc.getString("riderName")     ?: "Unknown",
-                        emergencyType = doc.getString("emergencyType") ?: "Emergency",
-                        locationName  = doc.getString("locationName")  ?: "Unknown",
-                        status        = doc.getString("status")        ?: "active",
-                        severity      = doc.getString("severity")      ?: "HIGH",
-                        timestamp     = doc.getLong("timestamp")       ?: 0L,
-                        photoUrl      = doc.getString("photoUrl"),
-                        responderName = doc.getString("responderName")
+                    val expiresAt = doc.getLong("expiresAt") ?: 0L
+                    if (expiresAt > 0L && now > expiresAt) {
+                        // Auto-purge expired items
+                        db.collection("adminTrash").document(doc.id).delete()
+                        continue
+                    }
+                    trashItems.add(TrashItem(
+                        id         = doc.id,
+                        type       = doc.getString("type")       ?: "",
+                        originalId = doc.getString("originalId") ?: "",
+                        postId     = doc.getString("postId")     ?: "",
+                        userName   = doc.getString("userName")   ?: "",
+                        content    = doc.getString("content")    ?: "",
+                        imageUrl   = doc.getString("imageUrl")   ?: "",
+                        reason     = doc.getString("reason")     ?: "",
+                        deletedBy  = doc.getString("deletedBy")  ?: "",
+                        deletedAt  = doc.getLong("deletedAt")    ?: 0L,
+                        expiresAt  = doc.getLong("expiresAt")    ?: 0L
                     ))
                 }
-                activeAlerts.sortByDescending { it.timestamp }
-                isLoadingAlerts = false
+                isLoadingTrash = false
             }
     }
+
     fun logAudit(action: String, targetType: String, targetUser: String, detail: String) {
         if (adminUserName.isBlank()) return
         db.collection("moderationAuditLog").add(hashMapOf(
@@ -739,6 +755,30 @@ fun AdminScreen(paddingValues: PaddingValues, adminUserName: String = "") {
             "timestamp"        to System.currentTimeMillis()
         ))
     }
+    fun moveToTrash(
+        type: String,
+        originalId: String,
+        postId: String,
+        userName: String,
+        content: String,
+        imageUrl: String,
+        reason: String
+    ) {
+        val now = System.currentTimeMillis()
+        db.collection("adminTrash").add(hashMapOf(
+            "type"       to type,
+            "originalId" to originalId,
+            "postId"     to postId,
+            "userName"   to userName,
+            "content"    to content,
+            "imageUrl"   to imageUrl,
+            "reason"     to reason,
+            "deletedBy"  to adminUserName,
+            "deletedAt"  to now,
+            "expiresAt"  to (now + 30L * 24 * 60 * 60 * 1000)
+        ))
+    }
+
     // ── Actions ───────────────────────────────────────────────────────────────
     fun toast(msg: String, isSuccess: Boolean = true) {
         if (isSuccess) successMessage = msg else errorMessage = msg
@@ -955,15 +995,15 @@ fun AdminScreen(paddingValues: PaddingValues, adminUserName: String = "") {
         val badgeColor: Color
     )
     val sections = listOf(
-            NavSection("Dashboard",      Icons.Default.Dashboard,      0,                                          AGreen700),
-    NavSection("Posts",          Icons.Default.Article,        pendingPosts.size,                          AAmber500),
-    NavSection("Rides",          Icons.Default.DirectionsBike, pendingRides.size,                          Color(0xFF1976D2)),
-    NavSection("Reports",        Icons.Default.Flag,           reportedPosts.size + reportedComments.size, ARedColor),
-    NavSection("Photo Reports",  Icons.Default.Image,          reportedImages.size,                        Color(0xFFEA580C)),
-    NavSection("Alerts",         Icons.Default.Warning,        activeAlerts.size,                          Color(0xFFEF4444)),
-    NavSection("Profanity Logs", Icons.Default.Shield,         moderationLogs.size,                        Color(0xFF7C3AED)),
-    NavSection("Audit Log",      Icons.Default.ManageAccounts, auditLogs.size,                             Color(0xFF0891B2)),
-    NavSection("User Reports",   Icons.Default.PersonOff,      userReports.size,                           Color(0xFF7C3AED))
+        NavSection("Dashboard",      Icons.Default.Dashboard,      0,                                          AGreen700),
+        NavSection("Posts",          Icons.Default.Article,        pendingPosts.size,                          AAmber500),
+        NavSection("Rides",          Icons.Default.DirectionsBike, pendingRides.size,                          Color(0xFF1976D2)),
+        NavSection("Reports",        Icons.Default.Flag,           reportedPosts.size + reportedComments.size, ARedColor),
+        NavSection("Photo Reports",  Icons.Default.Image,          reportedImages.size,                        Color(0xFFEA580C)),
+        NavSection("User Reports",   Icons.Default.PersonOff,      userReports.size,                           Color(0xFF7C3AED)),
+        NavSection("Profanity Logs", Icons.Default.Shield,         moderationLogs.size,                        Color(0xFF7C3AED)),
+        NavSection("Audit Log",      Icons.Default.ManageAccounts, auditLogs.size,                             Color(0xFF0891B2)),
+        NavSection("Trash",          Icons.Default.DeleteSweep,    trashItems.size,                            Color(0xFF6B7280))
     )
     // ── Drawer state ──────────────────────────────────────────────────────────
     val drawerState = rememberDrawerState(DrawerValue.Closed)
@@ -1140,10 +1180,10 @@ fun AdminScreen(paddingValues: PaddingValues, adminUserName: String = "") {
                                     2 -> "${pendingRides.size} pending"
                                     3 -> "${reportedPosts.size + reportedComments.size} reported"
                                     4 -> "${reportedImages.size} reported"
-                                    5 -> "${activeAlerts.size} active"
+                                    5 -> "${userReports.size} pending"
                                     6 -> "${moderationLogs.size} entries"
                                     7 -> "${auditLogs.size} entries"
-                                    8 -> "${userReports.size} pending"
+                                    8 -> "${trashItems.size} item${if (trashItems.size != 1) "s" else ""}"
                                     else -> ""
                                 }, fontSize = 11.sp, color = Color.White.copy(alpha = 0.65f))
                             }
@@ -1244,7 +1284,7 @@ fun AdminScreen(paddingValues: PaddingValues, adminUserName: String = "") {
                                         Triple("Rides",         pendingRides.size,                          2),
                                         Triple("Reports",       reportedPosts.size + reportedComments.size, 3),
                                         Triple("Photo Reports", reportedImages.size,                        4),
-                                        Triple("Active Alerts", activeAlerts.size,                          5)
+                                        Triple("User Reports",  userReports.size,                           5)
                                     ).filter { it.second > 0 }
 
                                     if (attentionItems.isEmpty()) {
@@ -1681,72 +1721,98 @@ fun AdminScreen(paddingValues: PaddingValues, adminUserName: String = "") {
                                             modifier = Modifier.padding(start = 4.dp, bottom = 2.dp))
                                     }
                                     items(reportedPosts, key = { it.id }) { post ->
-                                        AdminPostCard(
-                                            post      = post,
-                                            onDelete  = {
-                                                db.collection("posts").document(post.id).delete()
-                                                db.collection("reportedPosts")
-                                                    .whereEqualTo("postId", post.id)
-                                                    .get()
-                                                    .addOnSuccessListener { snap ->
-                                                        snap.documents.forEach { it.reference.delete() }
-                                                    }
-                                                db.collection("notifications").add(hashMapOf(
-                                                    "userName"  to post.userName,
-                                                    "message"   to "Your post was permanently removed by an admin for violating community guidelines.",
-                                                    "type"      to "moderation",
-                                                    "timestamp" to System.currentTimeMillis(),
-                                                    "read"      to false
-                                                ))
+                                        val meta     = reportedPostMeta[post.id]
+                                        val reasons  = meta?.first  ?: emptyList()
+                                        val reporters = meta?.second ?: emptyList()
+                                        AdminReportedPostCard(
+                                            post          = post,
+                                            reportReasons = reasons,
+                                            reportedBy    = reporters,
+                                            reportCount   = reporters.size.coerceAtLeast(1),
+                                            onRemove = {
                                                 reportedPosts.remove(post)
-                                                logAudit("Deleted reported post", "post", post.userName, post.description.take(80))
-                                            },
-                                            onApprove = {
+                                                val reasonSummary = reasons.joinToString(", ")
+                                                    .ifBlank { "violating community guidelines" }
+                                                // Move to trash instead of hard delete
+                                                moveToTrash(
+                                                    type       = "post",
+                                                    originalId = post.id,
+                                                    postId     = "",
+                                                    userName   = post.userName,
+                                                    content    = post.description,
+                                                    imageUrl   = post.imageUrl,
+                                                    reason     = reasonSummary
+                                                )
                                                 db.collection("posts").document(post.id)
-                                                    .update("status", "accepted")
-                                                db.collection("reportedPosts")
-                                                    .whereEqualTo("postId", post.id)
-                                                    .get()
-                                                    .addOnSuccessListener { snap ->
-                                                        snap.documents.forEach { it.reference.delete() }
-                                                    }
-                                                reportedPosts.remove(post)
-                                                logAudit("Approved reported post", "post", post.userName, post.description.take(80))
-                                            },
-                                            onReject  = {
-                                                db.collection("posts").document(post.id).delete()
-                                                db.collection("reportedPosts")
-                                                    .whereEqualTo("postId", post.id)
-                                                    .get()
-                                                    .addOnSuccessListener { snap ->
-                                                        snap.documents.forEach { it.reference.delete() }
-                                                    }
-                                                db.collection("users")
-                                                    .whereEqualTo("username", post.userName)
-                                                    .limit(1).get()
-                                                    .addOnSuccessListener { snap ->
-                                                        val displayName = snap.documents.firstOrNull()
-                                                            ?.getString("displayName")
-                                                            ?.takeIf { it.isNotBlank() } ?: post.userName
-                                                        db.collection("notifications").add(hashMapOf(
-                                                            "userName"  to post.userName,
-                                                            "message"   to "❌ Sorry $displayName, your post was removed after being reported for violating community guidelines.",
-                                                            "type"      to "rejected",
-                                                            "timestamp" to System.currentTimeMillis(),
-                                                            "read"      to false
-                                                        ))
+                                                    .update("status", "trashed")
+                                                    .addOnSuccessListener {
+                                                        db.collection("reportedPosts")
+                                                            .whereEqualTo("postId", post.id)
+                                                            .get()
+                                                            .addOnSuccessListener { snap ->
+                                                                snap.documents.forEach { it.reference.delete() }
+                                                            }
+                                                        db.collection("users")
+                                                            .whereEqualTo("username", post.userName)
+                                                            .limit(1).get()
+                                                            .addOnSuccessListener { snap ->
+                                                                val displayName = snap.documents.firstOrNull()
+                                                                    ?.getString("displayName")
+                                                                    ?.takeIf { it.isNotBlank() } ?: post.userName
+                                                                db.collection("notifications").add(hashMapOf(
+                                                                    "userName"  to post.userName,
+                                                                    "message"   to "❌ Your post was removed by an admin. Reason: $reasonSummary",
+                                                                    "type"      to "moderation",
+                                                                    "timestamp" to System.currentTimeMillis(),
+                                                                    "read"      to false
+                                                                ))
+                                                            }
+                                                            .addOnFailureListener {
+                                                                db.collection("notifications").add(hashMapOf(
+                                                                    "userName"  to post.userName,
+                                                                    "message"   to "❌ Your post was removed by an admin for violating community guidelines.",
+                                                                    "type"      to "moderation",
+                                                                    "timestamp" to System.currentTimeMillis(),
+                                                                    "read"      to false
+                                                                ))
+                                                            }
+                                                        toast("Post moved to trash.")
+                                                        logAudit("Trashed reported post", "post", post.userName, post.description.take(80))
                                                     }
                                                     .addOnFailureListener {
-                                                        db.collection("notifications").add(hashMapOf(
-                                                            "userName"  to post.userName,
-                                                            "message"   to "❌ Your post was removed after being reported for violating community guidelines.",
-                                                            "type"      to "rejected",
-                                                            "timestamp" to System.currentTimeMillis(),
-                                                            "read"      to false
-                                                        ))
+                                                        reportedPosts.add(post)
+                                                        toast("Failed to remove post.", false)
                                                     }
+                                            },
+                                            onDismiss = {
                                                 reportedPosts.remove(post)
-                                                logAudit("Rejected reported post", "post", post.userName, post.description.take(80))
+                                                db.collection("reportedPosts")
+                                                    .whereEqualTo("postId", post.id)
+                                                    .get()
+                                                    .addOnSuccessListener { snap ->
+                                                        snap.documents.forEach { it.reference.delete() }
+                                                        db.collection("users")
+                                                            .whereEqualTo("username", post.userName)
+                                                            .limit(1).get()
+                                                            .addOnSuccessListener { userSnap ->
+                                                                val displayName = userSnap.documents.firstOrNull()
+                                                                    ?.getString("displayName")
+                                                                    ?.takeIf { it.isNotBlank() } ?: post.userName
+                                                                db.collection("notifications").add(hashMapOf(
+                                                                    "userName"  to post.userName,
+                                                                    "message"   to "✅ Hey $displayName, a report on your post was reviewed and dismissed. Your post remains visible.",
+                                                                    "type"      to "moderation_dismissed",
+                                                                    "timestamp" to System.currentTimeMillis(),
+                                                                    "read"      to false
+                                                                ))
+                                                            }
+                                                        toast("Report dismissed.")
+                                                        logAudit("Dismissed post report", "post", post.userName, post.description.take(80))
+                                                    }
+                                                    .addOnFailureListener {
+                                                        reportedPosts.add(post)
+                                                        toast("Failed to dismiss.", false)
+                                                    }
                                             }
                                         )
                                     }
@@ -1764,7 +1830,79 @@ fun AdminScreen(paddingValues: PaddingValues, adminUserName: String = "") {
                                         )
                                     }
                                     items(reportedComments, key = { it.commentId }) { reported ->
-                                        AdminCommentReportCard(
+                                        if (reported.source == "admin") {
+                                            AdminHiddenCommentCard(
+                                                reported  = reported,
+                                                onRestore = {
+                                                    reportedComments.remove(reported)
+                                                    db.collection("posts").document(reported.postId)
+                                                        .collection("comments").document(reported.commentId)
+                                                        .update("status", "visible")
+                                                        .addOnSuccessListener {
+                                                            db.collection("posts").document(reported.postId)
+                                                                .update("comments", com.google.firebase.firestore.FieldValue.increment(1))
+                                                            db.collection("reportedComments")
+                                                                .whereEqualTo("commentId", reported.commentId)
+                                                                .get()
+                                                                .addOnSuccessListener { snap ->
+                                                                    snap.documents.forEach { it.reference.delete() }
+                                                                }
+                                                            db.collection("notifications").add(hashMapOf(
+                                                                "userName"  to reported.userName,
+                                                                "message"   to "✅ Your comment has been restored by an admin.",
+                                                                "type"      to "moderation_restored",
+                                                                "timestamp" to System.currentTimeMillis(),
+                                                                "read"      to false
+                                                            ))
+                                                            toast("Comment restored.")
+                                                            logAudit("Restored admin-hidden comment", "comment", reported.userName, reported.text.take(80))
+                                                        }
+                                                        .addOnFailureListener {
+                                                            reportedComments.add(reported)
+                                                            toast("Failed to restore.", false)
+                                                        }
+                                                },
+                                                onDelete  = {
+                                                    reportedComments.remove(reported)
+                                                    val reasonSummary = reported.reasons.joinToString(", ")
+                                                        .ifBlank { "violating community guidelines" }
+                                                    moveToTrash(
+                                                        type       = "comment",
+                                                        originalId = reported.commentId,
+                                                        postId     = reported.postId,
+                                                        userName   = reported.userName,
+                                                        content    = reported.text,
+                                                        imageUrl   = "",
+                                                        reason     = reasonSummary
+                                                    )
+                                                    db.collection("posts").document(reported.postId)
+                                                        .collection("comments").document(reported.commentId)
+                                                        .update("status", "trashed")
+                                                        .addOnSuccessListener {
+                                                            db.collection("reportedComments")
+                                                                .whereEqualTo("commentId", reported.commentId)
+                                                                .get()
+                                                                .addOnSuccessListener { snap ->
+                                                                    snap.documents.forEach { it.reference.delete() }
+                                                                }
+                                                            db.collection("notifications").add(hashMapOf(
+                                                                "userName"  to reported.userName,
+                                                                "message"   to "❌ Your comment was removed by an admin. Reason: $reasonSummary",
+                                                                "type"      to "rejected",
+                                                                "timestamp" to System.currentTimeMillis(),
+                                                                "read"      to false
+                                                            ))
+                                                            toast("Comment moved to trash.")
+                                                            logAudit("Trashed admin-hidden comment", "comment", reported.userName, reported.text.take(80))
+                                                        }
+                                                        .addOnFailureListener {
+                                                            reportedComments.add(reported)
+                                                            toast("Failed to delete.", false)
+                                                        }
+                                                }
+                                            )
+                                        } else {
+                                            AdminCommentReportCard(
                                             reported  = reported,
                                             onRestore = {
                                                 reportedComments.remove(reported)
@@ -1795,49 +1933,61 @@ fun AdminScreen(paddingValues: PaddingValues, adminUserName: String = "") {
                                                         toast("Failed to restore.", false)
                                                     }
                                             },
-                                            onDelete  = {
-                                                reportedComments.remove(reported)
-                                                db.collection("posts").document(reported.postId)
-                                                    .collection("comments").document(reported.commentId)
-                                                    .delete()
-                                                    .addOnSuccessListener {
-                                                        db.collection("reportedComments")
-                                                            .whereEqualTo("commentId", reported.commentId)
-                                                            .get()
-                                                            .addOnSuccessListener { snap ->
-                                                                snap.documents.forEach { it.reference.delete() }
-                                                            }
-                                                        db.collection("notifications").add(hashMapOf(
-                                                            "userName"  to reported.userName,
-                                                            "message"   to "❌ Your comment was removed by an admin for violating community guidelines.",
-                                                            "type"      to "rejected",
-                                                            "timestamp" to System.currentTimeMillis(),
-                                                            "read"      to false
-                                                        ))
-                                                        toast("Comment deleted.")
-                                                        logAudit("Deleted comment", "comment", reported.userName, reported.text.take(80))
-                                                    }
-                                                    .addOnFailureListener {
-                                                        reportedComments.add(reported)
-                                                        toast("Failed to delete.", false)
-                                                    }
-                                            },
-                                            onDismiss = {
-                                                reportedComments.remove(reported)
-                                                db.collection("reportedComments")
-                                                    .whereEqualTo("commentId", reported.commentId)
-                                                    .get()
-                                                    .addOnSuccessListener { snap ->
-                                                        snap.documents.forEach { it.reference.delete() }
-                                                        toast("Reports dismissed.")
-                                                        logAudit("Dismissed comment reports", "comment", reported.userName, reported.text.take(80))
-                                                    }
-                                                    .addOnFailureListener {
-                                                        reportedComments.add(reported)
-                                                        toast("Failed to dismiss.", false)
-                                                    }
-                                            }
-                                        )
+                                                onDelete  = {
+                                                    reportedComments.remove(reported)
+                                                    val reasonSummary = reported.reasons.joinToString(", ")
+                                                        .ifBlank { "violating community guidelines" }
+                                                    moveToTrash(
+                                                        type       = "comment",
+                                                        originalId = reported.commentId,
+                                                        postId     = reported.postId,
+                                                        userName   = reported.userName,
+                                                        content    = reported.text,
+                                                        imageUrl   = "",
+                                                        reason     = reasonSummary
+                                                    )
+                                                    db.collection("posts").document(reported.postId)
+                                                        .collection("comments").document(reported.commentId)
+                                                        .update("status", "trashed")
+                                                        .addOnSuccessListener {
+                                                            db.collection("reportedComments")
+                                                                .whereEqualTo("commentId", reported.commentId)
+                                                                .get()
+                                                                .addOnSuccessListener { snap ->
+                                                                    snap.documents.forEach { it.reference.delete() }
+                                                                }
+                                                            db.collection("notifications").add(hashMapOf(
+                                                                "userName"  to reported.userName,
+                                                                "message"   to "❌ Your comment was removed by an admin. Reason: $reasonSummary",
+                                                                "type"      to "rejected",
+                                                                "timestamp" to System.currentTimeMillis(),
+                                                                "read"      to false
+                                                            ))
+                                                            toast("Comment moved to trash.")
+                                                            logAudit("Trashed comment", "comment", reported.userName, reported.text.take(80))
+                                                        }
+                                                        .addOnFailureListener {
+                                                            reportedComments.add(reported)
+                                                            toast("Failed to delete.", false)
+                                                        }
+                                                },
+                                                onDismiss = {
+                                                    reportedComments.remove(reported)
+                                                    db.collection("reportedComments")
+                                                        .whereEqualTo("commentId", reported.commentId)
+                                                        .get()
+                                                        .addOnSuccessListener { snap ->
+                                                            snap.documents.forEach { it.reference.delete() }
+                                                            toast("Reports dismissed.")
+                                                            logAudit("Dismissed comment reports", "comment", reported.userName, reported.text.take(80))
+                                                        }
+                                                        .addOnFailureListener {
+                                                            reportedComments.add(reported)
+                                                            toast("Failed to dismiss.", false)
+                                                        }
+                                                }
+                                            )
+                                        } // end else user-reported
                                     }
                                 }
                             }
@@ -1991,30 +2141,10 @@ fun AdminScreen(paddingValues: PaddingValues, adminUserName: String = "") {
                         }
 
                         5 -> {
-                            if (isLoadingAlerts) {
-                                item { AdminLoadingState() }
-                            } else if (activeAlerts.isEmpty()) {
-                                item { AdminEmptyState(Icons.Default.CheckCircle, "No active alerts", "All emergencies resolved.") }
-                            } else {
-                                item {
-                                    Text("${activeAlerts.size} active alert${if (activeAlerts.size != 1) "s" else ""}",
-                                        fontSize = 12.sp, color = AMuted,
-                                        modifier = Modifier.padding(start = 4.dp, bottom = 2.dp))
-                                }
-                                items(activeAlerts, key = { it.id }) { alert ->
-                                    AdminAlertCard(
-                                        alert          = alert,
-                                        onForceResolve = { forceResolveAlert(alert) }
-                                    )
-                                }
-                            }
-                        }
-
-                        8 -> {
                             if (isLoadingUserReports) {
                                 item { AdminLoadingState() }
                             } else if (userReports.isEmpty()) {
-                                item { AdminEmptyState(Icons.Default.PersonOff, "No user reports", "No riders or helpers have been reported.") }
+                                item { AdminEmptyState(Icons.Default.PersonOff, "No user reports", "No users have been reported.") }
                             } else {
                                 item {
                                     Text(
@@ -2054,6 +2184,220 @@ fun AdminScreen(paddingValues: PaddingValues, adminUserName: String = "") {
                                                 .addOnFailureListener { toast("Failed to warn.", false) }
                                         }
                                     )
+                                }
+                            }
+                        }
+
+                        8 -> {
+                            // ── Trash ──────────────────────────────────────────
+                            item {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(bottom = 4.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    listOf(
+                                        "Posts"    to trashItems.count { it.type == "post" },
+                                        "Comments" to trashItems.count { it.type == "comment" }
+                                    ).forEach { (label, count) ->
+                                        val selected = selectedTrashChip == label
+                                        FilterChip(
+                                            selected = selected,
+                                            onClick  = { selectedTrashChip = label },
+                                            label = {
+                                                Text(
+                                                    "$label ($count)",
+                                                    fontWeight = if (selected) FontWeight.Bold else FontWeight.SemiBold,
+                                                    fontSize   = 13.sp
+                                                )
+                                            },
+                                            colors = FilterChipDefaults.filterChipColors(
+                                                selectedContainerColor = AMuted,
+                                                selectedLabelColor     = Color.White,
+                                                containerColor         = AMuted.copy(alpha = 0.08f),
+                                                labelColor             = AMuted
+                                            ),
+                                            border = FilterChipDefaults.filterChipBorder(
+                                                enabled             = true,
+                                                selected            = selected,
+                                                borderColor         = AMuted.copy(alpha = 0.4f),
+                                                selectedBorderColor = Color.Transparent,
+                                                borderWidth         = 1.dp,
+                                                selectedBorderWidth = 0.dp
+                                            ),
+                                            shape = RoundedCornerShape(10.dp)
+                                        )
+                                    }
+                                }
+                            }
+
+                            if (isLoadingTrash) {
+                                item { AdminLoadingState() }
+                            } else {
+                                val filteredTrash = trashItems.filter {
+                                    it.type == if (selectedTrashChip == "Posts") "post" else "comment"
+                                }
+                                if (filteredTrash.isEmpty()) {
+                                    item {
+                                        AdminEmptyState(
+                                            Icons.Default.DeleteSweep,
+                                            "Trash is empty",
+                                            "Deleted ${selectedTrashChip.lowercase()} will appear here for 30 days."
+                                        )
+                                    }
+                                } else {
+                                    item {
+                                        Row(
+                                            Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(
+                                                "${filteredTrash.size} item${if (filteredTrash.size != 1) "s" else ""} · auto-purge after 30 days",
+                                                fontSize = 12.sp, color = AMuted,
+                                                modifier = Modifier.padding(start = 4.dp)
+                                            )
+                                            if (filteredTrash.size >= 3) {
+                                                var showEmptyDialog by remember { mutableStateOf(false) }
+                                                if (showEmptyDialog) {
+                                                    AlertDialog(
+                                                        onDismissRequest = { showEmptyDialog = false },
+                                                        shape = RoundedCornerShape(20.dp),
+                                                        containerColor = AWhite,
+                                                        icon = {
+                                                            Box(Modifier.size(52.dp).clip(CircleShape)
+                                                                .background(ARedLight),
+                                                                contentAlignment = Alignment.Center) {
+                                                                Icon(Icons.Default.DeleteForever, null,
+                                                                    tint = ARedColor, modifier = Modifier.size(26.dp))
+                                                            }
+                                                        },
+                                                        title = {
+                                                            Text("Empty ${selectedTrashChip} Trash?",
+                                                                fontWeight = FontWeight.ExtraBold,
+                                                                fontSize = 17.sp, color = AOnSurface,
+                                                                textAlign = TextAlign.Center,
+                                                                modifier = Modifier.fillMaxWidth())
+                                                        },
+                                                        text = {
+                                                            Text("All ${filteredTrash.size} ${selectedTrashChip.lowercase()} in trash will be permanently deleted. This cannot be undone.",
+                                                                fontSize = 13.sp, color = AMuted,
+                                                                textAlign = TextAlign.Center)
+                                                        },
+                                                        confirmButton = {
+                                                            Column(Modifier.fillMaxWidth(),
+                                                                verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                                                Button(
+                                                                    onClick = {
+                                                                        showEmptyDialog = false
+                                                                        filteredTrash.toList().forEach { item ->
+                                                                            db.collection("adminTrash").document(item.id).delete()
+                                                                            if (item.type == "post") {
+                                                                                db.collection("posts").document(item.originalId).delete()
+                                                                            } else {
+                                                                                db.collection("posts").document(item.postId)
+                                                                                    .collection("comments").document(item.originalId).delete()
+                                                                            }
+                                                                        }
+                                                                        trashItems.removeAll { it.type == if (selectedTrashChip == "Posts") "post" else "comment" }
+                                                                        toast("Trash emptied.")
+                                                                        logAudit("Emptied ${selectedTrashChip.lowercase()} trash", "trash", adminUserName, "${filteredTrash.size} items")
+                                                                    },
+                                                                    modifier = Modifier.fillMaxWidth().height(46.dp),
+                                                                    shape = RoundedCornerShape(12.dp),
+                                                                    colors = ButtonDefaults.buttonColors(
+                                                                        containerColor = ARedColor,
+                                                                        contentColor = Color.White)
+                                                                ) { Text("Empty trash", fontWeight = FontWeight.Bold) }
+                                                                OutlinedButton(
+                                                                    onClick = { showEmptyDialog = false },
+                                                                    modifier = Modifier.fillMaxWidth().height(44.dp),
+                                                                    shape = RoundedCornerShape(12.dp)
+                                                                ) { Text("Cancel", color = AMuted) }
+                                                            }
+                                                        }
+                                                    )
+                                                }
+                                                TextButton(onClick = { showEmptyDialog = true }) {
+                                                    Icon(Icons.Default.DeleteForever, null,
+                                                        modifier = Modifier.size(14.dp),
+                                                        tint = ARedColor)
+                                                    Spacer(Modifier.width(4.dp))
+                                                    Text("Empty trash", fontSize = 12.sp,
+                                                        color = ARedColor, fontWeight = FontWeight.SemiBold)
+                                                }
+                                            }
+                                        }
+                                    }
+                                    items(filteredTrash, key = { it.id }) { item ->
+                                        AdminTrashCard(
+                                            item = item,
+                                            onRestore = {
+                                                trashItems.remove(item)
+                                                if (item.type == "post") {
+                                                    db.collection("posts").document(item.originalId)
+                                                        .update("status", "accepted")
+                                                        .addOnSuccessListener {
+                                                            db.collection("adminTrash").document(item.id).delete()
+                                                            db.collection("notifications").add(hashMapOf(
+                                                                "userName"  to item.userName,
+                                                                "message"   to "✅ Your post has been restored by an admin.",
+                                                                "type"      to "moderation_restored",
+                                                                "timestamp" to System.currentTimeMillis(),
+                                                                "read"      to false
+                                                            ))
+                                                            toast("Post restored.")
+                                                            logAudit("Restored post from trash", "post", item.userName, item.content.take(80))
+                                                        }
+                                                        .addOnFailureListener {
+                                                            trashItems.add(item)
+                                                            toast("Failed to restore.", false)
+                                                        }
+                                                } else {
+                                                    db.collection("posts").document(item.postId)
+                                                        .collection("comments").document(item.originalId)
+                                                        .update("status", "visible")
+                                                        .addOnSuccessListener {
+                                                            db.collection("posts").document(item.postId)
+                                                                .update("comments", com.google.firebase.firestore.FieldValue.increment(1))
+                                                            db.collection("adminTrash").document(item.id).delete()
+                                                            db.collection("notifications").add(hashMapOf(
+                                                                "userName"  to item.userName,
+                                                                "message"   to "✅ Your comment has been restored by an admin.",
+                                                                "type"      to "moderation_restored",
+                                                                "timestamp" to System.currentTimeMillis(),
+                                                                "read"      to false
+                                                            ))
+                                                            toast("Comment restored.")
+                                                            logAudit("Restored comment from trash", "comment", item.userName, item.content.take(80))
+                                                        }
+                                                        .addOnFailureListener {
+                                                            trashItems.add(item)
+                                                            toast("Failed to restore.", false)
+                                                        }
+                                                }
+                                            },
+                                            onDeletePermanently = {
+                                                trashItems.remove(item)
+                                                if (item.type == "post") {
+                                                    db.collection("posts").document(item.originalId).delete()
+                                                } else {
+                                                    db.collection("posts").document(item.postId)
+                                                        .collection("comments").document(item.originalId).delete()
+                                                }
+                                                db.collection("adminTrash").document(item.id).delete()
+                                                    .addOnSuccessListener {
+                                                        toast("Permanently deleted.")
+                                                        logAudit("Permanently deleted from trash", item.type, item.userName, item.content.take(80))
+                                                    }
+                                                    .addOnFailureListener {
+                                                        trashItems.add(item)
+                                                        toast("Failed to delete.", false)
+                                                    }
+                                            }
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -2262,6 +2606,283 @@ private fun AdminPostCard(
                         border = androidx.compose.foundation.BorderStroke(1.5.dp, ARedColor),
                         contentPadding = PaddingValues(0.dp)) {
                         Icon(Icons.Default.Delete, null, modifier = Modifier.size(16.dp)) }
+                }
+            }
+        }
+    }
+}
+
+// ── Admin Reported Post Card ──────────────────────────────────────────────────
+@Composable
+private fun AdminReportedPostCard(
+    post: AdminPost,
+    reportReasons: List<String>,
+    reportedBy: List<String>,
+    reportCount: Int,
+    onRemove: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    var showRemoveDialog  by remember { mutableStateOf(false) }
+    var showDismissDialog by remember { mutableStateOf(false) }
+    var postDisplayName   by remember(post.userName) { mutableStateOf(post.userName) }
+
+    LaunchedEffect(post.userName) {
+        FirebaseFirestore.getInstance().collection("users")
+            .whereEqualTo("username", post.userName).limit(1).get()
+            .addOnSuccessListener { snap ->
+                val d = snap.documents.firstOrNull()?.getString("displayName")
+                    ?.takeIf { it.isNotBlank() } ?: post.userName
+                postDisplayName = d
+            }
+    }
+
+    if (showRemoveDialog) {
+        AlertDialog(
+            onDismissRequest = { showRemoveDialog = false },
+            shape = RoundedCornerShape(20.dp), containerColor = AWhite,
+            icon = {
+                Box(Modifier.size(52.dp).clip(CircleShape).background(ARedLight),
+                    Alignment.Center) {
+                    Icon(Icons.Default.DeleteForever, null,
+                        tint = ARedColor, modifier = Modifier.size(26.dp))
+                }
+            },
+            title = {
+                Text("Remove Post?", fontWeight = FontWeight.ExtraBold,
+                    fontSize = 17.sp, color = AOnSurface,
+                    textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+            },
+            text = {
+                Text("This will permanently remove the post and notify $postDisplayName it violated community guidelines.",
+                    fontSize = 13.sp, color = AMuted, textAlign = TextAlign.Center)
+            },
+            confirmButton = {
+                Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        onClick = { showRemoveDialog = false; onRemove() },
+                        modifier = Modifier.fillMaxWidth().height(46.dp),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = ARedColor, contentColor = Color.White)
+                    ) { Text("Remove post", fontWeight = FontWeight.Bold) }
+                    OutlinedButton(
+                        onClick = { showRemoveDialog = false },
+                        modifier = Modifier.fillMaxWidth().height(44.dp),
+                        shape = RoundedCornerShape(12.dp)
+                    ) { Text("Cancel", color = AMuted) }
+                }
+            }
+        )
+    }
+
+    if (showDismissDialog) {
+        AlertDialog(
+            onDismissRequest = { showDismissDialog = false },
+            shape = RoundedCornerShape(20.dp), containerColor = AWhite,
+            icon = {
+                Box(Modifier.size(52.dp).clip(CircleShape).background(AGreen50),
+                    Alignment.Center) {
+                    Icon(Icons.Default.CheckCircle, null,
+                        tint = AGreen900, modifier = Modifier.size(26.dp))
+                }
+            },
+            title = {
+                Text("Dismiss Report?", fontWeight = FontWeight.ExtraBold,
+                    fontSize = 17.sp, color = AOnSurface,
+                    textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+            },
+            text = {
+                Text("The post will stay visible and all reports against it will be cleared.",
+                    fontSize = 13.sp, color = AMuted, textAlign = TextAlign.Center)
+            },
+            confirmButton = {
+                Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        onClick = { showDismissDialog = false; onDismiss() },
+                        modifier = Modifier.fillMaxWidth().height(46.dp),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = AGreen900, contentColor = Color.White)
+                    ) { Text("Dismiss report", fontWeight = FontWeight.Bold) }
+                    OutlinedButton(
+                        onClick = { showDismissDialog = false },
+                        modifier = Modifier.fillMaxWidth().height(44.dp),
+                        shape = RoundedCornerShape(12.dp)
+                    ) { Text("Cancel", color = AMuted) }
+                }
+            }
+        )
+    }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = AWhite),
+        elevation = CardDefaults.cardElevation(2.dp)
+    ) {
+        Column(Modifier.fillMaxWidth()) {
+            // Top bar — report context
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .background(ARedLight, RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp))
+                    .padding(horizontal = 14.dp, vertical = 8.dp)
+            ) {
+                Row(Modifier.fillMaxWidth(),
+                    Arrangement.SpaceBetween, Alignment.CenterVertically) {
+                    Row(verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Icon(Icons.Default.Flag, null,
+                            tint = ARedColor, modifier = Modifier.size(13.dp))
+                        Box(Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(ARedColor)
+                            .padding(horizontal = 7.dp, vertical = 2.dp)) {
+                            Text(
+                                "$reportCount report${if (reportCount != 1) "s" else ""}",
+                                fontSize = 10.sp, fontWeight = FontWeight.ExtraBold,
+                                color = Color.White
+                            )
+                        }
+                        Text("Reported post", fontSize = 11.sp,
+                            color = ARedColor, fontWeight = FontWeight.SemiBold)
+                    }
+                    Text(formatAdminTime(post.timestamp),
+                        fontSize = 11.sp, color = AMuted)
+                }
+            }
+
+            Column(
+                Modifier.fillMaxWidth().padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                // Author row
+                Row(verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Box(
+                        Modifier.size(36.dp).clip(CircleShape)
+                            .background(Brush.linearGradient(listOf(AGreen900, AGreen700))),
+                        Alignment.Center
+                    ) {
+                        Text(postDisplayName.take(1).uppercase(),
+                            fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                    }
+                    Column {
+                        Text(postDisplayName, fontWeight = FontWeight.SemiBold,
+                            fontSize = 13.sp, color = AOnSurface)
+                        Text(formatAdminTime(post.timestamp),
+                            fontSize = 11.sp, color = AMuted)
+                    }
+                    Spacer(Modifier.weight(1f))
+                    Box(Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(AGreen50)
+                        .padding(horizontal = 8.dp, vertical = 3.dp)) {
+                        Text(post.activity, fontSize = 10.sp,
+                            color = AGreen900, fontWeight = FontWeight.Medium)
+                    }
+                }
+
+                // Report reasons
+                if (reportReasons.isNotEmpty()) {
+                    androidx.compose.foundation.layout.FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        reportReasons.distinct().forEach { reason ->
+                            Box(
+                                Modifier
+                                    .clip(RoundedCornerShape(20.dp))
+                                    .background(ARedLight)
+                                    .padding(horizontal = 10.dp, vertical = 4.dp)
+                            ) {
+                                Text(reason, fontSize = 11.sp,
+                                    fontWeight = FontWeight.SemiBold, color = ARedColor)
+                            }
+                        }
+                    }
+                }
+
+                // Reported by
+                if (reportedBy.isNotEmpty()) {
+                    Row(verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Icon(Icons.Default.Person, null,
+                            tint = AMuted, modifier = Modifier.size(12.dp))
+                        Text(
+                            "Reported by: ${reportedBy.distinct().joinToString(", ")}",
+                            fontSize = 11.sp, color = AMuted
+                        )
+                    }
+                }
+
+                // Post image
+                if (post.imageUrl.isNotBlank()) {
+                    coil.compose.AsyncImage(
+                        model = post.imageUrl,
+                        contentDescription = "Post image",
+                        contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(140.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                    )
+                }
+
+                // Post description
+                if (post.description.isNotBlank()) {
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(Color(0xFFF3F4F6))
+                            .padding(horizontal = 12.dp, vertical = 10.dp)
+                    ) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Box(
+                                Modifier
+                                    .width(3.dp)
+                                    .fillMaxHeight()
+                                    .clip(RoundedCornerShape(2.dp))
+                                    .background(ARedColor.copy(alpha = 0.4f))
+                            )
+                            Text(post.description, fontSize = 13.sp,
+                                color = Color(0xFF374151), lineHeight = 19.sp,
+                                maxLines = 4, overflow = TextOverflow.Ellipsis)
+                        }
+                    }
+                }
+
+                HorizontalDivider(color = ADivider, thickness = 0.5.dp)
+
+                // Action buttons
+                Row(Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    // Dismiss — keep post, clear reports
+                    Button(
+                        onClick = { showDismissDialog = true },
+                        modifier = Modifier.weight(1f).height(40.dp),
+                        shape = RoundedCornerShape(10.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = AGreen900, contentColor = Color.White)
+                    ) {
+                        Icon(Icons.Default.Check, null, modifier = Modifier.size(14.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("Dismiss", fontSize = 12.sp, fontWeight = FontWeight.Bold,
+                            color = Color.White)
+                    }
+                    // Remove — delete post
+                    OutlinedButton(
+                        onClick = { showRemoveDialog = true },
+                        modifier = Modifier.weight(1f).height(40.dp),
+                        shape = RoundedCornerShape(10.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = ARedColor),
+                        border = androidx.compose.foundation.BorderStroke(1.5.dp, ARedColor)
+                    ) {
+                        Icon(Icons.Default.Delete, null, modifier = Modifier.size(14.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("Remove", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    }
                 }
             }
         }
@@ -2623,6 +3244,238 @@ private fun AdminCommentReportCard(
                         contentPadding = PaddingValues(0.dp)
                     ) {
                         Icon(Icons.Default.Close, null, modifier = Modifier.size(16.dp))
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ── Admin Hidden Comment Card ─────────────────────────────────────────────────
+@Composable
+private fun AdminHiddenCommentCard(
+    reported: ReportedComment,
+    onRestore: () -> Unit,
+    onDelete: () -> Unit
+) {
+    var showRestoreDialog by remember { mutableStateOf(false) }
+    var showDeleteDialog  by remember { mutableStateOf(false) }
+    var authorDisplayName by remember(reported.userName) { mutableStateOf(reported.userName) }
+
+    LaunchedEffect(reported.userName) {
+        FirebaseFirestore.getInstance().collection("users")
+            .whereEqualTo("username", reported.userName).limit(1).get()
+            .addOnSuccessListener { snap ->
+                val d = snap.documents.firstOrNull()?.getString("displayName")
+                    ?.takeIf { it.isNotBlank() } ?: reported.userName
+                authorDisplayName = d
+            }
+    }
+
+    if (showRestoreDialog) {
+        AlertDialog(
+            onDismissRequest = { showRestoreDialog = false },
+            shape = RoundedCornerShape(20.dp), containerColor = AWhite,
+            icon = {
+                Box(Modifier.size(52.dp).clip(CircleShape).background(AGreen50),
+                    Alignment.Center) {
+                    Icon(Icons.Default.Visibility, null,
+                        tint = AGreen900, modifier = Modifier.size(26.dp))
+                }
+            },
+            title = {
+                Text("Restore Comment?", fontWeight = FontWeight.ExtraBold,
+                    fontSize = 17.sp, color = AOnSurface,
+                    textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+            },
+            text = {
+                Text("The comment will be made visible again and $authorDisplayName will be notified.",
+                    fontSize = 13.sp, color = AMuted, textAlign = TextAlign.Center)
+            },
+            confirmButton = {
+                Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        onClick = { showRestoreDialog = false; onRestore() },
+                        modifier = Modifier.fillMaxWidth().height(46.dp),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = AGreen900, contentColor = Color.White)
+                    ) { Text("Restore comment", fontWeight = FontWeight.Bold) }
+                    OutlinedButton(
+                        onClick = { showRestoreDialog = false },
+                        modifier = Modifier.fillMaxWidth().height(44.dp),
+                        shape = RoundedCornerShape(12.dp)
+                    ) { Text("Cancel", color = AMuted) }
+                }
+            }
+        )
+    }
+
+    if (showDeleteDialog) {
+        AlertDialog(
+            onDismissRequest = { showDeleteDialog = false },
+            shape = RoundedCornerShape(20.dp), containerColor = AWhite,
+            icon = {
+                Box(Modifier.size(52.dp).clip(CircleShape).background(ARedLight),
+                    Alignment.Center) {
+                    Icon(Icons.Default.DeleteForever, null,
+                        tint = ARedColor, modifier = Modifier.size(26.dp))
+                }
+            },
+            title = {
+                Text("Delete Permanently?", fontWeight = FontWeight.ExtraBold,
+                    fontSize = 17.sp, color = AOnSurface,
+                    textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+            },
+            text = {
+                Text("This will permanently remove the comment and notify $authorDisplayName.",
+                    fontSize = 13.sp, color = AMuted, textAlign = TextAlign.Center)
+            },
+            confirmButton = {
+                Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        onClick = { showDeleteDialog = false; onDelete() },
+                        modifier = Modifier.fillMaxWidth().height(46.dp),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = ARedColor, contentColor = Color.White)
+                    ) { Text("Delete permanently", fontWeight = FontWeight.Bold) }
+                    OutlinedButton(
+                        onClick = { showDeleteDialog = false },
+                        modifier = Modifier.fillMaxWidth().height(44.dp),
+                        shape = RoundedCornerShape(12.dp)
+                    ) { Text("Cancel", color = AMuted) }
+                }
+            }
+        )
+    }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = AWhite),
+        elevation = CardDefaults.cardElevation(2.dp)
+    ) {
+        Column(Modifier.fillMaxWidth()) {
+            // Amber top bar — visually distinct from red user-reported cards
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .background(AAmber50, RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp))
+                    .padding(horizontal = 14.dp, vertical = 8.dp)
+            ) {
+                Row(Modifier.fillMaxWidth(),
+                    Arrangement.SpaceBetween, Alignment.CenterVertically) {
+                    Row(verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Icon(Icons.Default.VisibilityOff, null,
+                            tint = AAmber500, modifier = Modifier.size(13.dp))
+                        Box(Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(AAmber500)
+                            .padding(horizontal = 7.dp, vertical = 2.dp)) {
+                            Text("Admin Hidden", fontSize = 10.sp,
+                                fontWeight = FontWeight.ExtraBold, color = Color.White)
+                        }
+                        Text("Hidden by admin", fontSize = 11.sp,
+                            color = AAmber500, fontWeight = FontWeight.SemiBold)
+                    }
+                    Text(formatAdminTime(reported.timestamp),
+                        fontSize = 11.sp, color = AMuted)
+                }
+            }
+
+            Column(
+                Modifier.fillMaxWidth().padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                // Author row
+                Row(verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Box(
+                        Modifier.size(36.dp).clip(CircleShape)
+                            .background(Brush.linearGradient(listOf(AGreen900, AGreen700))),
+                        Alignment.Center
+                    ) {
+                        Text(authorDisplayName.take(1).uppercase(),
+                            fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                    }
+                    Column {
+                        Text(authorDisplayName, fontWeight = FontWeight.SemiBold,
+                            fontSize = 13.sp, color = AOnSurface)
+                        Text("Hidden comment", fontSize = 11.sp, color = AMuted)
+                    }
+                }
+
+                // Reason chips
+                if (reported.reasons.isNotEmpty()) {
+                    androidx.compose.foundation.layout.FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        reported.reasons.distinct().forEach { reason ->
+                            Box(
+                                Modifier
+                                    .clip(RoundedCornerShape(20.dp))
+                                    .background(AAmber50)
+                                    .padding(horizontal = 10.dp, vertical = 4.dp)
+                            ) {
+                                Text(reason, fontSize = 11.sp,
+                                    fontWeight = FontWeight.SemiBold, color = AAmber500)
+                            }
+                        }
+                    }
+                }
+
+                // Comment text preview
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(Color(0xFFF3F4F6))
+                        .padding(horizontal = 12.dp, vertical = 10.dp)
+                ) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Box(
+                            Modifier
+                                .width(3.dp)
+                                .fillMaxHeight()
+                                .clip(RoundedCornerShape(2.dp))
+                                .background(AAmber500.copy(alpha = 0.5f))
+                        )
+                        Text(reported.text, fontSize = 13.sp,
+                            color = Color(0xFF374151), lineHeight = 19.sp,
+                            maxLines = 4, overflow = TextOverflow.Ellipsis)
+                    }
+                }
+
+                HorizontalDivider(color = ADivider, thickness = 0.5.dp)
+
+                // Action buttons
+                Row(Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        onClick = { showRestoreDialog = true },
+                        modifier = Modifier.weight(1f).height(40.dp),
+                        shape = RoundedCornerShape(10.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = AGreen900, contentColor = Color.White)
+                    ) {
+                        Icon(Icons.Default.Visibility, null, modifier = Modifier.size(14.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("Restore", fontSize = 12.sp, fontWeight = FontWeight.Bold,
+                            color = Color.White)
+                    }
+                    OutlinedButton(
+                        onClick = { showDeleteDialog = true },
+                        modifier = Modifier.weight(1f).height(40.dp),
+                        shape = RoundedCornerShape(10.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = ARedColor),
+                        border = androidx.compose.foundation.BorderStroke(1.5.dp, ARedColor)
+                    ) {
+                        Icon(Icons.Default.Delete, null, modifier = Modifier.size(14.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("Delete", fontSize = 12.sp, fontWeight = FontWeight.Bold)
                     }
                 }
             }
@@ -3730,7 +4583,9 @@ private fun AdminAuditCard(entry: AuditLogEntry) {
                 ) {
                     Text(
                         entry.action, fontWeight = FontWeight.SemiBold,
-                        fontSize = 13.sp, color = actionColor
+                        fontSize = 13.sp, color = actionColor,
+                        modifier = Modifier.weight(1f, fill = false),
+                        maxLines = 2, overflow = TextOverflow.Ellipsis
                     )
                     Box(
                         Modifier
@@ -3780,6 +4635,257 @@ private fun AdminAuditCard(entry: AuditLogEntry) {
                 formatAdminTime(entry.timestamp),
                 fontSize = 10.sp, color = AMuted
             )
+        }
+    }
+}
+// ── Admin Trash Card ──────────────────────────────────────────────────────────
+@Composable
+private fun AdminTrashCard(
+    item: TrashItem,
+    onRestore: () -> Unit,
+    onDeletePermanently: () -> Unit
+) {
+    var showDeleteDialog  by remember { mutableStateOf(false) }
+    var showRestoreDialog by remember { mutableStateOf(false) }
+    var ownerDisplayName  by remember(item.userName) { mutableStateOf(item.userName) }
+    var deleterDisplayName by remember(item.deletedBy) { mutableStateOf(item.deletedBy) }
+
+    LaunchedEffect(item.userName) {
+        FirebaseFirestore.getInstance().collection("users")
+            .whereEqualTo("username", item.userName).limit(1).get()
+            .addOnSuccessListener { snap ->
+                val d = snap.documents.firstOrNull()?.getString("displayName")
+                    ?.takeIf { it.isNotBlank() } ?: item.userName
+                ownerDisplayName = d
+            }
+    }
+
+    LaunchedEffect(item.deletedBy) {
+        if (item.deletedBy.isBlank()) return@LaunchedEffect
+        FirebaseFirestore.getInstance().collection("users")
+            .whereEqualTo("username", item.deletedBy).limit(1).get()
+            .addOnSuccessListener { snap ->
+                val d = snap.documents.firstOrNull()?.getString("displayName")
+                    ?.takeIf { it.isNotBlank() } ?: item.deletedBy
+                deleterDisplayName = d
+            }
+    }
+
+    // Days remaining
+    val daysRemaining = ((item.expiresAt - System.currentTimeMillis()) / (1000 * 60 * 60 * 24)).toInt().coerceAtLeast(0)
+    val expiryColor = when {
+        daysRemaining <= 3  -> ARedColor
+        daysRemaining <= 7  -> AAmber500
+        else                -> AMuted
+    }
+
+    if (showRestoreDialog) {
+        AlertDialog(
+            onDismissRequest = { showRestoreDialog = false },
+            shape = RoundedCornerShape(20.dp), containerColor = AWhite,
+            icon = {
+                Box(Modifier.size(52.dp).clip(CircleShape).background(AGreen50),
+                    Alignment.Center) {
+                    Icon(Icons.Default.Restore, null,
+                        tint = AGreen900, modifier = Modifier.size(26.dp))
+                }
+            },
+            title = {
+                Text("Restore ${if (item.type == "post") "Post" else "Comment"}?",
+                    fontWeight = FontWeight.ExtraBold, fontSize = 17.sp, color = AOnSurface,
+                    textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+            },
+            text = {
+                Text("This will make the ${item.type} visible again and notify $ownerDisplayName.",
+                    fontSize = 13.sp, color = AMuted, textAlign = TextAlign.Center)
+            },
+            confirmButton = {
+                Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        onClick = { showRestoreDialog = false; onRestore() },
+                        modifier = Modifier.fillMaxWidth().height(46.dp),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = AGreen900, contentColor = Color.White)
+                    ) { Text("Restore", fontWeight = FontWeight.Bold) }
+                    OutlinedButton(
+                        onClick = { showRestoreDialog = false },
+                        modifier = Modifier.fillMaxWidth().height(44.dp),
+                        shape = RoundedCornerShape(12.dp)
+                    ) { Text("Cancel", color = AMuted) }
+                }
+            }
+        )
+    }
+
+    if (showDeleteDialog) {
+        AlertDialog(
+            onDismissRequest = { showDeleteDialog = false },
+            shape = RoundedCornerShape(20.dp), containerColor = AWhite,
+            icon = {
+                Box(Modifier.size(52.dp).clip(CircleShape).background(ARedLight),
+                    Alignment.Center) {
+                    Icon(Icons.Default.DeleteForever, null,
+                        tint = ARedColor, modifier = Modifier.size(26.dp))
+                }
+            },
+            title = {
+                Text("Delete Permanently?", fontWeight = FontWeight.ExtraBold,
+                    fontSize = 17.sp, color = AOnSurface,
+                    textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+            },
+            text = {
+                Text("This ${item.type} will be gone forever. This cannot be undone.",
+                    fontSize = 13.sp, color = AMuted, textAlign = TextAlign.Center)
+            },
+            confirmButton = {
+                Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        onClick = { showDeleteDialog = false; onDeletePermanently() },
+                        modifier = Modifier.fillMaxWidth().height(46.dp),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = ARedColor, contentColor = Color.White)
+                    ) { Text("Delete permanently", fontWeight = FontWeight.Bold) }
+                    OutlinedButton(
+                        onClick = { showDeleteDialog = false },
+                        modifier = Modifier.fillMaxWidth().height(44.dp),
+                        shape = RoundedCornerShape(12.dp)
+                    ) { Text("Cancel", color = AMuted) }
+                }
+            }
+        )
+    }
+
+    Card(
+        modifier  = Modifier.fillMaxWidth(),
+        shape     = RoundedCornerShape(16.dp),
+        colors    = CardDefaults.cardColors(containerColor = AWhite),
+        elevation = CardDefaults.cardElevation(2.dp)
+    ) {
+        Column(Modifier.fillMaxWidth()) {
+            // Grey top bar
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .background(Color(0xFFF3F4F6), RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp))
+                    .padding(horizontal = 14.dp, vertical = 8.dp)
+            ) {
+                Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
+                    Row(verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Icon(Icons.Default.Delete, null,
+                            tint = AMuted, modifier = Modifier.size(13.dp))
+                        Box(Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(AMuted.copy(alpha = 0.15f))
+                            .padding(horizontal = 7.dp, vertical = 2.dp)) {
+                            Text(
+                                if (item.type == "post") "Trashed Post" else "Trashed Comment",
+                                fontSize = 10.sp, fontWeight = FontWeight.ExtraBold, color = AMuted
+                            )
+                        }
+                    }
+                    // Expiry countdown
+                    Row(verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Icon(Icons.Default.Timer, null,
+                            tint = expiryColor, modifier = Modifier.size(11.dp))
+                        Text(
+                            if (daysRemaining == 0) "Expires today" else "$daysRemaining day${if (daysRemaining != 1) "s" else ""} left",
+                            fontSize = 11.sp, color = expiryColor,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                }
+            }
+
+            Column(
+                Modifier.fillMaxWidth().padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                // Owner row
+                Row(verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Box(
+                        Modifier.size(36.dp).clip(CircleShape)
+                            .background(Brush.linearGradient(listOf(AMuted, Color(0xFF9CA3AF)))),
+                        Alignment.Center
+                    ) {
+                        Text(ownerDisplayName.take(1).uppercase(),
+                            fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                    }
+                    Column {
+                        Text(ownerDisplayName, fontWeight = FontWeight.SemiBold,
+                            fontSize = 13.sp, color = AOnSurface)
+                        Text("Deleted ${formatAdminTime(item.deletedAt)} by $deleterDisplayName",
+                            fontSize = 11.sp, color = AMuted)
+                    }
+                }
+
+                // Reason chip
+                if (item.reason.isNotBlank()) {
+                    Box(Modifier
+                        .clip(RoundedCornerShape(20.dp))
+                        .background(Color(0xFFF3F4F6))
+                        .padding(horizontal = 10.dp, vertical = 4.dp)) {
+                        Text(item.reason, fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold, color = AMuted)
+                    }
+                }
+
+                // Content preview
+                if (item.content.isNotBlank()) {
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(Color(0xFFF9FAFB))
+                            .padding(horizontal = 12.dp, vertical = 10.dp)
+                    ) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Box(
+                                Modifier
+                                    .width(3.dp)
+                                    .fillMaxHeight()
+                                    .clip(RoundedCornerShape(2.dp))
+                                    .background(AMuted.copy(alpha = 0.4f))
+                            )
+                            Text(item.content, fontSize = 13.sp,
+                                color = Color(0xFF374151), lineHeight = 19.sp,
+                                maxLines = 3, overflow = TextOverflow.Ellipsis)
+                        }
+                    }
+                }
+
+                HorizontalDivider(color = ADivider, thickness = 0.5.dp)
+
+                // Action buttons
+                Row(Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        onClick = { showRestoreDialog = true },
+                        modifier = Modifier.weight(1f).height(40.dp),
+                        shape = RoundedCornerShape(10.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = AGreen900, contentColor = Color.White)
+                    ) {
+                        Icon(Icons.Default.Restore, null, modifier = Modifier.size(14.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("Restore", fontSize = 12.sp, fontWeight = FontWeight.Bold,
+                            color = Color.White)
+                    }
+                    OutlinedButton(
+                        onClick = { showDeleteDialog = true },
+                        modifier = Modifier.weight(1f).height(40.dp),
+                        shape = RoundedCornerShape(10.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = ARedColor),
+                        border = androidx.compose.foundation.BorderStroke(1.5.dp, ARedColor)
+                    ) {
+                        Icon(Icons.Default.DeleteForever, null, modifier = Modifier.size(14.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("Delete", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
         }
     }
 }
