@@ -2190,14 +2190,17 @@
                                                 else -> Orange600
                                             }
                                         )
-                                        Text(
-                                            when {
-                                                isReporting.value -> "Please wait…"
-                                                isAlreadyReported.value -> "You've already flagged this"
-                                                else -> "Flag as rude or inappropriate"
-                                            },
-                                            fontSize = 12.sp, color = TextMuted
-                                        )
+                                        val subtitleText = when {
+                                            isReporting.value -> "Please wait…"
+                                            isAlreadyReported.value -> "You've already flagged this"
+                                            else -> null
+                                        }
+                                        if (subtitleText != null) {
+                                            Text(
+                                                subtitleText,
+                                                fontSize = 12.sp, color = TextMuted
+                                            )
+                                        }
                                     }
                                 }
                             }

@@ -1699,6 +1699,7 @@ fun AdminScreen(paddingValues: PaddingValues, adminUserName: String = "") {
                                                     "read"      to false
                                                 ))
                                                 reportedPosts.remove(post)
+                                                logAudit("Deleted reported post", "post", post.userName, post.description.take(80))
                                             },
                                             onApprove = {
                                                 db.collection("posts").document(post.id)
@@ -1710,6 +1711,7 @@ fun AdminScreen(paddingValues: PaddingValues, adminUserName: String = "") {
                                                         snap.documents.forEach { it.reference.delete() }
                                                     }
                                                 reportedPosts.remove(post)
+                                                logAudit("Approved reported post", "post", post.userName, post.description.take(80))
                                             },
                                             onReject  = {
                                                 db.collection("posts").document(post.id).delete()
@@ -1744,6 +1746,7 @@ fun AdminScreen(paddingValues: PaddingValues, adminUserName: String = "") {
                                                         ))
                                                     }
                                                 reportedPosts.remove(post)
+                                                logAudit("Rejected reported post", "post", post.userName, post.description.take(80))
                                             }
                                         )
                                     }
@@ -1935,14 +1938,16 @@ fun AdminScreen(paddingValues: PaddingValues, adminUserName: String = "") {
                                             "${moderationLogs.size} unreviewed entr${if (moderationLogs.size != 1) "ies" else "y"}",
                                             fontSize = 12.sp, color = AMuted,
                                             modifier = Modifier.padding(start = 4.dp))
-                                        TextButton(onClick = { showMarkAllDialog = true }) {
-                                            Icon(Icons.Default.DoneAll, null,
-                                                modifier = Modifier.size(14.dp),
-                                                tint = AGreen900)
-                                            Spacer(Modifier.width(4.dp))
-                                            Text("Mark all reviewed", fontSize = 12.sp,
-                                                color = AGreen900, fontWeight = FontWeight.SemiBold)
-                                        }
+                                        if (moderationLogs.size >= 3) {
+                                            TextButton(onClick = { showMarkAllDialog = true }) {
+                                                Icon(Icons.Default.DoneAll, null,
+                                                    modifier = Modifier.size(14.dp),
+                                                    tint = AGreen900)
+                                                Spacer(Modifier.width(4.dp))
+                                                Text("Mark all reviewed", fontSize = 12.sp,
+                                                    color = AGreen900, fontWeight = FontWeight.SemiBold)
+                                            }
+                                        } // end if >= 3
                                     }
                                 }
                                 items(moderationLogs, key = { it.id }) { log ->
