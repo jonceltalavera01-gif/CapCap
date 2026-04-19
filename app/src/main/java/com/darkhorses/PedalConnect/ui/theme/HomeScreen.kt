@@ -490,6 +490,9 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
     val resetScrollFlag          = remember { Runnable { isProgrammaticScrollRef.set(false) } }
     var mapInitialized      by remember { mutableStateOf(false) }
     var isFollowingLocation by remember { mutableStateOf(true) }
+    var isHeadingMode       by remember { mutableStateOf(false) }
+    var gpsBearing          by remember { mutableFloatStateOf(0f) }
+    var gpsSpeed            by remember { mutableFloatStateOf(0f) }
     var alertsFirstLoad     by remember { mutableStateOf(true) }
     var gpsFirstFix         by remember { mutableStateOf(false) }
     val isLocationReady     by remember { derivedStateOf { !alertsFirstLoad && gpsFirstFix } }
@@ -1301,11 +1304,16 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
                     mapViewRef?.removeCallbacks(resetScrollFlag)
                     mapViewRef?.controller?.animateTo(gp, targetZoom, 800L)
                     mapViewRef?.postDelayed(resetScrollFlag, 900L)
+                    val heading = if (rawSpeedKmh >= 5f && location.hasBearing())
+                        location.bearing else gpsBearing
+                    applyHeadingToMap(mapViewRef, heading, rawSpeedKmh >= 5f)
                 }
 
                 // ── State updates — always run ────────────────────────────────
                 lastTrackedLocation = location
                 currentSpeedKmh     = if (isTracking) rawSpeedKmh else 0f
+                gpsSpeed            = rawSpeedKmh
+                if (location.hasBearing() && rawSpeedKmh >= 5f) gpsBearing = location.bearing
                 if (isTracking && rawSpeedKmh > maxSpeedKmh) maxSpeedKmh = rawSpeedKmh
                 if (isTracking && location.hasAltitude()) {
                     val alt = location.altitude
@@ -1486,6 +1494,7 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
                                             // No disableFollowLocation() needed —
                                             // OSMdroid follow was never enabled
                                         }
+                                        applyHeadingToMap(mapViewRef, 0f, false)
                                         return false
                                     }
                                     override fun onZoom(event: org.osmdroid.events.ZoomEvent?): Boolean = false
@@ -1782,23 +1791,23 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
                                     modifier = Modifier.size(20.dp))
                             }
                         }
-                        androidx.compose.animation.AnimatedVisibility(visible = !isFollowingLocation, enter = fadeIn() + scaleIn(), exit = fadeOut() + scaleOut()) {
-                            FloatingActionButton(
-                                onClick = {
-                                    val loc = userGeoPoint ?: myLocationOverlay?.myLocation
-                                    if (loc != null) {
-                                        isProgrammaticScrollRef.set(true)
-                                        mapViewRef?.removeCallbacks(resetScrollFlag)
-                                        mapViewRef?.controller?.animateTo(loc, 17.0, 800L)
-                                        mapViewRef?.postDelayed(resetScrollFlag, 900L)
-                                        isFollowingLocation = true
-                                    }
-                                },
-                                modifier = Modifier.size(44.dp), shape = CircleShape,
-                                containerColor = Color.White, contentColor = Green900,
-                                elevation = FloatingActionButtonDefaults.elevation(6.dp)
-                            ) { Icon(Icons.Default.MyLocation, "Re-center", modifier = Modifier.size(20.dp)) }
-                        }
+                        RecenterHeadingButton(
+                            isFollowingLocation = isFollowingLocation,
+                            isHeadingMode       = isHeadingMode,
+                            currentHeading      = gpsBearing,
+                            onClick = {
+                                val loc = userGeoPoint ?: myLocationOverlay?.myLocation
+                                if (loc != null) {
+                                    isProgrammaticScrollRef.set(true)
+                                    mapViewRef?.removeCallbacks(resetScrollFlag)
+                                    mapViewRef?.controller?.animateTo(loc, 17.0, 800L)
+                                    mapViewRef?.postDelayed(resetScrollFlag, 900L)
+                                    isFollowingLocation = true
+                                    val heading = if (gpsSpeed >= 5f) gpsBearing else 0f
+                                    applyHeadingToMap(mapViewRef, heading, gpsSpeed >= 5f)
+                                }
+                            }
+                        )
                         FloatingActionButton(
                             onClick = { navController.navigate("directions/$userName") },
                             modifier = Modifier.size(44.dp), shape = CircleShape,
