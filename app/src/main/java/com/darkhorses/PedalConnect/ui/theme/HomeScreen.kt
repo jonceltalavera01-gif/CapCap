@@ -1186,7 +1186,6 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
             } catch (e: Exception) { /* silent */ }
         }
     }
-
     // Pick up any pending destination from ride events navigation
     LaunchedEffect(Unit) {
         val pendingDest = prefs.getString("pending_destination", null)
@@ -1199,6 +1198,7 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
             if (map != null) searchAndRoute(pendingDest)
         }
     }
+
 
     fun selectRoute(idx: Int, map: MapView) {
         selectedRouteIdx = idx
@@ -1459,7 +1459,8 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
                             if (eventId != null) "events/$userName?openEventId=$eventId"
                             else "events/$userName"
                         )
-                    }
+                    },
+                    onProfileTap         = { selectedItem = 4 }
                 )
 
                 1 -> if (isAdmin) {

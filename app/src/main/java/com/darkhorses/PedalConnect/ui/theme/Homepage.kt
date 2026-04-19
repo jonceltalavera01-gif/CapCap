@@ -184,7 +184,8 @@
             userLon: Double = 120.9842,
             onExploreRides: (eventId: String?) -> Unit = {},
             isAdmin: Boolean = false,
-            notificationsEnabled: Boolean = true
+            notificationsEnabled: Boolean = true,
+            onProfileTap: () -> Unit = {}
         ) {
             val db = FirebaseFirestore.getInstance()
             val context = LocalContext.current
@@ -2628,7 +2629,15 @@
                                                             ?: comment.userName,
                                                         fontWeight = FontWeight.SemiBold,
                                                         fontSize = 13.sp,
-                                                        color = if (comment.isHidden) TextMuted else TextPrimary
+                                                        color = if (comment.isHidden) TextMuted else TextPrimary,
+                                                        modifier = Modifier.clickable(
+                                                            interactionSource = remember { MutableInteractionSource() },
+                                                            indication = null
+                                                        ) {
+                                                            if (comment.userName != userName) {
+                                                                navController.navigate("public_profile/${comment.userName}")
+                                                            }
+                                                        }
                                                     )
                                                     if (comment.isHidden) {
                                                         Box(
@@ -3479,11 +3488,12 @@
                             // Hero
                             item {
                                 HeroHeader(
-                                    userName = userName,
+                                    userName        = userName,
                                     userDisplayName = userDisplayName,
-                                    weather = weather,
-                                    isAdmin = isAdmin,
-                                    photoUrl = userPhotoUrl
+                                    weather         = weather,
+                                    isAdmin         = isAdmin,
+                                    photoUrl        = userPhotoUrl,
+                                    onAvatarTap     = { onProfileTap() }
                                 )
                             }
 
@@ -3654,7 +3664,13 @@
                                                 showReasonDialog = true
                                             },
                                             photoUrl = userPhotoCache[post.userName],
-                                            isAdmin = isAdmin
+                                            isAdmin = isAdmin,
+                                            onAuthorTap = {
+                                                if (post.userName == userName)
+                                                    onProfileTap()
+                                                else
+                                                    navController.navigate("public_profile/${post.userName}")
+                                            }
                                         )
                                         Spacer(Modifier.height(8.dp))
                                     }
@@ -3709,7 +3725,13 @@
                                                 showReasonDialog = true
                                             },
                                             photoUrl = userPhotoCache[post.userName],
-                                            isAdmin = isAdmin
+                                            isAdmin = isAdmin,
+                                            onAuthorTap = {
+                                                if (post.userName == userName)
+                                                    onProfileTap()
+                                                else
+                                                    navController.navigate("public_profile/${post.userName}")
+                                            }
                                         )
                                         Spacer(Modifier.height(8.dp))
                                     }
@@ -3723,14 +3745,15 @@
         // ─────────────────────────────────────────────────────────────────────────────
             // Hero Header
             // ─────────────────────────────────────────────────────────────────────────────
-            @Composable
-            fun HeroHeader(
-                userName: String,
-                userDisplayName: String = "",
-                weather: WeatherState,
-                isAdmin: Boolean = false,
-                photoUrl: String? = null
-            ) {
+        @Composable
+        fun HeroHeader(
+            userName: String,
+            userDisplayName: String = "",
+            weather: WeatherState,
+            isAdmin: Boolean = false,
+            photoUrl: String? = null,
+            onAvatarTap: () -> Unit = {}
+        ) {
                 val hour = Calendar.getInstance(TimeZone.getDefault()).get(Calendar.HOUR_OF_DAY)
                 val greeting = when {
                     hour < 12 -> "Good morning"; hour < 17 -> "Good afternoon"; else -> "Good evening"
@@ -3774,7 +3797,11 @@
                             // Avatar
                             Box(
                                 Modifier.size(48.dp).clip(CircleShape)
-                                    .background(Color.White.copy(alpha = 0.15f)),
+                                    .background(Color.White.copy(alpha = 0.15f))
+                                    .clickable(
+                                        interactionSource = remember { MutableInteractionSource() },
+                                        indication = null
+                                    ) { onAvatarTap() },
                                 Alignment.Center
                             ) {
                                 if (photoUrl != null) {
@@ -4253,7 +4280,8 @@
                 onReport: () -> Unit = {},
                 photoUrl: String? = null,
                 isAdmin: Boolean = false,
-                viewerIsAuthor: Boolean = post.userName == currentUser
+                viewerIsAuthor: Boolean = post.userName == currentUser,
+                onAuthorTap: () -> Unit = {}
             )   {
                 val isOwner = viewerIsAuthor
                 val context = LocalContext.current
@@ -4297,7 +4325,11 @@
                             // Avatar
                             Box(
                                 Modifier.size(42.dp).clip(CircleShape)
-                                    .background(Brush.linearGradient(listOf(Green900, Green700))),
+                                    .background(Brush.linearGradient(listOf(Green900, Green700)))
+                                    .clickable(
+                                        interactionSource = remember { MutableInteractionSource() },
+                                        indication = null
+                                    ) { onAuthorTap() },
                                 Alignment.Center
                             ) {
                                 if (photoUrl != null) {
@@ -4328,7 +4360,11 @@
                                         post.displayName.ifBlank { post.userName },
                                         fontWeight = FontWeight.SemiBold,
                                         fontSize = 14.sp,
-                                        color = TextPrimary
+                                        color = TextPrimary,
+                                        modifier = Modifier.clickable(
+                                            interactionSource = remember { MutableInteractionSource() },
+                                            indication = null
+                                        ) { onAuthorTap() }
                                     )
                                 }
                                 Row(

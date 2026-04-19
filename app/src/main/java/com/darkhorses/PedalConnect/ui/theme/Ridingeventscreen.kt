@@ -747,13 +747,15 @@ fun RidingEventsScreen(
             onToggleCheckInOpen = { toggleCheckInOpen(event) },
             onDismiss           = { selectedEvent = null },
             onNavigate          = { destination ->
-                // Navigate to home map tab with destination pre-filled
                 navController.navigate("home/$userName") {
                     popUpTo("home/$userName") { inclusive = false }
                 }
-                // Pass destination via shared prefs so HomeScreen can pick it up
                 val prefs = context.getSharedPreferences("PedalConnectPrefs", android.content.Context.MODE_PRIVATE)
                 prefs.edit().putString("pending_destination", destination).apply()
+            },
+            onViewProfile       = { targetUser ->
+                if (targetUser != userName)
+                    navController.navigate("public_profile/$targetUser")
             }
         )
     }
@@ -1243,8 +1245,9 @@ internal fun EventDetailSheet(
     onJoin: () -> Unit, onDelete: () -> Unit = {}, onEdit: () -> Unit = {},
     onCheckIn: () -> Unit = {}, onToggleAttendance: (String) -> Unit = {},
     onToggleCheckInOpen: () -> Unit = {}, onDismiss: () -> Unit,
-    onNavigate: (String) -> Unit = {}
-) {
+    onNavigate: (String) -> Unit = {},
+    onViewProfile: (String) -> Unit = {}
+){
     val sheetState  = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val isJoined    = event.participants.contains(userName)
     val isOrganizer = event.organizer == userName
@@ -1497,7 +1500,7 @@ internal fun EventDetailSheet(
                 Spacer(Modifier.height(20.dp))
                 HorizontalDivider(color = DividerColor)
                 Spacer(Modifier.height(16.dp))
-                Text("Riders (${event.participants.size})", fontSize = 11.sp,
+                Text("Participants (${event.participants.size})", fontSize = 11.sp,
                     fontWeight = FontWeight.SemiBold, color = TextMuted, letterSpacing = 0.8.sp)
                 Spacer(Modifier.height(12.dp))
 
@@ -1524,7 +1527,7 @@ internal fun EventDetailSheet(
                         Row(verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                             Box(
-                                Modifier.size(38.dp).clip(CircleShape).background(
+                                Modifier.size(40.dp).clip(CircleShape).background(
                                     if (attended) Brush.linearGradient(listOf(Color(0xFF166534), Color(0xFF15803D)))
                                     else Brush.linearGradient(listOf(Green900, Green700))
                                 ),
@@ -1544,13 +1547,34 @@ internal fun EventDetailSheet(
                                     )
                                 }
                             }
-                            Column(Modifier.weight(1f)) {
+                            Column(
+                                Modifier.weight(1f).clickable(
+                                    interactionSource = remember { MutableInteractionSource() },
+                                    indication = null
+                                ) {
+                                    if (p != userName) onViewProfile(p)
+                                },
+                                verticalArrangement = Arrangement.spacedBy(2.dp)
+                            ) {
                                 Text(
                                     profile?.displayName ?: p,
-                                    fontSize = 14.sp, color = TextPrimary, fontWeight = FontWeight.Medium
+                                    fontSize = 14.sp, color = TextPrimary,
+                                    fontWeight = FontWeight.Medium
                                 )
-                                if (attended) Text("Checked in ✓", fontSize = 12.sp,
-                                    color = Green700, fontWeight = FontWeight.Medium)
+                                when {
+                                    attended -> Text(
+                                        "Checked in ✓",
+                                        fontSize = 12.sp,
+                                        color = Green700,
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                    p == userName -> Text(
+                                        "You",
+                                        fontSize = 12.sp,
+                                        color = TextMuted,
+                                        fontWeight = FontWeight.Normal
+                                    )
+                                }
                             }
                             // ... rest of the row (organizer chip / attendance toggle)
                             when {
@@ -1637,20 +1661,6 @@ internal fun EventDetailSheet(
                                     Text(if (hasCheckedIn) "Checked in!" else "I'm here — check in",
                                         fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
                                 }
-                            }
-                            Button(onClick = { onJoin(); onDismiss() }, enabled = !isFull,
-                                modifier = Modifier.fillMaxWidth().height(52.dp),
-                                shape = RoundedCornerShape(14.dp),
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = if (isJoined) Color(0xFFF3F4F6) else Green900,
-                                    contentColor = if (isJoined) TextSecondary else Color.White,
-                                    disabledContainerColor = Color(0xFFE5E7EB),
-                                    disabledContentColor = TextMuted)) {
-                                Icon(if (isJoined) Icons.Default.ExitToApp else Icons.Default.DirectionsBike,
-                                    null, modifier = Modifier.size(20.dp))
-                                Spacer(Modifier.width(8.dp))
-                                Text(when { isFull -> "This ride is full"; isJoined -> "Leave this ride"; else -> "Join this ride" },
-                                    fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
                             }
                         }
                     }

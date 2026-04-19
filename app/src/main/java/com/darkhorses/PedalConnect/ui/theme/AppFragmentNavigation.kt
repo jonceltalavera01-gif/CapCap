@@ -83,6 +83,19 @@ fun AppNavigator(paddingValues: PaddingValues) {
             AddPostScreen(navController, userName)
         }
 
+        composable(
+            "public_profile/{targetUserName}",
+            arguments = listOf(navArgument("targetUserName") { type = NavType.StringType })
+        ) { backStackEntry ->
+            val targetUserName = backStackEntry.arguments?.getString("targetUserName") ?: return@composable
+            val currentUserName = prefs.getString("saved_user_name", null) ?: "Rider"
+            PublicProfileScreen(
+                navController   = navController,
+                targetUserName  = targetUserName,
+                currentUserName = currentUserName
+            )
+        }
+
         // ── Notifications ────────────────────────────────────────────────────
         composable(
             "notifications/{userName}",

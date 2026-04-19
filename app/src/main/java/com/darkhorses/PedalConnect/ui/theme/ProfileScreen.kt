@@ -65,20 +65,19 @@ private val PAmber500  = Color(0xFFF59E0B)
 // ── Data models ───────────────────────────────────────────────────────────────
 private typealias ProfilePost = Post
 
-private data class JoinedEvent(
+internal data class JoinedEvent(
     val id: String, val title: String, val route: String,
     val date: Long, val time: String, val difficulty: String,
     val distanceKm: Double, val isOrganizer: Boolean,
     val status: String = "approved"
 )
 
-private data class SavedRide(
+internal data class SavedRide(
     val id: String, val name: String, val distanceKm: Double,
     val durationMin: Long, val avgSpeedKmh: Double, val maxSpeedKmh: Double,
     val elevationM: Double, val timesRidden: Int,
     val lastRidden: String, val timestamp: Long
 )
-
 // ── Screen ────────────────────────────────────────────────────────────────────
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -1092,6 +1091,10 @@ fun ProfileScreen(navController: NavController, userName: String, paddingValues:
                     navController.navigate("home/$userName") {
                         popUpTo("home/$userName") { inclusive = false }
                     }
+                },
+                onViewProfile       = { targetUser ->
+                    if (targetUser != userName)
+                        navController.navigate("public_profile/$targetUser")
                 }
             )
         }
@@ -1467,7 +1470,7 @@ private fun EventCard(event: JoinedEvent, formatEventDate: (Long) -> String, onT
 
 // ── Ride card ─────────────────────────────────────────────────────────────────
 @Composable
-private fun RideCard(ride: SavedRide, formatDuration: (Long) -> String) {
+internal fun RideCard(ride: SavedRide, formatDuration: (Long) -> String) {
     Card(
         modifier  = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
         shape     = RoundedCornerShape(16.dp),
