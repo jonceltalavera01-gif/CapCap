@@ -1250,14 +1250,14 @@ internal fun EventDetailSheet(
     onToggleCheckInOpen: () -> Unit = {}, onDismiss: () -> Unit,
     onNavigate: (String) -> Unit = {},
     onViewProfile: (String) -> Unit = {}
-){
+) {
     val sheetState  = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val isJoined    = event.participants.contains(userName)
     val isOrganizer = event.organizer == userName
     val isFull      = event.maxParticipants > 0 && event.participants.size >= event.maxParticipants && !isJoined
     val db          = FirebaseFirestore.getInstance()
+    val cardStatus  = getEventTimeStatus(event)
 
-    // Load active alerts matching this route
     var routeAlerts by remember { mutableStateOf<List<String>>(emptyList()) }
     LaunchedEffect(event.route) {
         if (event.route.isBlank()) return@LaunchedEffect
@@ -1275,98 +1275,283 @@ internal fun EventDetailSheet(
             }
     }
 
-    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState,
-        containerColor = BgSurface, shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp),
-        dragHandle = {
-            Box(Modifier.padding(top = 12.dp, bottom = 4.dp).width(36.dp).height(4.dp)
-                .clip(RoundedCornerShape(2.dp)).background(Color(0xFFD1D5DB)))
-        }) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState       = sheetState,
+        containerColor   = BgSurface,
+        shape            = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
+        dragHandle       = {}
+    ) {
         Box(Modifier.fillMaxWidth().navigationBarsPadding()) {
-            Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState())
-                .padding(horizontal = 20.dp).padding(top = 8.dp, bottom = 96.dp)
-                .statusBarsPadding().imePadding(),
-                verticalArrangement = Arrangement.spacedBy(0.dp)) {
-
-            // Title + badges
-            Row(verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(event.title, fontWeight = FontWeight.Bold, fontSize = 20.sp,
-                    color = TextPrimary, lineHeight = 26.sp, modifier = Modifier.weight(1f, fill = false))
-                if (event.isEdited) {
-                    Row(verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(3.dp)) {
-                        Icon(Icons.Default.Edit, null, tint = TextMuted, modifier = Modifier.size(12.dp))
-                        Text("Edited ${formatRelativeTime(event.editedAt)}", fontSize = 11.sp, color = TextMuted)
-                    }
-                }
-            }
-            Spacer(Modifier.height(8.dp))
-            Row(
-                modifier = Modifier.horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalAlignment = Alignment.CenterVertically
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
+                    .imePadding()
+                    .padding(bottom = 100.dp)
             ) {
-                StatusChip(event.difficulty, diffFg(event.difficulty), diffBg(event.difficulty))
-                if (isOrganizer)              StatusChip("Your ride", Green900, Green100)
-                if (isJoined && !isOrganizer) StatusChip("Joined", Green700, Green100)
-                when (getEventTimeStatus(event)) {
-                    EventStatus.HAPPENING_NOW -> StatusChip("Happening Now", Color(0xFF92400E), Color(0xFFFEF3C7))
-                    EventStatus.ENDED         -> StatusChip("Ended", Color(0xFF6B7280), Color(0xFFF3F4F6))
-                    EventStatus.UPCOMING      -> if (eventTiming(event.date) == EventTiming.TODAY) StatusChip("Today", Green800, Green50)
-                }
-                if (event.status == "approved") {
-                    Row(Modifier.clip(RoundedCornerShape(6.dp)).background(Color(0xFFECFDF5))
-                        .padding(horizontal = 7.dp, vertical = 3.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(3.dp)) {
-                        Icon(Icons.Default.VerifiedUser, null, tint = Color(0xFF059669),
-                            modifier = Modifier.size(12.dp))
-                        Text("Verified by admin", fontSize = 10.sp,
-                            fontWeight = FontWeight.SemiBold, color = Color(0xFF059669))
+
+                // ── Hero Header ───────────────────────────────────────────
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .background(
+                            Brush.verticalGradient(listOf(Green950, Green800)),
+                            RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)
+                        )
+                        .padding(top = 12.dp)
+                ) {
+                    // Drag handle baked into the hero
+                    Box(
+                        Modifier
+                            .align(Alignment.TopCenter)
+                            .padding(bottom = 8.dp)
+                            .width(40.dp).height(4.dp)
+                            .clip(RoundedCornerShape(2.dp))
+                            .background(Color.White.copy(alpha = 0.3f))
+                    )
+                    Column(
+                        Modifier.padding(
+                            start = 20.dp, end = 20.dp,
+                            top = 24.dp, bottom = 24.dp
+                        ),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        // Status chips row
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            modifier = Modifier.horizontalScroll(rememberScrollState())
+                        ) {
+                            StatusChip(event.difficulty, diffFg(event.difficulty), diffBg(event.difficulty))
+                            when (cardStatus) {
+                                EventStatus.HAPPENING_NOW ->
+                                    StatusChip("🔴 Live Now", Color(0xFF92400E), Color(0xFFFEF3C7))
+                                EventStatus.ENDED ->
+                                    StatusChip("Ended", Color(0xFF6B7280), Color(0xFFF3F4F6))
+                                EventStatus.UPCOMING ->
+                                    if (eventTiming(event.date) == EventTiming.TODAY)
+                                        StatusChip("Today", Color(0xFF065F46), Color(0xFFD1FAE5))
+                            }
+                            if (event.status == "approved") {
+                                Row(
+                                    Modifier
+                                        .clip(RoundedCornerShape(6.dp))
+                                        .background(Color.White.copy(alpha = 0.15f))
+                                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    Icon(Icons.Default.VerifiedUser, null,
+                                        tint = Color(0xFF6EE7B7),
+                                        modifier = Modifier.size(11.dp))
+                                    Text("Verified", fontSize = 10.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = Color(0xFF6EE7B7))
+                                }
+                            }
+                            if (isOrganizer) StatusChip("Your ride", Green900, Green100)
+                            if (isJoined && !isOrganizer) StatusChip("Joined ✓", Green700, Green100)
+                            if (event.status == "pending") StatusChip("Pending review", Amber500, Amber50)
+                            if (event.status == "rejected") StatusChip("Rejected", Red600, Red50)
+                        }
+
+                        // Title
+                        Text(
+                            event.title,
+                            fontWeight = FontWeight.Bold,
+                            fontSize   = 22.sp,
+                            color      = Color.White,
+                            lineHeight = 28.sp
+                        )
+
+                        // Organizer line
+                        var organizerDisplay by remember(event.organizer) {
+                            mutableStateOf(event.organizer)
+                        }
+                        LaunchedEffect(event.organizer) {
+                            db.collection("users").whereEqualTo("username", event.organizer)
+                                .limit(1).get()
+                                .addOnSuccessListener { snap ->
+                                    organizerDisplay = snap.documents.firstOrNull()
+                                        ?.getString("displayName")
+                                        ?.takeIf { it.isNotBlank() } ?: event.organizer
+                                }
+                        }
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Icon(Icons.Default.Person, null,
+                                tint = Color.White.copy(alpha = 0.7f),
+                                modifier = Modifier.size(13.dp))
+                            Text(
+                                "Organised by $organizerDisplay",
+                                fontSize = 13.sp,
+                                color    = Color.White.copy(alpha = 0.7f)
+                            )
+                            if (event.isEdited) {
+                                Text("·", fontSize = 13.sp,
+                                    color = Color.White.copy(alpha = 0.4f))
+                                Text(
+                                    "Edited ${formatRelativeTime(event.editedAt)}",
+                                    fontSize = 12.sp,
+                                    color    = Color.White.copy(alpha = 0.5f)
+                                )
+                            }
+                        }
                     }
                 }
-            }
 
-            // Pending / rejected notice for organizer
-            if (isOrganizer && event.status == "pending") {
-                Spacer(Modifier.height(12.dp))
-                InlineAlert(Icons.Default.HourglassTop, Amber500, Amber50, Amber100,
-                    "This ride is awaiting admin approval before it becomes visible to other riders.")
-            }
-            if (isOrganizer && event.status == "rejected") {
-                Spacer(Modifier.height(12.dp))
-                InlineAlert(Icons.Default.Cancel, Red600, Red50, Red100,
-                    "This ride was not approved by an admin. Please review and edit before resubmitting.")
-            }
+                    // ── Organizer / status notices ────────────────────────────
+                if (isOrganizer && event.status == "pending") {
+                    NoticeBar(Icons.Default.HourglassTop, Amber500, Amber50,
+                        "Awaiting admin approval before other riders can see this.")
+                }
+                if (isOrganizer && event.status == "rejected") {
+                    NoticeBar(Icons.Default.Cancel, Red600, Red50,
+                        "Not approved by admin. Edit and resubmit.")
+                }
+                if (isJoined && !isOrganizer && event.isEdited) {
+                    NoticeBar(Icons.Default.Info, Amber500, Amber50,
+                        "This ride was updated after you joined — please review.")
+                }
 
-            // Edited warning for joined members
-            if (isJoined && !isOrganizer && event.isEdited) {
-                Spacer(Modifier.height(12.dp))
-                InlineAlert(Icons.Default.Info, Amber500, Amber50, Amber100,
-                    "This ride was updated after you joined — please review the details.")
-            }
+                // ── Date / Time card ──────────────────────────────────────
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp)
+                        .padding(top = 20.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        // Date block
+                        Column(
+                            Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(16.dp))
+                                .background(Green50)
+                                .padding(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Icon(Icons.Default.CalendarMonth, null,
+                                    tint = Green700, modifier = Modifier.size(15.dp))
+                                Text("Date", fontSize = 11.sp,
+                                    color = Green700, fontWeight = FontWeight.SemiBold)
+                            }
+                            Text(
+                                formatEventDate(event.date),
+                                fontSize   = 14.sp,
+                                color      = TextPrimary,
+                                fontWeight = FontWeight.SemiBold,
+                                lineHeight = 20.sp
+                            )
+                        }
+                        // Time block
+                        Column(
+                            Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(16.dp))
+                                .background(if (event.time.isNotBlank()) Green50 else Color(0xFFF9FAFB))
+                                .padding(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Icon(Icons.Default.Schedule, null,
+                                    tint = if (event.time.isNotBlank()) Green700 else TextMuted,
+                                    modifier = Modifier.size(15.dp))
+                                Text("Start time", fontSize = 11.sp,
+                                    color = if (event.time.isNotBlank()) Green700 else TextMuted,
+                                    fontWeight = FontWeight.SemiBold)
+                            }
+                            Text(
+                                event.time.ifBlank { "TBA" },
+                                fontSize   = 14.sp,
+                                color      = if (event.time.isNotBlank()) TextPrimary else TextMuted,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                    }
 
-            Spacer(Modifier.height(20.dp))
-            HorizontalDivider(color = DividerColor)
-            Spacer(Modifier.height(16.dp))
+                    // Distance + participants row
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        if (event.distanceKm > 0) {
+                            Column(
+                                Modifier
+                                    .weight(1f)
+                                    .clip(RoundedCornerShape(16.dp))
+                                    .background(Green50)
+                                    .padding(16.dp),
+                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Icon(Icons.Default.Route, null,
+                                        tint = Green700, modifier = Modifier.size(15.dp))
+                                    Text("Distance", fontSize = 11.sp,
+                                        color = Green700, fontWeight = FontWeight.SemiBold)
+                                }
+                                Text(
+                                    String.format("%.1f km", event.distanceKm),
+                                    fontSize   = 14.sp,
+                                    color      = TextPrimary,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                        }
+                        Column(
+                            Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(16.dp))
+                                .background(Green50)
+                                .padding(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Icon(Icons.Default.Groups, null,
+                                    tint = Green700, modifier = Modifier.size(15.dp))
+                                Text("Riders", fontSize = 11.sp,
+                                    color = Green700, fontWeight = FontWeight.SemiBold)
+                            }
+                            Text(
+                                buildString {
+                                    append("${event.participants.size}")
+                                    if (event.maxParticipants > 0)
+                                        append(" / ${event.maxParticipants}")
+                                    append(" joined")
+                                },
+                                fontSize   = 14.sp,
+                                color      = TextPrimary,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                    }
+                }
 
-            // Key details
-            Text("Details", fontSize = 11.sp, fontWeight = FontWeight.SemiBold,
-                color = TextMuted, letterSpacing = 0.8.sp)
-            Spacer(Modifier.height(12.dp))
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                DetailTile(Icons.Default.CalendarMonth, "Date", formatEventDate(event.date))
-                if (event.time.isNotBlank())
-                    DetailTile(Icons.Default.Schedule, "Start time", event.time)
-
-                // Route tile with View on Maps button
+                // ── Route section ─────────────────────────────────────────
                 if (event.route.isNotBlank()) {
                     val routeContext = LocalContext.current
-                    val routeParts = remember(event.route) {
+                    val routeParts   = remember(event.route) {
                         event.route.split(" to ", " - ", "–").map { it.trim() }
                     }
-                    val origin      = routeParts.first()
-                    val destination = if (routeParts.size >= 2) routeParts.last() else ""
                     val mapsUrl = remember(event.route) {
                         if (routeParts.size >= 2) {
                             val o = android.net.Uri.encode(routeParts.first())
@@ -1376,350 +1561,475 @@ internal fun EventDetailSheet(
                             "https://www.google.com/maps/search/?api=1&query=${android.net.Uri.encode(event.route)}"
                         }
                     }
-                    Row(verticalAlignment = Alignment.Top,
-                        horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Box(Modifier.size(36.dp).clip(RoundedCornerShape(10.dp)).background(Green50),
-                            Alignment.Center) {
-                            Icon(Icons.Default.LocationOn, null, tint = Green900, modifier = Modifier.size(18.dp))
-                        }
-                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Text("Route", fontSize = 11.sp, color = TextMuted, fontWeight = FontWeight.Medium)
-                            // Origin
-                            Text(origin, fontSize = 14.sp, color = TextPrimary,
-                                fontWeight = FontWeight.SemiBold,
-                                maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            // Arrow + destination
-                            if (destination.isNotBlank()) {
-                                Row(verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                    Text("→", fontSize = 13.sp, color = Green700, fontWeight = FontWeight.Bold)
-                                    Text(destination, fontSize = 14.sp, color = TextPrimary,
-                                        fontWeight = FontWeight.SemiBold,
-                                        maxLines = 1, overflow = TextOverflow.Ellipsis,
-                                        modifier = Modifier.weight(1f))
-                                }
-                            }
-                            // Buttons row below the text
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Box(Modifier.clip(RoundedCornerShape(8.dp)).background(Color(0xFFEEF2FF))
-                                    .clickable {
-                                        val intent = android.content.Intent(
-                                            android.content.Intent.ACTION_VIEW,
-                                            android.net.Uri.parse(mapsUrl))
-                                        routeContext.startActivity(intent)
-                                    }.padding(horizontal = 12.dp, vertical = 7.dp)) {
-                                    Row(verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                                        Icon(Icons.Default.Map, null, tint = Color(0xFF4285F4),
-                                            modifier = Modifier.size(13.dp))
-                                        Text("View", fontSize = 12.sp, color = Color(0xFF4285F4),
-                                            fontWeight = FontWeight.SemiBold)
-                                    }
-                                }
-                                Box(Modifier.clip(RoundedCornerShape(8.dp)).background(Green50)
-                                    .clickable {
-                                        val dest = if (routeParts.size >= 2) routeParts.last() else event.route
-                                        onDismiss()
-                                        onNavigate(dest)
-                                    }.padding(horizontal = 12.dp, vertical = 7.dp)) {
-                                    Row(verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                                        Icon(Icons.Default.Navigation, null, tint = Green900,
-                                            modifier = Modifier.size(13.dp))
-                                        Text("Navigate", fontSize = 12.sp, color = Green900,
-                                            fontWeight = FontWeight.SemiBold)
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
 
-                if (event.distanceKm > 0)
-                    DetailTile(Icons.Default.Route, "Distance", String.format("%.1f km", event.distanceKm))
-                var organizerDisplayName by remember(event.organizer) { mutableStateOf(event.organizer) }
-                LaunchedEffect(event.organizer) {
-                    val db = FirebaseFirestore.getInstance()
-                    db.collection("users").whereEqualTo("username", event.organizer)
-                        .limit(1).get()
-                        .addOnSuccessListener { snap ->
-                            val display = snap.documents.firstOrNull()?.getString("displayName")
-                                ?.takeIf { it.isNotBlank() } ?: event.organizer
-                            organizerDisplayName = display
-                        }
-                }
-                DetailTile(Icons.Default.Person, "Organizer", organizerDisplayName)
-                DetailTile(Icons.Default.Groups, "Riders", buildString {
-                    append("${event.participants.size}")
-                    if (event.maxParticipants > 0) append(" / ${event.maxParticipants}")
-                    append(" joined")
-                })
-            }
-
-            // OSM Route map preview
-            if (event.route.isNotBlank()) {
-                Spacer(Modifier.height(16.dp))
-                Text("Route preview", fontSize = 11.sp, fontWeight = FontWeight.SemiBold,
-                    color = TextMuted, letterSpacing = 0.8.sp)
-                Spacer(Modifier.height(8.dp))
-                EventRouteMap(routeText = event.route)
-            }
-
-            // Route safety alerts
-            if (routeAlerts.isNotEmpty()) {
-                Spacer(Modifier.height(20.dp))
-                HorizontalDivider(color = DividerColor)
-                Spacer(Modifier.height(16.dp))
-                Text("Route Alerts", fontSize = 11.sp, fontWeight = FontWeight.SemiBold,
-                    color = TextMuted, letterSpacing = 0.8.sp)
-                Spacer(Modifier.height(10.dp))
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    routeAlerts.forEach { alert ->
-                        Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp))
-                            .background(Red50).padding(horizontal = 12.dp, vertical = 10.dp),
-                            verticalAlignment = Alignment.Top,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Icon(Icons.Default.Warning, null, tint = Red600,
-                                modifier = Modifier.size(15.dp).padding(top = 1.dp))
-                            Text(alert, fontSize = 13.sp, color = TextSecondary, lineHeight = 18.sp)
-                        }
-                    }
-                }
-            }
-
-            // Description
-            if (event.description.isNotBlank()) {
-                Spacer(Modifier.height(20.dp))
-                HorizontalDivider(color = DividerColor)
-                Spacer(Modifier.height(16.dp))
-                Text("About this ride", fontSize = 11.sp, fontWeight = FontWeight.SemiBold,
-                    color = TextMuted, letterSpacing = 0.8.sp)
-                Spacer(Modifier.height(8.dp))
-                Text(event.description, fontSize = 14.sp, color = TextSecondary, lineHeight = 22.sp)
-            }
-
-            // Participants list
-            if (event.participants.isNotEmpty()) {
-                Spacer(Modifier.height(20.dp))
-                HorizontalDivider(color = DividerColor)
-                Spacer(Modifier.height(16.dp))
-                Text("Participants (${event.participants.size})", fontSize = 11.sp,
-                    fontWeight = FontWeight.SemiBold, color = TextMuted, letterSpacing = 0.8.sp)
-                Spacer(Modifier.height(12.dp))
-
-                var showAll by remember { mutableStateOf(false) }
-                val visible = if (showAll || event.participants.size <= 4) event.participants
-                else event.participants.take(4)
-
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    val participantProfiles = remember(event.participants) {
-                        mutableStateMapOf<String, UserProfile>()
-                    }
-                    val participantKey = remember(event.participants) {
-                        event.participants.joinToString(",")
-                    }
-                    LaunchedEffect(participantKey) {
-                        event.participants.forEach { username ->
-                            if (!participantProfiles.containsKey(username)) {
-                                val profile = fetchUserProfile(username, db)
-                                participantProfiles[username] = profile
-                            }
-                        }
-                    }
-
-                    visible.forEach { p ->
-                        val attended = event.attendees.contains(p)
-                        val profile  = participantProfiles[p]
-                        Row(verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                            Box(
-                                Modifier.size(40.dp).clip(CircleShape).background(
-                                    if (attended) Brush.linearGradient(listOf(Color(0xFF166534), Color(0xFF15803D)))
-                                    else Brush.linearGradient(listOf(Green900, Green700))
-                                ),
-                                Alignment.Center
+                    Column(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp)
+                            .padding(top = 16.dp)
+                    ) {
+                        // Route card
+                        Column(
+                            Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(16.dp))
+                                .background(Color(0xFFF8FAF9))
+                                .padding(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
                             ) {
-                                if (!profile?.photoUrl.isNullOrBlank()) {
-                                    coil.compose.AsyncImage(
-                                        model              = profile!!.photoUrl,
-                                        contentDescription = profile.displayName,
-                                        contentScale       = androidx.compose.ui.layout.ContentScale.Crop,
-                                        modifier           = Modifier.fillMaxSize().clip(CircleShape)
-                                    )
-                                } else {
-                                    Text(
-                                        (profile?.displayName ?: p).take(1).uppercase(),
-                                        fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = Color.White
-                                    )
-                                }
+                                Icon(Icons.Default.Route, null,
+                                    tint = Green700, modifier = Modifier.size(14.dp))
+                                Text("Route", fontSize = 11.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = Green700, letterSpacing = 0.5.sp)
                             }
-                            Column(
-                                Modifier.weight(1f).clickable(
-                                    interactionSource = remember { MutableInteractionSource() },
-                                    indication = null
+                            // Origin → Destination
+                            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
                                 ) {
-                                    if (p != userName) onViewProfile(p)
-                                },
-                                verticalArrangement = Arrangement.spacedBy(2.dp)
-                            ) {
-                                Text(
-                                    profile?.displayName ?: p,
-                                    fontSize = 14.sp, color = TextPrimary,
-                                    fontWeight = FontWeight.Medium
-                                )
-                                when {
-                                    attended -> Text(
-                                        "Checked in ✓",
-                                        fontSize = 12.sp,
-                                        color = Green700,
-                                        fontWeight = FontWeight.Medium
+                                    Box(
+                                        Modifier
+                                            .size(8.dp)
+                                            .clip(CircleShape)
+                                            .background(Green700)
                                     )
-                                    p == userName -> Text(
-                                        "You",
-                                        fontSize = 12.sp,
-                                        color = TextMuted,
-                                        fontWeight = FontWeight.Normal
+                                    Text(
+                                        routeParts.first(),
+                                        fontSize   = 15.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color      = TextPrimary,
+                                        maxLines   = 1,
+                                        overflow   = TextOverflow.Ellipsis,
+                                        modifier   = Modifier.weight(1f)
                                     )
                                 }
+                                if (routeParts.size >= 2) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                    ) {
+                                        Box(
+                                            Modifier
+                                                .padding(start = 3.dp)
+                                                .width(2.dp)
+                                                .height(16.dp)
+                                                .background(
+                                                    Brush.verticalGradient(
+                                                        listOf(Green700, Green500)
+                                                    ),
+                                                    RoundedCornerShape(1.dp)
+                                                )
+                                        )
+                                        Spacer(Modifier.width(0.dp))
+                                    }
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                    ) {
+                                        Icon(Icons.Default.LocationOn, null,
+                                            tint = Green500,
+                                            modifier = Modifier.size(8.dp))
+                                        Text(
+                                            routeParts.last(),
+                                            fontSize   = 15.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color      = TextPrimary,
+                                            maxLines   = 1,
+                                            overflow   = TextOverflow.Ellipsis,
+                                            modifier   = Modifier.weight(1f)
+                                        )
+                                    }
+                                }
                             }
-                            // ... rest of the row (organizer chip / attendance toggle)
-                            when {
-                                p == event.organizer -> StatusChip("Organizer", Green900, Green100)
-                                isOrganizer -> IconButton(onClick = { onToggleAttendance(p) },
-                                    modifier = Modifier.size(36.dp)) {
-                                    Icon(if (attended) Icons.Default.CheckCircle
-                                    else Icons.Default.RadioButtonUnchecked, null,
-                                        tint = if (attended) Green700 else TextMuted,
-                                        modifier = Modifier.size(22.dp))
+                            // Action buttons
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Box(
+                                    Modifier
+                                        .clip(RoundedCornerShape(10.dp))
+                                        .background(Color(0xFFEEF2FF))
+                                        .clickable {
+                                            routeContext.startActivity(
+                                                android.content.Intent(
+                                                    android.content.Intent.ACTION_VIEW,
+                                                    android.net.Uri.parse(mapsUrl)
+                                                )
+                                            )
+                                        }
+                                        .padding(horizontal = 14.dp, vertical = 9.dp)
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(5.dp)
+                                    ) {
+                                        Icon(Icons.Default.Map, null,
+                                            tint = Color(0xFF4285F4),
+                                            modifier = Modifier.size(14.dp))
+                                        Text("View on Maps", fontSize = 12.sp,
+                                            color = Color(0xFF4285F4),
+                                            fontWeight = FontWeight.SemiBold)
+                                    }
+                                }
+                                Box(
+                                    Modifier
+                                        .clip(RoundedCornerShape(10.dp))
+                                        .background(Green50)
+                                        .clickable {
+                                            val dest = if (routeParts.size >= 2)
+                                                routeParts.last() else event.route
+                                            onDismiss(); onNavigate(dest)
+                                        }
+                                        .padding(horizontal = 14.dp, vertical = 9.dp)
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(5.dp)
+                                    ) {
+                                        Icon(Icons.Default.Navigation, null,
+                                            tint = Green900,
+                                            modifier = Modifier.size(14.dp))
+                                        Text("Navigate", fontSize = 12.sp,
+                                            color = Green900,
+                                            fontWeight = FontWeight.SemiBold)
+                                    }
                                 }
                             }
                         }
-                    }
-                    if (event.participants.size > 4) {
-                        Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(Green50)
-                            .clickable { showAll = !showAll }.padding(vertical = 10.dp), Alignment.Center) {
-                            Row(verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                                Icon(if (showAll) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
-                                    null, tint = Green700, modifier = Modifier.size(16.dp))
-                                Text(if (showAll) "Show less" else "Show ${event.participants.size - 4} more",
-                                    fontSize = 13.sp, color = Green700, fontWeight = FontWeight.Medium)
-                            }
-                        }
+
+                        // Map preview
+                        Spacer(Modifier.height(10.dp))
+                        EventRouteMap(routeText = event.route)
                     }
                 }
-            }
 
-            Spacer(Modifier.height(24.dp))
-            HorizontalDivider(color = DividerColor)
-            Spacer(Modifier.height(16.dp))
-
-            // Actions
-            val eventIsPast = eventTiming(event.date) == EventTiming.PAST
-            when {
-                eventIsPast -> Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
-                    .background(Color(0xFFF3F4F6)).padding(16.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Icon(Icons.Default.History, null, tint = TextMuted, modifier = Modifier.size(18.dp))
-                    Text("This ride has already taken place", fontSize = 14.sp, color = TextMuted)
-                }
-
-                !isOrganizer -> {
-                    val hasCheckedIn = event.attendees.contains(userName)
-                    val showCheckIn  = isJoined && (isCheckInWindow(event) || event.checkInOpen)
-                    val isEnded      = getEventTimeStatus(event) == EventStatus.ENDED
-
-                    if (isEnded) {
-                        // Event ended — show read-only state, no join/leave
-                        Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
-                            .background(Color(0xFFF3F4F6)).padding(16.dp),
+                // ── Route alerts ──────────────────────────────────────────
+                if (routeAlerts.isNotEmpty()) {
+                    Column(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp)
+                            .padding(top = 16.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Icon(Icons.Default.History, null, tint = TextMuted,
-                                modifier = Modifier.size(18.dp))
-                            Column {
-                                Text("This ride has ended", fontSize = 14.sp,
-                                    color = TextMuted, fontWeight = FontWeight.Medium)
-                                if (hasCheckedIn) {
-                                    Text("You checked in ✓", fontSize = 12.sp, color = Green700,
-                                        fontWeight = FontWeight.Medium)
-                                } else if (isJoined) {
-                                    Text("You were registered for this ride",
-                                        fontSize = 12.sp, color = TextMuted)
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Icon(Icons.Default.Warning, null,
+                                tint = Red600, modifier = Modifier.size(14.dp))
+                            Text("Route Alerts", fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold, color = Red600)
+                        }
+                        routeAlerts.forEach { alert ->
+                            Row(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(Red50)
+                                    .padding(12.dp),
+                                verticalAlignment = Alignment.Top,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Icon(Icons.Default.Warning, null,
+                                    tint = Red600, modifier = Modifier.size(14.dp))
+                                Text(alert, fontSize = 13.sp,
+                                    color = TextSecondary, lineHeight = 18.sp)
+                            }
+                        }
+                    }
+                }
+
+                // ── About this ride ───────────────────────────────────────
+                if (event.description.isNotBlank()) {
+                    Column(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp)
+                            .padding(top = 24.dp)
+                    ) {
+                        Text("About this ride", fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold, color = TextPrimary)
+                        Spacer(Modifier.height(8.dp))
+                        Text(event.description, fontSize = 14.sp,
+                            color = TextSecondary, lineHeight = 22.sp)
+                    }
+                }
+
+                // ── Participants ──────────────────────────────────────────
+                if (event.participants.isNotEmpty()) {
+                    Column(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(top = 24.dp)
+                    ) {
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment     = Alignment.CenterVertically
+                        ) {
+                            Text("Riders", fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold, color = TextPrimary)
+                            Text(
+                                buildString {
+                                    append("${event.participants.size}")
+                                    if (event.maxParticipants > 0)
+                                        append(" of ${event.maxParticipants}")
+                                },
+                                fontSize = 13.sp, color = TextMuted
+                            )
+                        }
+
+                        Spacer(Modifier.height(12.dp))
+
+                        val participantProfiles = remember(event.participants) {
+                            mutableStateMapOf<String, UserProfile>()
+                        }
+                        val participantKey = remember(event.participants) {
+                            event.participants.joinToString(",")
+                        }
+                        LaunchedEffect(participantKey) {
+                            event.participants.forEach { username ->
+                                if (!participantProfiles.containsKey(username)) {
+                                    val profile = fetchUserProfile(username, db)
+                                    participantProfiles[username] = profile
                                 }
                             }
                         }
-                    } else {
-                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                            if (showCheckIn) {
-                                Button(onClick = onCheckIn, enabled = !hasCheckedIn,
-                                    modifier = Modifier.fillMaxWidth().height(52.dp),
-                                    shape = RoundedCornerShape(14.dp),
-                                    colors = ButtonDefaults.buttonColors(
-                                        containerColor = if (hasCheckedIn) Green700 else Green900,
-                                        contentColor = Color.White,
-                                        disabledContainerColor = Green700,
-                                        disabledContentColor = Color.White)) {
-                                    Icon(if (hasCheckedIn) Icons.Default.CheckCircle else Icons.Default.HowToReg,
-                                        null, modifier = Modifier.size(20.dp))
-                                    Spacer(Modifier.width(8.dp))
-                                    Text(if (hasCheckedIn) "Checked in!" else "I'm here — check in",
-                                        fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
+
+                        var showAll by remember { mutableStateOf(false) }
+                        val visible = if (showAll || event.participants.size <= 5)
+                            event.participants else event.participants.take(5)
+
+                        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            visible.forEach { p ->
+                                val attended = event.attendees.contains(p)
+                                val profile  = participantProfiles[p]
+                                val isMe     = p == userName
+
+                                Row(
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .clickable(
+                                            enabled = p != userName,
+                                            interactionSource = remember { MutableInteractionSource() },
+                                            indication = null
+                                        ) { onViewProfile(p) }
+                                        .padding(horizontal = 16.dp, vertical = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                ) {
+                                    // Avatar
+                                    Box(
+                                        Modifier
+                                            .size(44.dp)
+                                            .clip(CircleShape)
+                                            .background(
+                                                if (attended)
+                                                    Brush.linearGradient(listOf(Color(0xFF166534), Color(0xFF15803D)))
+                                                else
+                                                    Brush.linearGradient(listOf(Green900, Green700))
+                                            ),
+                                        Alignment.Center
+                                    ) {
+                                        if (!profile?.photoUrl.isNullOrBlank()) {
+                                            coil.compose.AsyncImage(
+                                                model              = profile!!.photoUrl,
+                                                contentDescription = profile.displayName,
+                                                contentScale       = androidx.compose.ui.layout.ContentScale.Crop,
+                                                modifier           = Modifier.fillMaxSize().clip(CircleShape)
+                                            )
+                                        } else {
+                                            Text(
+                                                (profile?.displayName ?: p).take(1).uppercase(),
+                                                fontSize   = 16.sp,
+                                                fontWeight = FontWeight.SemiBold,
+                                                color      = Color.White
+                                            )
+                                        }
+                                    }
+
+                                    // Name + subtitle
+                                    Column(
+                                        Modifier.weight(1f),
+                                        verticalArrangement = Arrangement.spacedBy(2.dp)
+                                    ) {
+                                        Text(
+                                            profile?.displayName ?: p,
+                                            fontSize   = 14.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color      = TextPrimary
+                                        )
+                                        when {
+                                            attended -> Text("Checked in ✓",
+                                                fontSize = 12.sp,
+                                                color    = Green700,
+                                                fontWeight = FontWeight.Medium)
+                                            isMe -> Text("You",
+                                                fontSize = 12.sp,
+                                                color    = TextMuted)
+                                            p == event.organizer -> Text("Organizer",
+                                                fontSize = 12.sp,
+                                                color    = Green700,
+                                                fontWeight = FontWeight.Medium)
+                                        }
+                                    }
+
+                                    // Trailing — organizer attendance toggle
+                                    when {
+                                        isOrganizer && p != event.organizer ->
+                                            IconButton(
+                                                onClick  = { onToggleAttendance(p) },
+                                                modifier = Modifier.size(36.dp)
+                                            ) {
+                                                Icon(
+                                                    if (attended) Icons.Default.CheckCircle
+                                                    else Icons.Default.RadioButtonUnchecked,
+                                                    null,
+                                                    tint = if (attended) Green700 else Color(0xFFD1D5DB),
+                                                    modifier = Modifier.size(22.dp)
+                                                )
+                                            }
+                                    }
+                                }
+                            }
+
+                            if (event.participants.size > 5) {
+                                Box(
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .clickable { showAll = !showAll }
+                                        .padding(horizontal = 16.dp, vertical = 12.dp)
+                                ) {
+                                    Text(
+                                        if (showAll) "Show less"
+                                        else "+ ${event.participants.size - 5} more riders",
+                                        fontSize   = 13.sp,
+                                        color      = Green700,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
                                 }
                             }
                         }
                     }
                 }
 
-                else -> Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Green50).padding(16.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                            Icon(Icons.Default.Groups, null, tint = Green900, modifier = Modifier.size(20.dp))
-                            Text("${event.participants.size} rider${if (event.participants.size != 1) "s" else ""} joined your ride",
-                                fontSize = 14.sp, color = Green900, fontWeight = FontWeight.Medium)
+                // ── Organizer actions ─────────────────────────────────────
+                val eventIsPast = eventTiming(event.date) == EventTiming.PAST
+                val isEnded     = cardStatus == EventStatus.ENDED
+
+                if (isOrganizer) {
+                    Column(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp)
+                            .padding(top = 24.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        HorizontalDivider(color = DividerColor)
+                        Spacer(Modifier.height(4.dp))
+
+                        if (eventTiming(event.date) == EventTiming.TODAY) {
+                            OutlinedButton(
+                                onClick  = onToggleCheckInOpen,
+                                modifier = Modifier.fillMaxWidth().height(48.dp),
+                                shape    = RoundedCornerShape(14.dp),
+                                border   = androidx.compose.foundation.BorderStroke(
+                                    1.5.dp,
+                                    if (event.checkInOpen) Green700 else BorderDefault
+                                ),
+                                colors = ButtonDefaults.outlinedButtonColors(
+                                    contentColor = if (event.checkInOpen) Green700 else TextSecondary
+                                )
+                            ) {
+                                Icon(
+                                    if (event.checkInOpen) Icons.Default.LockOpen
+                                    else Icons.Default.Lock,
+                                    null, modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(Modifier.width(8.dp))
+                                Text(
+                                    if (event.checkInOpen) "Close check-in"
+                                    else "Open check-in for riders",
+                                    fontWeight = FontWeight.Medium, fontSize = 14.sp
+                                )
+                            }
                         }
-                    }
-                    if (eventTiming(event.date) == EventTiming.TODAY) {
-                        OutlinedButton(onClick = onToggleCheckInOpen,
-                            modifier = Modifier.fillMaxWidth().height(48.dp),
-                            shape = RoundedCornerShape(12.dp),
-                            border = androidx.compose.foundation.BorderStroke(1.5.dp,
-                                if (event.checkInOpen) Green700 else BorderDefault),
-                            colors = ButtonDefaults.outlinedButtonColors(
-                                contentColor = if (event.checkInOpen) Green700 else TextSecondary)) {
-                            Icon(if (event.checkInOpen) Icons.Default.LockOpen else Icons.Default.Lock,
-                                null, modifier = Modifier.size(18.dp))
+                        Button(
+                            onClick  = { onEdit(); onDismiss() },
+                            modifier = Modifier.fillMaxWidth().height(52.dp),
+                            shape    = RoundedCornerShape(14.dp),
+                            colors   = ButtonDefaults.buttonColors(
+                                containerColor = Green900, contentColor = Color.White)
+                        ) {
+                            Icon(Icons.Default.Edit, null, modifier = Modifier.size(18.dp))
                             Spacer(Modifier.width(8.dp))
-                            Text(if (event.checkInOpen) "Close check-in" else "Open check-in for riders",
+                            Text("Edit this ride",
+                                fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
+                        }
+                        OutlinedButton(
+                            onClick  = { onDelete(); onDismiss() },
+                            modifier = Modifier.fillMaxWidth().height(48.dp),
+                            shape    = RoundedCornerShape(14.dp),
+                            border   = androidx.compose.foundation.BorderStroke(
+                                1.dp, Red600.copy(alpha = 0.4f)),
+                            colors   = ButtonDefaults.outlinedButtonColors(contentColor = Red600)
+                        ) {
+                            Icon(Icons.Default.DeleteForever, null,
+                                modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text("Delete this ride",
                                 fontWeight = FontWeight.Medium, fontSize = 14.sp)
                         }
                     }
-                    Button(onClick = { onEdit(); onDismiss() },
-                        modifier = Modifier.fillMaxWidth().height(52.dp),
-                        shape = RoundedCornerShape(14.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = Green900, contentColor = Color.White)) {
-                        Icon(Icons.Default.Edit, null, modifier = Modifier.size(20.dp))
-                        Spacer(Modifier.width(8.dp))
-                        Text("Edit this ride", fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
-                    }
-                    OutlinedButton(onClick = { onDelete(); onDismiss() },
-                        modifier = Modifier.fillMaxWidth().height(48.dp),
-                        shape = RoundedCornerShape(14.dp),
-                        border = androidx.compose.foundation.BorderStroke(1.dp, Red600.copy(alpha = 0.4f)),
-                        colors = ButtonDefaults.outlinedButtonColors(contentColor = Red600)) {
-                        Icon(Icons.Default.DeleteForever, null, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.width(8.dp))
-                        Text("Delete this ride", fontWeight = FontWeight.Medium, fontSize = 14.sp)
+                } else if (!isOrganizer && !eventIsPast && !isEnded) {
+                    // Check-in (non-organizer)
+                    val hasCheckedIn = event.attendees.contains(userName)
+                    val showCheckIn  = isJoined && (isCheckInWindow(event) || event.checkInOpen)
+                    if (showCheckIn) {
+                        Column(
+                            Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp)
+                                .padding(top = 16.dp)
+                        ) {
+                            Button(
+                                onClick  = onCheckIn,
+                                enabled  = !hasCheckedIn,
+                                modifier = Modifier.fillMaxWidth().height(52.dp),
+                                shape    = RoundedCornerShape(14.dp),
+                                colors   = ButtonDefaults.buttonColors(
+                                    containerColor         = if (hasCheckedIn) Green700 else Green900,
+                                    contentColor           = Color.White,
+                                    disabledContainerColor = Green700,
+                                    disabledContentColor   = Color.White
+                                )
+                            ) {
+                                Icon(
+                                    if (hasCheckedIn) Icons.Default.CheckCircle
+                                    else Icons.Default.HowToReg,
+                                    null, modifier = Modifier.size(20.dp)
+                                )
+                                Spacer(Modifier.width(8.dp))
+                                Text(
+                                    if (hasCheckedIn) "Checked in!" else "I'm here — check in",
+                                    fontWeight = FontWeight.SemiBold, fontSize = 15.sp
+                                )
+                            }
+                        }
                     }
                 }
             }
-            }
 
-            // Sticky bottom action bar — non-organizer, non-past, non-ended only
+            // ── Sticky CTA ────────────────────────────────────────────────
             val eventIsPastSticky = eventTiming(event.date) == EventTiming.PAST
-            val isEndedSticky     = getEventTimeStatus(event) == EventStatus.ENDED
+            val isEndedSticky     = cardStatus == EventStatus.ENDED
             if (!isOrganizer && !eventIsPastSticky && !isEndedSticky) {
                 Box(
                     Modifier
@@ -1727,39 +2037,64 @@ internal fun EventDetailSheet(
                         .fillMaxWidth()
                         .background(
                             Brush.verticalGradient(
-                                listOf(Color.Transparent, BgSurface.copy(alpha = 0.95f), BgSurface)
+                                listOf(
+                                    Color.Transparent,
+                                    BgSurface.copy(alpha = 0.92f),
+                                    BgSurface
+                                )
                             )
                         )
-                        .padding(horizontal = 20.dp, vertical = 12.dp)
+                        .padding(horizontal = 16.dp, vertical = 12.dp)
                 ) {
                     Button(
                         onClick  = { onJoin(); onDismiss() },
                         enabled  = !isFull,
-                        modifier = Modifier.fillMaxWidth().height(52.dp),
-                        shape    = RoundedCornerShape(14.dp),
+                        modifier = Modifier.fillMaxWidth().height(54.dp),
+                        shape    = RoundedCornerShape(16.dp),
                         colors   = ButtonDefaults.buttonColors(
                             containerColor         = if (isJoined) Color(0xFFF3F4F6) else Green900,
                             contentColor           = if (isJoined) TextSecondary else Color.White,
                             disabledContainerColor = Color(0xFFE5E7EB),
                             disabledContentColor   = TextMuted
-                        )
+                        ),
+                        elevation = ButtonDefaults.buttonElevation(defaultElevation = 4.dp)
                     ) {
                         Icon(
-                            if (isJoined) Icons.Default.ExitToApp else Icons.Default.DirectionsBike,
+                            if (isJoined) Icons.Default.ExitToApp
+                            else Icons.Default.DirectionsBike,
                             null, modifier = Modifier.size(20.dp)
                         )
                         Spacer(Modifier.width(8.dp))
                         Text(
-                            when { isFull -> "This ride is full"; isJoined -> "Leave this ride"; else -> "Join this ride" },
+                            when {
+                                isFull   -> "This ride is full"
+                                isJoined -> "Leave this ride"
+                                else     -> "Join this ride"
+                            },
                             fontWeight = FontWeight.SemiBold, fontSize = 15.sp
                         )
                     }
                 }
             }
-        } // end Box
+        }
     }
 }
 
+@Composable
+private fun NoticeBar(icon: ImageVector, iconColor: Color, bgColor: Color, text: String) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .background(bgColor)
+            .padding(horizontal = 20.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.Top,
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        Icon(icon, null, tint = iconColor,
+            modifier = Modifier.size(16.dp).padding(top = 1.dp))
+        Text(text, fontSize = 13.sp, color = TextSecondary, lineHeight = 19.sp)
+    }
+}
 @Composable
 private fun DetailTile(icon: ImageVector, label: String, value: String) {
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
