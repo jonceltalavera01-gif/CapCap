@@ -1043,7 +1043,33 @@ fun ProfileScreen(navController: NavController, userName: String, paddingValues:
                             EventCard(
                                 event           = event,
                                 formatEventDate = ::formatEventDate,
-                                onTap           = { selectedEvent = rideEvent }
+                                onTap           = {
+                                    db.collection("rideEvents").document(event.id)
+                                        .get()
+                                        .addOnSuccessListener { doc ->
+                                            if (doc != null && doc.exists()) {
+                                                selectedEvent = RideEvent(
+                                                    id              = doc.id,
+                                                    title           = doc.getString("title")           ?: "",
+                                                    description     = doc.getString("description")     ?: "",
+                                                    route           = doc.getString("route")           ?: "",
+                                                    date            = doc.getLong("date")              ?: 0L,
+                                                    time            = doc.getString("time")            ?: "",
+                                                    organizer       = doc.getString("organizer")       ?: "",
+                                                    participants    = (doc.get("participants") as? List<*>)?.filterIsInstance<String>() ?: emptyList(),
+                                                    maxParticipants = (doc.getLong("maxParticipants")  ?: 0L).toInt(),
+                                                    difficulty      = doc.getString("difficulty")      ?: "Easy",
+                                                    distanceKm      = doc.getDouble("distanceKm")      ?: 0.0,
+                                                    attendees       = (doc.get("attendees") as? List<*>)?.filterIsInstance<String>() ?: emptyList(),
+                                                    checkInOpen     = doc.getBoolean("checkInOpen")    ?: false,
+                                                    status          = doc.getString("status")          ?: "approved",
+                                                    durationHours   = (doc.getLong("durationHours")    ?: 0L).toInt(),
+                                                    isEdited        = doc.getBoolean("isEdited")       ?: false,
+                                                    editedAt        = doc.getLong("editedAt")          ?: 0L
+                                                )
+                                            }
+                                        }
+                                }
                             )
                             Spacer(Modifier.height(12.dp))
                         }
@@ -1080,6 +1106,32 @@ fun ProfileScreen(navController: NavController, userName: String, paddingValues:
                         .update("attendees", com.google.firebase.firestore.FieldValue.arrayUnion(userName))
                         .addOnSuccessListener {
                             Toast.makeText(context, "Checked in! See you on the road 🚴", Toast.LENGTH_SHORT).show()
+                            // Refresh selectedEvent so the sheet reflects the new attendees list
+                            db2.collection("rideEvents").document(event.id)
+                                .get()
+                                .addOnSuccessListener { doc ->
+                                    if (doc != null && doc.exists()) {
+                                        selectedEvent = RideEvent(
+                                            id              = doc.id,
+                                            title           = doc.getString("title")           ?: "",
+                                            description     = doc.getString("description")     ?: "",
+                                            route           = doc.getString("route")           ?: "",
+                                            date            = doc.getLong("date")              ?: 0L,
+                                            time            = doc.getString("time")            ?: "",
+                                            organizer       = doc.getString("organizer")       ?: "",
+                                            participants    = (doc.get("participants") as? List<*>)?.filterIsInstance<String>() ?: emptyList(),
+                                            maxParticipants = (doc.getLong("maxParticipants")  ?: 0L).toInt(),
+                                            difficulty      = doc.getString("difficulty")      ?: "Easy",
+                                            distanceKm      = doc.getDouble("distanceKm")      ?: 0.0,
+                                            attendees       = (doc.get("attendees") as? List<*>)?.filterIsInstance<String>() ?: emptyList(),
+                                            checkInOpen     = doc.getBoolean("checkInOpen")    ?: false,
+                                            status          = doc.getString("status")          ?: "approved",
+                                            durationHours   = (doc.getLong("durationHours")    ?: 0L).toInt(),
+                                            isEdited        = doc.getBoolean("isEdited")       ?: false,
+                                            editedAt        = doc.getLong("editedAt")          ?: 0L
+                                        )
+                                    }
+                                }
                         }
                 },
                 onToggleAttendance  = {},
@@ -1298,93 +1350,93 @@ private fun EventCard(event: JoinedEvent, formatEventDate: (Long) -> String, onT
         "Hard"     -> Color(0xFFFFE4E6)
         else       -> Color(0xFFF3F4F6)
     }
-
-    // Determine event timing status
     val rideEvent = RideEvent(
-        id           = event.id,
-        title        = event.title,
-        route        = event.route,
-        date         = event.date,
-        time         = event.time,
-        difficulty   = event.difficulty,
-        distanceKm   = event.distanceKm,
-        status       = event.status
+        id = event.id, title = event.title, route = event.route,
+        date = event.date, time = event.time, difficulty = event.difficulty,
+        distanceKm = event.distanceKm, status = event.status
     )
     val timeStatus = getEventTimeStatus(rideEvent)
     val isPast     = timeStatus == EventStatus.ENDED
 
-    val cardBg    = if (isPast) Color(0xFFF3F4F6) else PBgSurface
-    val titleColor = if (isPast) PTextMuted else PTextPrimary
-    val accentColor = if (isPast) Color(0xFF9CA3AF) else diffFg
+    val headerGradient = if (isPast)
+        Brush.horizontalGradient(listOf(Color(0xFF6B7280), Color(0xFF9CA3AF)))
+    else if (event.isOrganizer)
+        Brush.horizontalGradient(listOf(PGreen950, PGreen800))
+    else
+        Brush.horizontalGradient(listOf(PGreen900, PGreen700))
 
     Card(
-        modifier  = Modifier.fillMaxWidth().padding(horizontal = 16.dp).clickable { onTap() },
-        shape     = RoundedCornerShape(16.dp),
-        colors    = CardDefaults.cardColors(containerColor = cardBg),
-        elevation = CardDefaults.cardElevation(if (isPast) 0.dp else 3.dp)
+        modifier  = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp)
+            .clickable { onTap() },
+        shape     = RoundedCornerShape(20.dp),
+        colors    = CardDefaults.cardColors(containerColor = PBgSurface),
+        elevation = CardDefaults.cardElevation(
+            defaultElevation = if (isPast) 0.dp else 2.dp,
+            pressedElevation = 4.dp
+        )
     ) {
-        Row(modifier = Modifier.fillMaxWidth()) {
-            // Left accent bar
+        Column {
+            // ── Coloured header band ──────────────────────────────────────
             Box(
                 modifier = Modifier
-                    .width(4.dp)
-                    .fillMaxHeight()
-                    .background(
-                        accentColor,
-                        RoundedCornerShape(topStart = 16.dp, bottomStart = 16.dp)
-                    )
-            )
-            Column(
-                modifier = Modifier
-                    .weight(1f)
-                    .padding(horizontal = 16.dp, vertical = 14.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
+                    .fillMaxWidth()
+                    .background(headerGradient)
+                    .padding(horizontal = 16.dp, vertical = 12.dp)
             ) {
-                // Title + role badge row
                 Row(
                     modifier              = Modifier.fillMaxWidth(),
                     verticalAlignment     = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
+                    // Title
                     Text(
                         event.title,
                         fontWeight = FontWeight.Bold,
-                        fontSize   = 14.sp,
-                        color      = titleColor,
-                        modifier   = Modifier.weight(1f),
+                        fontSize   = 15.sp,
+                        color      = Color.White,
                         maxLines   = 2,
-                        overflow   = TextOverflow.Ellipsis
+                        overflow   = TextOverflow.Ellipsis,
+                        lineHeight = 20.sp,
+                        modifier   = Modifier.weight(1f)
                     )
-                    Spacer(Modifier.width(8.dp))
-                    // Role badge
-                    val roleColor = if (event.isOrganizer) PGreen900 else Color(0xFF059669)
-                    val roleBg    = if (event.isOrganizer) PGreen100 else Color(0xFFECFDF5)
+                    Spacer(Modifier.width(12.dp))
+                    // Role pill
                     Box(
                         modifier = Modifier
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(if (isPast) Color(0xFFE5E7EB) else roleBg)
-                            .padding(horizontal = 8.dp, vertical = 3.dp)
+                            .clip(RoundedCornerShape(20.dp))
+                            .background(Color.White.copy(alpha = 0.18f))
+                            .padding(horizontal = 10.dp, vertical = 4.dp)
                     ) {
                         Text(
                             if (event.isOrganizer) "Organizer" else "Joined",
                             fontSize   = 10.sp,
                             fontWeight = FontWeight.SemiBold,
-                            color      = if (isPast) PTextMuted else roleColor
+                            color      = Color.White
                         )
                     }
                 }
+            }
 
-                // Badges row — difficulty + past/upcoming + distance
-                Row(
+            // ── Card body ─────────────────────────────────────────────────
+            Column(
+                modifier            = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 14.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                // Badges row
+                androidx.compose.foundation.layout.FlowRow(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalAlignment     = Alignment.CenterVertically
+                    verticalArrangement   = Arrangement.spacedBy(6.dp)
                 ) {
-                    // Difficulty badge
+                    // Difficulty
                     Box(
-                        modifier = Modifier
+                        Modifier
                             .clip(RoundedCornerShape(6.dp))
-                            .background(if (isPast) Color(0xFFE5E7EB) else diffBg)
-                            .padding(horizontal = 7.dp, vertical = 3.dp)
+                            .background(if (isPast) Color(0xFFF3F4F6) else diffBg)
+                            .padding(horizontal = 8.dp, vertical = 4.dp)
                     ) {
                         Text(
                             event.difficulty,
@@ -1393,9 +1445,9 @@ private fun EventCard(event: JoinedEvent, formatEventDate: (Long) -> String, onT
                             color      = if (isPast) PTextMuted else diffFg
                         )
                     }
-                    // Past / Upcoming badge
+                    // Status
                     Box(
-                        modifier = Modifier
+                        Modifier
                             .clip(RoundedCornerShape(6.dp))
                             .background(
                                 when (timeStatus) {
@@ -1404,12 +1456,12 @@ private fun EventCard(event: JoinedEvent, formatEventDate: (Long) -> String, onT
                                     EventStatus.UPCOMING      -> Color(0xFFECFDF5)
                                 }
                             )
-                            .padding(horizontal = 7.dp, vertical = 3.dp)
+                            .padding(horizontal = 8.dp, vertical = 4.dp)
                     ) {
                         Text(
                             when (timeStatus) {
                                 EventStatus.ENDED         -> "Completed"
-                                EventStatus.HAPPENING_NOW -> "Happening Now"
+                                EventStatus.HAPPENING_NOW -> "🔴 Live Now"
                                 EventStatus.UPCOMING      -> "Upcoming"
                             },
                             fontSize   = 10.sp,
@@ -1422,25 +1474,55 @@ private fun EventCard(event: JoinedEvent, formatEventDate: (Long) -> String, onT
                         )
                     }
                     if (event.distanceKm > 0) {
-                        PChip(Icons.Default.Route, String.format("%.0f km", event.distanceKm))
+                        Box(
+                            Modifier
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(PGreen50)
+                                .padding(horizontal = 8.dp, vertical = 4.dp)
+                        ) {
+                            Row(
+                                verticalAlignment     = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Icon(Icons.Default.Route, null,
+                                    tint = PGreen700, modifier = Modifier.size(10.dp))
+                                Text(
+                                    String.format("%.0f km", event.distanceKm),
+                                    fontSize   = 10.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color      = PGreen700
+                                )
+                            }
+                        }
                     }
                 }
+
+                HorizontalDivider(color = PDivider, thickness = 0.5.dp)
 
                 // Date + time
                 Row(
                     verticalAlignment     = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    Icon(Icons.Default.CalendarMonth, null,
-                        tint     = if (isPast) PTextMuted else PGreen900,
-                        modifier = Modifier.size(13.dp))
+                    Box(
+                        Modifier
+                            .size(28.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(if (isPast) Color(0xFFF3F4F6) else PGreen50),
+                        Alignment.Center
+                    ) {
+                        Icon(Icons.Default.CalendarMonth, null,
+                            tint     = if (isPast) PTextMuted else PGreen900,
+                            modifier = Modifier.size(14.dp))
+                    }
                     Text(
                         buildString {
                             append(formatEventDate(event.date))
-                            if (event.time.isNotBlank()) append(" · ${event.time}")
+                            if (event.time.isNotBlank()) append("  ·  ${event.time}")
                         },
                         fontSize = 12.sp,
-                        color    = if (isPast) PTextMuted else PTextSecondary
+                        color    = if (isPast) PTextMuted else PTextSecondary,
+                        fontWeight = FontWeight.Medium
                     )
                 }
 
@@ -1450,16 +1532,24 @@ private fun EventCard(event: JoinedEvent, formatEventDate: (Long) -> String, onT
                         verticalAlignment     = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        Icon(Icons.Default.LocationOn, null,
-                            tint     = PTextMuted,
-                            modifier = Modifier.size(13.dp))
+                        Box(
+                            Modifier
+                                .size(28.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(Color(0xFFF3F4F6)),
+                            Alignment.Center
+                        ) {
+                            Icon(Icons.Default.LocationOn, null,
+                                tint     = PTextMuted,
+                                modifier = Modifier.size(14.dp))
+                        }
                         Text(
                             event.route,
-                            fontSize  = 12.sp,
-                            color     = PTextMuted,
-                            maxLines  = 1,
-                            overflow  = TextOverflow.Ellipsis,
-                            modifier  = Modifier.weight(1f)
+                            fontSize = 12.sp,
+                            color    = PTextMuted,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f)
                         )
                     }
                 }
@@ -1472,70 +1562,185 @@ private fun EventCard(event: JoinedEvent, formatEventDate: (Long) -> String, onT
 @Composable
 internal fun RideCard(ride: SavedRide, formatDuration: (Long) -> String) {
     Card(
-        modifier  = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-        shape     = RoundedCornerShape(16.dp),
+        modifier  = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp),
+        shape     = RoundedCornerShape(20.dp),
         colors    = CardDefaults.cardColors(containerColor = PBgSurface),
-        elevation = CardDefaults.cardElevation(2.dp)
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
     ) {
         Column(
-            modifier = Modifier.fillMaxWidth().padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+            modifier            = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(0.dp)
         ) {
-            Row(
-                modifier              = Modifier.fillMaxWidth(),
-                verticalAlignment     = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
+            // ── Header ────────────────────────────────────────────────────
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(
+                        Brush.horizontalGradient(listOf(PGreen900, PGreen700)),
+                        RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp)
+                    )
+                    .padding(horizontal = 16.dp, vertical = 14.dp)
             ) {
                 Row(
+                    modifier              = Modifier.fillMaxWidth(),
                     verticalAlignment     = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    modifier              = Modifier.weight(1f)
+                    horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Box(
-                        modifier = Modifier.size(40.dp).clip(RoundedCornerShape(12.dp))
-                            .background(PGreen50),
-                        contentAlignment = Alignment.Center
+                    Column(
+                        modifier            = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
-                        Icon(Icons.AutoMirrored.Filled.DirectionsBike, null,
-                            tint = PGreen900, modifier = Modifier.size(20.dp))
-                    }
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(ride.name, fontWeight = FontWeight.SemiBold, fontSize = 14.sp,
-                            color = PTextPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(
+                            ride.name,
+                            fontWeight = FontWeight.Bold,
+                            fontSize   = 15.sp,
+                            color      = Color.White,
+                            maxLines   = 1,
+                            overflow   = TextOverflow.Ellipsis
+                        )
                         if (ride.lastRidden.isNotBlank()) {
-                            Text(ride.lastRidden, fontSize = 11.sp, color = PTextMuted)
+                            Row(
+                                verticalAlignment     = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Icon(Icons.Default.History, null,
+                                    tint     = Color.White.copy(alpha = 0.6f),
+                                    modifier = Modifier.size(11.dp))
+                                Text(
+                                    ride.lastRidden,
+                                    fontSize = 11.sp,
+                                    color    = Color.White.copy(alpha = 0.65f)
+                                )
+                            }
                         }
                     }
+                    // Times ridden badge
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(2.dp)
+                    ) {
+                        Text(
+                            "×${ride.timesRidden}",
+                            fontSize   = 18.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            color      = Color.White
+                        )
+                        Text(
+                            "ridden",
+                            fontSize = 9.sp,
+                            color    = Color.White.copy(alpha = 0.6f),
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
                 }
-                Box(
-                    modifier = Modifier.clip(RoundedCornerShape(8.dp))
-                        .background(PGreen50).padding(horizontal = 8.dp, vertical = 3.dp)
+            }
+
+            // ── Stats grid ────────────────────────────────────────────────
+            Column(
+                modifier            = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 14.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                // Primary stats row
+                Row(
+                    modifier              = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Text("×${ride.timesRidden}", fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold, color = PGreen900)
+                    RideStatBlock(
+                        label = "Distance",
+                        value = String.format("%.1f", ride.distanceKm),
+                        unit  = "km",
+                        icon  = Icons.Default.Route,
+                        modifier = Modifier.weight(1f)
+                    )
+                    RideStatBlock(
+                        label = "Duration",
+                        value = formatDuration(ride.durationMin),
+                        unit  = "",
+                        icon  = Icons.Default.Timer,
+                        modifier = Modifier.weight(1f)
+                    )
+                    RideStatBlock(
+                        label = "Elevation",
+                        value = String.format("%.0f", ride.elevationM),
+                        unit  = "m ↑",
+                        icon  = Icons.Default.Terrain,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+
+                HorizontalDivider(color = PDivider, thickness = 0.5.dp)
+
+                // Speed row
+                Row(
+                    modifier              = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    RideStatBlock(
+                        label = "Avg Speed",
+                        value = String.format("%.1f", ride.avgSpeedKmh),
+                        unit  = "km/h",
+                        icon  = Icons.Default.Speed,
+                        modifier = Modifier.weight(1f)
+                    )
+                    RideStatBlock(
+                        label = "Max Speed",
+                        value = String.format("%.1f", ride.maxSpeedKmh),
+                        unit  = "km/h",
+                        icon  = Icons.Default.FlashOn,
+                        modifier = Modifier.weight(1f)
+                    )
+                    // Empty spacer to keep grid balanced
+                    Spacer(Modifier.weight(1f))
                 }
             }
+        }
+    }
+}
 
-            Row(
-                modifier              = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceEvenly
-            ) {
-                PMiniStat("Distance",  String.format("%.1f km", ride.distanceKm))
-                Box(Modifier.width(1.dp).height(28.dp).background(PDivider))
-                PMiniStat("Duration",  formatDuration(ride.durationMin))
-                Box(Modifier.width(1.dp).height(28.dp).background(PDivider))
-                PMiniStat("Avg speed", String.format("%.1f km/h", ride.avgSpeedKmh))
-            }
-
-            HorizontalDivider(color = PDivider, thickness = 0.5.dp)
-
-            Row(
-                modifier              = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceEvenly
-            ) {
-                PMiniStat("Max speed", String.format("%.1f km/h", ride.maxSpeedKmh))
-                Box(Modifier.width(1.dp).height(28.dp).background(PDivider))
-                PMiniStat("Elevation", String.format("%.0f m ↑", ride.elevationM))
+@Composable
+private fun RideStatBlock(
+    label: String,
+    value: String,
+    unit: String,
+    icon: ImageVector,
+    modifier: Modifier = Modifier
+) {
+    Column(
+        modifier            = modifier
+            .clip(RoundedCornerShape(12.dp))
+            .background(PBgCanvas)
+            .padding(horizontal = 10.dp, vertical = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        Row(
+            verticalAlignment     = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            Icon(icon, null, tint = PGreen700, modifier = Modifier.size(11.dp))
+            Text(label, fontSize = 10.sp, color = PTextMuted, fontWeight = FontWeight.Medium)
+        }
+        Row(
+            verticalAlignment     = Alignment.Bottom,
+            horizontalArrangement = Arrangement.spacedBy(2.dp)
+        ) {
+            Text(
+                value,
+                fontSize   = 14.sp,
+                fontWeight = FontWeight.ExtraBold,
+                color      = PTextPrimary
+            )
+            if (unit.isNotBlank()) {
+                Text(
+                    unit,
+                    fontSize   = 9.sp,
+                    color      = PTextMuted,
+                    fontWeight = FontWeight.Medium,
+                    modifier   = Modifier.padding(bottom = 1.dp)
+                )
             }
         }
     }

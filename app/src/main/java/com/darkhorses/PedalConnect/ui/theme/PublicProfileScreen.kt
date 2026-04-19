@@ -173,34 +173,60 @@ fun PublicProfileScreen(
 
     // ── Load events ───────────────────────────────────────────────────────────
     LaunchedEffect(targetUserName) {
+        // Firestore doesn't support OR queries on different fields in one snapshot,
+        // so we run two listeners and merge the results.
+        val merged = mutableMapOf<String, JoinedEvent>()
+
+        fun buildJoinedEvent(doc: com.google.firebase.firestore.DocumentSnapshot): JoinedEvent? {
+            if (doc.getString("status") == "rejected") return null
+            return JoinedEvent(
+                id          = doc.id,
+                title       = doc.getString("title")       ?: "Unnamed Ride",
+                route       = doc.getString("route")       ?: "",
+                date        = doc.getLong("date")          ?: 0L,
+                time        = doc.getString("time")        ?: "",
+                difficulty  = doc.getString("difficulty")  ?: "Easy",
+                distanceKm  = doc.getDouble("distanceKm") ?: 0.0,
+                isOrganizer = doc.getString("organizer")   == targetUserName,
+                status      = doc.getString("status")      ?: "approved"
+            )
+        }
+
+        fun pushUpdates() {
+            val now = System.currentTimeMillis()
+            val loaded = merged.values.toList()
+            events.clear()
+            events.addAll(
+                loaded.sortedWith(
+                    compareBy<JoinedEvent> { it.date < now }.thenByDescending { it.date }
+                )
+            )
+            totalEventCount = loaded.size
+            isLoadingEvents = false
+        }
+
+        // Query 1 — events where user is a participant
         db.collection("rideEvents")
             .whereArrayContains("participants", targetUserName)
             .addSnapshotListener { snap, _ ->
                 if (snap == null) { isLoadingEvents = false; return@addSnapshotListener }
-                val loaded = mutableListOf<JoinedEvent>()
                 for (doc in snap.documents) {
-                    if (doc.getString("status") == "rejected") continue
-                    loaded.add(JoinedEvent(
-                        id          = doc.id,
-                        title       = doc.getString("title")       ?: "Unnamed Ride",
-                        route       = doc.getString("route")       ?: "",
-                        date        = doc.getLong("date")          ?: 0L,
-                        time        = doc.getString("time")        ?: "",
-                        difficulty  = doc.getString("difficulty")  ?: "Easy",
-                        distanceKm  = doc.getDouble("distanceKm") ?: 0.0,
-                        isOrganizer = doc.getString("organizer")   == targetUserName,
-                        status      = doc.getString("status")      ?: "approved"
-                    ))
+                    val event = buildJoinedEvent(doc) ?: continue
+                    merged[doc.id] = event
                 }
-                val now = System.currentTimeMillis()
-                events.clear()
-                events.addAll(
-                    loaded.sortedWith(
-                        compareBy<JoinedEvent> { it.date < now }.thenByDescending { it.date }
-                    )
-                )
-                totalEventCount = loaded.size
-                isLoadingEvents = false
+                pushUpdates()
+            }
+
+        // Query 2 — events where user is the organizer (may not be in participants array)
+        db.collection("rideEvents")
+            .whereEqualTo("organizer", targetUserName)
+            .addSnapshotListener { snap, _ ->
+                if (snap == null) return@addSnapshotListener
+                for (doc in snap.documents) {
+                    val event = buildJoinedEvent(doc) ?: continue
+                    merged[doc.id] = event
+                }
+                pushUpdates()
             }
     }
 
@@ -253,6 +279,33 @@ fun PublicProfileScreen(
                 db.collection("rideEvents").document(event.id)
                     .update("attendees",
                         com.google.firebase.firestore.FieldValue.arrayUnion(currentUserName))
+                    .addOnSuccessListener {
+                        db.collection("rideEvents").document(event.id)
+                            .get()
+                            .addOnSuccessListener { doc ->
+                                if (doc != null && doc.exists()) {
+                                    selectedEvent = RideEvent(
+                                        id              = doc.id,
+                                        title           = doc.getString("title")           ?: "",
+                                        description     = doc.getString("description")     ?: "",
+                                        route           = doc.getString("route")           ?: "",
+                                        date            = doc.getLong("date")              ?: 0L,
+                                        time            = doc.getString("time")            ?: "",
+                                        organizer       = doc.getString("organizer")       ?: "",
+                                        participants    = (doc.get("participants") as? List<*>)?.filterIsInstance<String>() ?: emptyList(),
+                                        maxParticipants = (doc.getLong("maxParticipants")  ?: 0L).toInt(),
+                                        difficulty      = doc.getString("difficulty")      ?: "Easy",
+                                        distanceKm      = doc.getDouble("distanceKm")      ?: 0.0,
+                                        attendees       = (doc.get("attendees") as? List<*>)?.filterIsInstance<String>() ?: emptyList(),
+                                        checkInOpen     = doc.getBoolean("checkInOpen")    ?: false,
+                                        status          = doc.getString("status")          ?: "approved",
+                                        durationHours   = (doc.getLong("durationHours")    ?: 0L).toInt(),
+                                        isEdited        = doc.getBoolean("isEdited")       ?: false,
+                                        editedAt        = doc.getLong("editedAt")          ?: 0L
+                                    )
+                                }
+                            }
+                    }
             },
             onToggleAttendance  = {},
             onToggleCheckInOpen = {},
@@ -725,7 +778,33 @@ fun PublicProfileScreen(
                         PPEventCard(
                             event           = event,
                             formatEventDate = ::formatEventDate,
-                            onTap           = { selectedEvent = rideEvent }
+                            onTap           = {
+                                db.collection("rideEvents").document(event.id)
+                                    .get()
+                                    .addOnSuccessListener { doc ->
+                                        if (doc != null && doc.exists()) {
+                                            selectedEvent = RideEvent(
+                                                id              = doc.id,
+                                                title           = doc.getString("title")           ?: "",
+                                                description     = doc.getString("description")     ?: "",
+                                                route           = doc.getString("route")           ?: "",
+                                                date            = doc.getLong("date")              ?: 0L,
+                                                time            = doc.getString("time")            ?: "",
+                                                organizer       = doc.getString("organizer")       ?: "",
+                                                participants    = (doc.get("participants") as? List<*>)?.filterIsInstance<String>() ?: emptyList(),
+                                                maxParticipants = (doc.getLong("maxParticipants")  ?: 0L).toInt(),
+                                                difficulty      = doc.getString("difficulty")      ?: "Easy",
+                                                distanceKm      = doc.getDouble("distanceKm")      ?: 0.0,
+                                                attendees       = (doc.get("attendees") as? List<*>)?.filterIsInstance<String>() ?: emptyList(),
+                                                checkInOpen     = doc.getBoolean("checkInOpen")    ?: false,
+                                                status          = doc.getString("status")          ?: "approved",
+                                                durationHours   = (doc.getLong("durationHours")    ?: 0L).toInt(),
+                                                isEdited        = doc.getBoolean("isEdited")       ?: false,
+                                                editedAt        = doc.getLong("editedAt")          ?: 0L
+                                            )
+                                        }
+                                    }
+                            }
                         )
                         Spacer(Modifier.height(12.dp))
                     }
@@ -821,119 +900,194 @@ private fun PPEventCard(
     val timeStatus = getEventTimeStatus(rideEvent)
     val isPast     = timeStatus == EventStatus.ENDED
 
+    val headerGradient = if (isPast)
+        Brush.horizontalGradient(listOf(Color(0xFF6B7280), Color(0xFF9CA3AF)))
+    else if (event.isOrganizer)
+        Brush.horizontalGradient(listOf(PPGreen950, PPGreen800))
+    else
+        Brush.horizontalGradient(listOf(PPGreen900, PPGreen700))
+
     Card(
         modifier  = Modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp)
             .clickable { onTap() },
         shape     = RoundedCornerShape(16.dp),
-        colors    = CardDefaults.cardColors(
-            containerColor = if (isPast) Color(0xFFF3F4F6) else PPBgSurface
-        ),
-        elevation = CardDefaults.cardElevation(if (isPast) 0.dp else 3.dp)
+        colors    = CardDefaults.cardColors(containerColor = PPBgSurface),
+        elevation = CardDefaults.cardElevation(
+            defaultElevation = if (isPast) 0.dp else 2.dp,
+            pressedElevation = 4.dp
+        )
     ) {
-        Row(Modifier.fillMaxWidth()) {
+        Column {
+            // ── Gradient header ───────────────────────────────────────────
             Box(
-                Modifier.width(4.dp).fillMaxHeight()
-                    .background(
-                        if (isPast) Color(0xFF9CA3AF) else diffFg,
-                        RoundedCornerShape(topStart = 16.dp, bottomStart = 16.dp)
-                    )
-            )
-            Column(
-                Modifier.weight(1f).padding(horizontal = 16.dp, vertical = 14.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(headerGradient)
+                    .padding(horizontal = 16.dp, vertical = 12.dp)
             ) {
                 Row(
-                    Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment     = Alignment.CenterVertically
+                    modifier              = Modifier.fillMaxWidth(),
+                    verticalAlignment     = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     Text(
                         event.title,
-                        fontWeight = FontWeight.Bold, fontSize = 14.sp,
-                        color      = if (isPast) PPTextMuted else PPTextPrimary,
-                        modifier   = Modifier.weight(1f),
-                        maxLines   = 2, overflow = TextOverflow.Ellipsis
+                        fontWeight = FontWeight.Bold,
+                        fontSize   = 15.sp,
+                        color      = Color.White,
+                        maxLines   = 2,
+                        overflow   = TextOverflow.Ellipsis,
+                        lineHeight = 20.sp,
+                        modifier   = Modifier.weight(1f)
                     )
-                    Spacer(Modifier.width(8.dp))
-                    val roleColor = if (event.isOrganizer) PPGreen900 else Color(0xFF059669)
-                    val roleBg    = if (event.isOrganizer) PPGreen100 else Color(0xFFECFDF5)
+                    Spacer(Modifier.width(12.dp))
                     Box(
-                        Modifier.clip(RoundedCornerShape(8.dp))
-                            .background(if (isPast) Color(0xFFE5E7EB) else roleBg)
-                            .padding(horizontal = 8.dp, vertical = 3.dp)
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(20.dp))
+                            .background(Color.White.copy(alpha = 0.18f))
+                            .padding(horizontal = 10.dp, vertical = 4.dp)
                     ) {
                         Text(
                             if (event.isOrganizer) "Organizer" else "Joined",
-                            fontSize = 10.sp, fontWeight = FontWeight.SemiBold,
-                            color    = if (isPast) PPTextMuted else roleColor
+                            fontSize   = 10.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color      = Color.White
                         )
                     }
                 }
-                Row(
+            }
+
+            // ── Card body ─────────────────────────────────────────────────
+            Column(
+                modifier            = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 14.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                // Badges row
+                androidx.compose.foundation.layout.FlowRow(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalAlignment     = Alignment.CenterVertically
+                    verticalArrangement   = Arrangement.spacedBy(6.dp)
                 ) {
                     Box(
-                        Modifier.clip(RoundedCornerShape(6.dp))
-                            .background(if (isPast) Color(0xFFE5E7EB) else diffBg)
-                            .padding(horizontal = 7.dp, vertical = 3.dp)
+                        Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(if (isPast) Color(0xFFF3F4F6) else diffBg)
+                            .padding(horizontal = 8.dp, vertical = 4.dp)
                     ) {
-                        Text(event.difficulty, fontSize = 10.sp,
+                        Text(
+                            event.difficulty,
+                            fontSize   = 10.sp,
                             fontWeight = FontWeight.SemiBold,
-                            color = if (isPast) PPTextMuted else diffFg)
+                            color      = if (isPast) PPTextMuted else diffFg
+                        )
                     }
                     Box(
-                        Modifier.clip(RoundedCornerShape(6.dp))
-                            .background(when (timeStatus) {
-                                EventStatus.ENDED         -> Color(0xFFF3F4F6)
-                                EventStatus.HAPPENING_NOW -> Color(0xFFFEF3C7)
-                                EventStatus.UPCOMING      -> Color(0xFFECFDF5)
-                            })
-                            .padding(horizontal = 7.dp, vertical = 3.dp)
+                        Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(
+                                when (timeStatus) {
+                                    EventStatus.ENDED         -> Color(0xFFF3F4F6)
+                                    EventStatus.HAPPENING_NOW -> Color(0xFFFEF3C7)
+                                    EventStatus.UPCOMING      -> Color(0xFFECFDF5)
+                                }
+                            )
+                            .padding(horizontal = 8.dp, vertical = 4.dp)
                     ) {
                         Text(
                             when (timeStatus) {
                                 EventStatus.ENDED         -> "Completed"
-                                EventStatus.HAPPENING_NOW -> "Happening Now"
+                                EventStatus.HAPPENING_NOW -> "🔴 Live Now"
                                 EventStatus.UPCOMING      -> "Upcoming"
                             },
-                            fontSize = 10.sp, fontWeight = FontWeight.SemiBold,
-                            color    = when (timeStatus) {
+                            fontSize   = 10.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color      = when (timeStatus) {
                                 EventStatus.ENDED         -> Color(0xFF6B7280)
                                 EventStatus.HAPPENING_NOW -> Color(0xFF92400E)
                                 EventStatus.UPCOMING      -> Color(0xFF059669)
                             }
                         )
                     }
+                    if (event.distanceKm > 0) {
+                        Box(
+                            Modifier
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(PPGreen50)
+                                .padding(horizontal = 8.dp, vertical = 4.dp)
+                        ) {
+                            Row(
+                                verticalAlignment     = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Icon(Icons.Default.Route, null,
+                                    tint     = PPGreen700,
+                                    modifier = Modifier.size(10.dp))
+                                Text(
+                                    String.format("%.0f km", event.distanceKm),
+                                    fontSize   = 10.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color      = PPGreen700
+                                )
+                            }
+                        }
+                    }
                 }
+
+                HorizontalDivider(color = PPDivider, thickness = 0.5.dp)
+
+                // Date + time
                 Row(
                     verticalAlignment     = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    Icon(Icons.Default.CalendarMonth, null,
-                        tint     = if (isPast) PPTextMuted else PPGreen900,
-                        modifier = Modifier.size(13.dp))
+                    Box(
+                        Modifier
+                            .size(28.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(if (isPast) Color(0xFFF3F4F6) else PPGreen50),
+                        Alignment.Center
+                    ) {
+                        Icon(Icons.Default.CalendarMonth, null,
+                            tint     = if (isPast) PPTextMuted else PPGreen900,
+                            modifier = Modifier.size(14.dp))
+                    }
                     Text(
                         buildString {
                             append(formatEventDate(event.date))
-                            if (event.time.isNotBlank()) append(" · ${event.time}")
+                            if (event.time.isNotBlank()) append("  ·  ${event.time}")
                         },
-                        fontSize = 12.sp,
-                        color    = if (isPast) PPTextMuted else PPTextSecondary
+                        fontSize   = 12.sp,
+                        fontWeight = FontWeight.Medium,
+                        color      = if (isPast) PPTextMuted else PPTextSecondary
                     )
                 }
+
+                // Route
                 if (event.route.isNotBlank()) {
                     Row(
                         verticalAlignment     = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        Icon(Icons.Default.LocationOn, null,
-                            tint = PPTextMuted, modifier = Modifier.size(13.dp))
+                        Box(
+                            Modifier
+                                .size(28.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(Color(0xFFF3F4F6)),
+                            Alignment.Center
+                        ) {
+                            Icon(Icons.Default.LocationOn, null,
+                                tint     = PPTextMuted,
+                                modifier = Modifier.size(14.dp))
+                        }
                         Text(
-                            event.route, fontSize = 12.sp, color = PPTextMuted,
-                            maxLines = 1, overflow = TextOverflow.Ellipsis,
+                            event.route,
+                            fontSize = 12.sp,
+                            color    = PPTextMuted,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.weight(1f)
                         )
                     }

@@ -1369,13 +1369,15 @@ internal fun EventDetailSheet(
                             mutableStateOf(event.organizer)
                         }
                         LaunchedEffect(event.organizer) {
-                            db.collection("users").whereEqualTo("username", event.organizer)
-                                .limit(1).get()
-                                .addOnSuccessListener { snap ->
-                                    organizerDisplay = snap.documents.firstOrNull()
-                                        ?.getString("displayName")
-                                        ?.takeIf { it.isNotBlank() } ?: event.organizer
-                                }
+                            try {
+                                val snap = db.collection("users")
+                                    .whereEqualTo("username", event.organizer)
+                                    .limit(1).get().await()
+                                val name = snap.documents.firstOrNull()
+                                    ?.getString("displayName")
+                                    ?.takeIf { it.isNotBlank() }
+                                if (name != null) organizerDisplay = name
+                            } catch (_: Exception) { }
                         }
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
