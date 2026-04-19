@@ -1188,8 +1188,11 @@ private fun AvatarStack(participants: List<String>, maxParticipants: Int) {
     val profiles = remember(participants) {
         mutableStateMapOf<String, UserProfile>()
     }
-    LaunchedEffect(participants) {
-        participants.take(4).forEach { username ->
+    val avatarKey = remember(participants) {
+        participants.joinToString(",")
+    }
+    LaunchedEffect(avatarKey) {
+        participants.forEach { username ->
             if (!profiles.containsKey(username)) {
                 val profile = fetchUserProfile(username, db)
                 profiles[username] = profile
@@ -1512,7 +1515,10 @@ internal fun EventDetailSheet(
                     val participantProfiles = remember(event.participants) {
                         mutableStateMapOf<String, UserProfile>()
                     }
-                    LaunchedEffect(event.participants) {
+                    val participantKey = remember(event.participants) {
+                        event.participants.joinToString(",")
+                    }
+                    LaunchedEffect(participantKey) {
                         event.participants.forEach { username ->
                             if (!participantProfiles.containsKey(username)) {
                                 val profile = fetchUserProfile(username, db)
