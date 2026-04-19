@@ -747,11 +747,11 @@ fun RidingEventsScreen(
             onToggleCheckInOpen = { toggleCheckInOpen(event) },
             onDismiss           = { selectedEvent = null },
             onNavigate          = { destination ->
+                val prefs = context.getSharedPreferences("PedalConnectPrefs", android.content.Context.MODE_PRIVATE)
+                prefs.edit().putString("pending_destination", destination).apply()
                 navController.navigate("home/$userName") {
                     popUpTo("home/$userName") { inclusive = false }
                 }
-                val prefs = context.getSharedPreferences("PedalConnectPrefs", android.content.Context.MODE_PRIVATE)
-                prefs.edit().putString("pending_destination", destination).apply()
             },
             onViewProfile       = { targetUser ->
                 if (targetUser != userName)
@@ -1385,7 +1385,7 @@ internal fun EventDetailSheet(
                                 tint = Color.White.copy(alpha = 0.7f),
                                 modifier = Modifier.size(13.dp))
                             Text(
-                                "Organised by $organizerDisplay",
+                                "Organized by $organizerDisplay",
                                 fontSize = 13.sp,
                                 color    = Color.White.copy(alpha = 0.7f)
                             )
@@ -1670,7 +1670,7 @@ internal fun EventDetailSheet(
                                         Icon(Icons.Default.Map, null,
                                             tint = Color(0xFF4285F4),
                                             modifier = Modifier.size(14.dp))
-                                        Text("View on Maps", fontSize = 12.sp,
+                                        Text("View on Google Maps", fontSize = 12.sp,
                                             color = Color(0xFF4285F4),
                                             fontWeight = FontWeight.SemiBold)
                                     }
@@ -2341,7 +2341,7 @@ private fun CreateEventSheet(
                     Icon(Icons.Default.DirectionsBike, null, tint = Green900, modifier = Modifier.size(22.dp)) }
                 Column {
                     Text("Plan a ride", fontWeight = FontWeight.Bold, fontSize = 20.sp, color = TextPrimary)
-                    Text("Organise a group ride for the community", fontSize = 13.sp, color = TextSecondary)
+                    Text("Organize a group ride for the community", fontSize = 13.sp, color = TextSecondary)
                 }
             }
 
