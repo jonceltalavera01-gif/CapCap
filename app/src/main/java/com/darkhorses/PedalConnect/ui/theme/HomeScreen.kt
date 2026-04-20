@@ -96,6 +96,7 @@ import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.zIndex
 import kotlinx.coroutines.tasks.await
 
 // ── Colour tokens ─────────────────────────────────────────────────────────────
@@ -377,6 +378,8 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
     var sosHoldProgress           by remember { mutableFloatStateOf(0f) }
     var isHoldingSos              by remember { mutableStateOf(false) }
 
+
+
     LaunchedEffect(userName) {
         FirebaseFirestore.getInstance()
             .collection("users")
@@ -493,10 +496,20 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
     var isHeadingMode       by remember { mutableStateOf(false) }
     var gpsBearing          by remember { mutableFloatStateOf(0f) }
     var gpsSpeed            by remember { mutableFloatStateOf(0f) }
+    var mapRotation         by remember { mutableFloatStateOf(0f) }
+    var sensorHeadingState  by remember { mutableStateOf<androidx.compose.runtime.State<Float>?>(null) }
+    val fusedHeading by rememberFusedHeading(
+        gpsBearing = gpsBearing,
+        gpsSpeed   = gpsSpeed,
+        isActive   = isFollowingLocation
+    )
     var alertsFirstLoad     by remember { mutableStateOf(true) }
     var gpsFirstFix         by remember { mutableStateOf(false) }
     val isLocationReady     by remember { derivedStateOf { !alertsFirstLoad && gpsFirstFix } }
-    var showSearchOverlay   by remember { mutableStateOf(false) }
+    var showSearchOverlay      by remember { mutableStateOf(false) }
+    var bannerAlert            by remember { mutableStateOf<NearbyAlertInfo?>(null) }
+    val sessionStartMs         = remember { System.currentTimeMillis() }
+    val shownAlertIds          = remember { mutableSetOf<String>() }
 
     // ── Proximity / shops state ───────────────────────────────────────────────
     var userGeoPoint        by remember { mutableStateOf<GeoPoint?>(null) }
@@ -687,6 +700,10 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
 
         // Always update local UI state regardless of sharing preference
         userGeoPoint = loc
+        prefs.edit()
+            .putFloat("last_lat", loc.latitude.toFloat())
+            .putFloat("last_lon", loc.longitude.toFloat())
+            .apply()
 
         // Stop here if user has disabled location sharing
         if (!locationSharingEnabled) return
@@ -797,6 +814,34 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
 // Replaces the snapshot listener + isFirstFix bulk read combo.
 // Polls every 8 seconds once GPS is available so all devices converge
 // on the same view regardless of open order or movement.
+    // ── Nearby alert banner trigger ───────────────────────────────────────────
+    LaunchedEffect(alerts.size) {
+        val center = userGeoPoint ?: myLocationOverlay?.myLocation ?: return@LaunchedEffect
+        alerts.forEach { alert ->
+            // Skip own alerts, already shown, pre-session, or outside 3km
+            if (alert.riderName.trim().lowercase() == userName.trim().lowercase()) return@forEach
+            if (alert.id in shownAlertIds) return@forEach
+            if (alert.createdAt < sessionStartMs) return@forEach
+            val dist = haversineKm(
+                center.latitude, center.longitude,
+                alert.coordinates.latitude, alert.coordinates.longitude
+            )
+            if (dist > 3.0) return@forEach
+            shownAlertIds.add(alert.id)
+            val distText = if (dist < 1.0)
+                "${(dist * 1000).toInt()}m away"
+            else
+                String.format("%.1fkm away", dist)
+            val displayName = alert.riderDisplayName.takeIf { it.isNotBlank() } ?: alert.riderName
+            bannerAlert = NearbyAlertInfo(
+                alertId          = alert.id,
+                riderDisplayName = displayName,
+                emergencyType    = alert.emergencyType,
+                distanceText     = distText
+            )
+        }
+    }
+
     LaunchedEffect(Unit) {
         while (true) {
             val center = userGeoPoint ?: myLocationOverlay?.myLocation
@@ -884,6 +929,10 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
         Configuration.getInstance().load(context, context.getSharedPreferences("osmdroid", 0))
         Configuration.getInstance().userAgentValue = context.packageName
     }
+
+    // Restore last known position so map opens near the user instead of Manila
+    val lastKnownLat = prefs.getFloat("last_lat", 14.5995f).toDouble()
+    val lastKnownLon = prefs.getFloat("last_lon", 120.9842f).toDouble()
 
     val requestPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -1304,9 +1353,8 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
                     mapViewRef?.removeCallbacks(resetScrollFlag)
                     mapViewRef?.controller?.animateTo(gp, targetZoom, 800L)
                     mapViewRef?.postDelayed(resetScrollFlag, 900L)
-                    val heading = if (rawSpeedKmh >= 5f && location.hasBearing())
-                        location.bearing else gpsBearing
-                    applyHeadingToMap(mapViewRef, heading, rawSpeedKmh >= 5f)
+                    // Use fused heading (compass + GPS blend) — same as Google Maps
+                    applyHeadingToMap(mapViewRef, fusedHeading, true) { mapRotation = it }
                 }
 
                 // ── State updates — always run ────────────────────────────────
@@ -1315,11 +1363,13 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
                 gpsSpeed            = rawSpeedKmh
                 if (location.hasBearing() && rawSpeedKmh >= 5f) gpsBearing = location.bearing
                 if (isTracking && rawSpeedKmh > maxSpeedKmh) maxSpeedKmh = rawSpeedKmh
-                if (isTracking && location.hasAltitude()) {
+                if (isTracking && location.hasAltitude() && location.accuracy < 20f) {
                     val alt = location.altitude
                     if (lastAltitude != Double.MIN_VALUE) {
                         val diff = alt - lastAltitude
-                        if (diff > 4.0) elevationGainMeters += diff
+                        // 8m threshold filters barometric noise and GPS altitude jitter
+                        // while still capturing meaningful climbs
+                        if (diff > 8.0) elevationGainMeters += diff
                     }
                     lastAltitude = alt
                 }
@@ -1484,7 +1534,7 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
                                 setTileSource(TileSourceFactory.MAPNIK)
                                 setMultiTouchControls(true)
                                 controller.setZoom(15.0)
-                                controller.setCenter(GeoPoint(14.5995, 120.9842))
+                                controller.setCenter(GeoPoint(lastKnownLat, lastKnownLon))
                                 var isProgrammaticScroll = false
                                 addMapListener(object : org.osmdroid.events.MapListener {
                                     override fun onScroll(event: org.osmdroid.events.ScrollEvent?): Boolean {
@@ -1494,7 +1544,7 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
                                             // No disableFollowLocation() needed —
                                             // OSMdroid follow was never enabled
                                         }
-                                        applyHeadingToMap(mapViewRef, 0f, false)
+                                        applyHeadingToMap(mapViewRef, 0f, false) { mapRotation = it }
                                         return false
                                     }
                                     override fun onZoom(event: org.osmdroid.events.ZoomEvent?): Boolean = false
@@ -1792,9 +1842,8 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
                             }
                         }
                         RecenterHeadingButton(
-                            isFollowingLocation = isFollowingLocation,
-                            isHeadingMode       = isHeadingMode,
-                            currentHeading      = gpsBearing,
+                            isFollowingLocation  = isFollowingLocation,
+                            mapRotationDegrees   = mapRotation,
                             onClick = {
                                 val loc = userGeoPoint ?: myLocationOverlay?.myLocation
                                 if (loc != null) {
@@ -1803,8 +1852,9 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
                                     mapViewRef?.controller?.animateTo(loc, 17.0, 800L)
                                     mapViewRef?.postDelayed(resetScrollFlag, 900L)
                                     isFollowingLocation = true
+                                    // Restore correct heading based on current speed
                                     val heading = if (gpsSpeed >= 5f) gpsBearing else 0f
-                                    applyHeadingToMap(mapViewRef, heading, gpsSpeed >= 5f)
+                                    applyHeadingToMap(mapViewRef, heading, gpsSpeed >= 5f) { mapRotation = it }
                                 }
                             }
                         )
@@ -2840,6 +2890,27 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
                             } // end if (!isAdmin)
                         } // end if (!isTracking && totalDistance == 0.0)
                     } // end bottom Column
+
+                    // ── Nearby alert banner ───────────────────────────────────
+                    if (!showSearchOverlay) bannerAlert?.let { banner ->
+                        Box(
+                            modifier = Modifier
+                                .align(Alignment.TopCenter)
+                                .fillMaxWidth()
+                                .windowInsetsPadding(WindowInsets.statusBars)
+                                .padding(top = 10.dp, start = 16.dp, end = 16.dp)
+                                .zIndex(10f)
+                        ) {
+                            NearbyAlertBanner(
+                                alert     = banner,
+                                onTap     = {
+                                    bannerAlert = null
+                                    selectedItem = 3
+                                },
+                                onDismiss = { bannerAlert = null }
+                            )
+                        }
+                    }
 
                     // ── Shop detail bottom sheet ──────────────────────────────
                     if (!isAdmin) selectedShop?.let { shop ->

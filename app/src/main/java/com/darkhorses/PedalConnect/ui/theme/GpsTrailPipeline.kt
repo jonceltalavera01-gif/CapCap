@@ -187,8 +187,11 @@ class GpsTrailPipeline {
 
             // If this point reverses direction by more than 90°, it is likely jitter
             // bouncing back. Require 2 consistent points before committing.
-            if (angleDiff > 90f) {
+            if (angleDiff > 135f) {
                 consistentMoveCount = 0
+                // Clear bearing history so the new direction builds up without
+                // the old direction fighting it
+                recentBearings.clear()
                 return PipelineResult.Rejected(RejectionReason.STATIONARY_DRIFT)
             }
 
