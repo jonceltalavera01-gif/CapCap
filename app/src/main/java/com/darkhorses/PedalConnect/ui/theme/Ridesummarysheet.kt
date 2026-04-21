@@ -563,7 +563,7 @@ fun RideSummarySheet(
     val maxLon = points.maxOf { it.longitude }
     val latRange = (maxLat - minLat).takeIf { it > 0 } ?: 0.001
     val lonRange = (maxLon - minLon).takeIf { it > 0 } ?: 0.001
-    val padding = 60f
+     val padding = 120f
 
     fun toX(lon: Double) = (padding + ((lon - minLon) / lonRange) * (width - 2 * padding)).toFloat()
     fun toY(lat: Double) = (padding + ((maxLat - lat) / latRange) * (height - 2 * padding)).toFloat()
@@ -590,7 +590,13 @@ fun RideSummarySheet(
         style = android.graphics.Paint.Style.FILL
         isAntiAlias = true
     }
-    canvas.drawCircle(toX(points.first().longitude), toY(points.first().latitude), 14f, startPaint)
+     canvas.drawCircle(toX(points.first().longitude), toY(points.first().latitude), 16f, startPaint)
+     canvas.drawCircle(toX(points.first().longitude), toY(points.first().latitude), 16f, android.graphics.Paint().apply {
+         color = android.graphics.Color.WHITE
+         style = android.graphics.Paint.Style.STROKE
+         strokeWidth = 3f
+         isAntiAlias = true
+     })
 
     // End marker — red circle
     val endPaint = android.graphics.Paint().apply {
@@ -598,7 +604,13 @@ fun RideSummarySheet(
         style = android.graphics.Paint.Style.FILL
         isAntiAlias = true
     }
-    canvas.drawCircle(toX(points.last().longitude), toY(points.last().latitude), 14f, endPaint)
+     canvas.drawCircle(toX(points.last().longitude), toY(points.last().latitude), 16f, endPaint)
+     canvas.drawCircle(toX(points.last().longitude), toY(points.last().latitude), 16f, android.graphics.Paint().apply {
+         color = android.graphics.Color.WHITE
+         style = android.graphics.Paint.Style.STROKE
+         strokeWidth = 3f
+         isAntiAlias = true
+     })
 
     return bitmap
 }

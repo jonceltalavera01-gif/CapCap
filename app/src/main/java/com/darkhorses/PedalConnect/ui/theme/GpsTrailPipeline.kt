@@ -97,7 +97,6 @@ class GpsTrailPipeline {
      * Used to detect directional consistency: real cycling has consistent
      * bearing, stationary jitter is random in all directions.
      */
-    private val recentBearings = ArrayDeque<Float>(3)
 
     /**
      * Consecutive consistent-direction accepts — resets on direction reversal.
@@ -170,47 +169,10 @@ class GpsTrailPipeline {
             return PipelineResult.Rejected(RejectionReason.STATIONARY_DRIFT)
         }
 
-        // ── Stage 4b: Bearing consistency gate ───────────────────────────────
-        // Real cycling = consistent forward direction.
-        // Stationary jitter = random bearings that reverse constantly.
-        // We compute the bearing from last committed point to this filtered point
-        // and check if it is consistent with recent movement history.
-        val prevPoint = lastCommittedPoint
-        if (prevPoint != null && recentBearings.size >= 2) {
-            val currentBearing = bearingDeg(
-                prevPoint.latitude, prevPoint.longitude,
-                filtLat, filtLon
-            )
-            // Average of recent bearings as reference direction
-            val avgBearing = recentBearings.average().toFloat()
-            val angleDiff  = bearingDiffDeg(currentBearing, avgBearing)
-
-            // If this point reverses direction by more than 90°, it is likely jitter
-            // bouncing back. Require 2 consistent points before committing.
-            if (angleDiff > 135f) {
-                consistentMoveCount = 0
-                // Clear bearing history so the new direction builds up without
-                // the old direction fighting it
-                recentBearings.clear()
-                return PipelineResult.Rejected(RejectionReason.STATIONARY_DRIFT)
-            }
-
-            // Update bearing history
-            if (recentBearings.size >= 3) recentBearings.removeFirst()
-            recentBearings.addLast(currentBearing)
-            consistentMoveCount++
-        } else {
-            // Not enough history yet — compute and store bearing, accept point
-            if (prevPoint != null) {
-                val bearing = bearingDeg(
-                    prevPoint.latitude, prevPoint.longitude,
-                    filtLat, filtLon
-                )
-                if (recentBearings.size >= 3) recentBearings.removeFirst()
-                recentBearings.addLast(bearing)
-            }
-            consistentMoveCount++
-        }
+        // Bearing consistency gate removed — the accuracy gate, Kalman filter,
+        // and minimum distance gate already handle stationary drift adequately.
+        // The bearing gate was causing trail dropouts on hard turns.
+        consistentMoveCount++
 
         // ── Stage 5: Segmentation ─────────────────────────────────────────────
         val nowMs      = location.time
@@ -293,7 +255,6 @@ class GpsTrailPipeline {
         lastCommittedMs    = 0L
         lastRedrawMs       = 0L
         totalDistanceM     = 0.0
-        recentBearings.clear()
         consistentMoveCount = 0
         kalman.reset()
     }
@@ -307,25 +268,6 @@ class GpsTrailPipeline {
         val a    = sin(dLat / 2).pow(2) +
                 cos(Math.toRadians(lat1)) * cos(Math.toRadians(lat2)) * sin(dLon / 2).pow(2)
         return R * 2 * atan2(sqrt(a), sqrt(1 - a))
-    }
-
-    /** Compass bearing in degrees (0–360) from point 1 → point 2. */
-    private fun bearingDeg(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Float {
-        val dLon = Math.toRadians(lon2 - lon1)
-        val lat1R = Math.toRadians(lat1)
-        val lat2R = Math.toRadians(lat2)
-        val x = sin(dLon) * cos(lat2R)
-        val y = cos(lat1R) * sin(lat2R) - sin(lat1R) * cos(lat2R) * cos(dLon)
-        return ((Math.toDegrees(atan2(x, y)).toFloat() + 360f) % 360f)
-    }
-
-    /**
-     * Shortest angular difference between two bearings (0–180°).
-     * e.g. bearingDiffDeg(350f, 10f) = 20f, not 340f.
-     */
-    private fun bearingDiffDeg(a: Float, b: Float): Float {
-        val diff = ((a - b + 180f + 360f) % 360f) - 180f
-        return abs(diff)
     }
 }
 

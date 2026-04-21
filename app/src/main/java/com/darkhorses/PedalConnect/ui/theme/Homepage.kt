@@ -4757,18 +4757,22 @@
                         }
 
                         // ── Route preview — static image if available, canvas fallback ──
-                        val routeBitmapFallback = remember(post.id) {
-                            if (post.routeImageUrl.isBlank() && post.polyline.size >= 2) {
-                                val pts = post.polyline.mapNotNull { pt ->
-                                    val lat = pt["lat"] ?: return@mapNotNull null
-                                    val lon = pt["lon"] ?: return@mapNotNull null
-                                    GeoPoint(lat, lon)
+                        var routeBitmap by remember(post.id) { mutableStateOf<android.graphics.Bitmap?>(null) }
+
+                        LaunchedEffect(post.id) {
+                            if (post.polyline.size >= 2) {
+                                routeBitmap = withContext(Dispatchers.Default) {
+                                    val pts = post.polyline.mapNotNull { pt ->
+                                        val lat = pt["lat"] ?: return@mapNotNull null
+                                        val lon = pt["lon"] ?: return@mapNotNull null
+                                        GeoPoint(lat, lon)
+                                    }
+                                    if (pts.size >= 2) renderRouteToBitmap(pts) else null
                                 }
-                                if (pts.size >= 2) renderRouteToBitmap(pts) else null
-                            } else null
+                            }
                         }
 
-                        if (post.routeImageUrl.isNotBlank() || routeBitmapFallback != null) {
+                        if (routeBitmap != null) {
                             Box(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -4781,21 +4785,12 @@
                                         indication = null
                                     ) { showRideDetail = true }
                             ) {
-                                if (post.routeImageUrl.isNotBlank()) {
-                                    coil.compose.AsyncImage(
-                                        model = post.routeImageUrl,
-                                        contentDescription = "Route preview",
-                                        contentScale = ContentScale.Crop,
-                                        modifier = Modifier.fillMaxSize()
-                                    )
-                                } else if (routeBitmapFallback != null) {
-                                    androidx.compose.foundation.Image(
-                                        bitmap = routeBitmapFallback.asImageBitmap(),
-                                        contentDescription = "Route preview",
-                                        contentScale = ContentScale.Crop,
-                                        modifier = Modifier.fillMaxSize()
-                                    )
-                                }
+                                androidx.compose.foundation.Image(
+                                    bitmap = routeBitmap!!.asImageBitmap(),
+                                    contentDescription = "Route preview",
+                                    contentScale = ContentScale.Fit,
+                                    modifier = Modifier.fillMaxSize()
+                                )
                             }
                         }
 
@@ -5070,7 +5065,22 @@
                             val lon = pt["lon"] ?: return@mapNotNull null
                             Pair(lat, lon)
                         }
-                        if (post.routeImageUrl.isNotBlank()) {
+                        var detailRouteBitmap by remember(post.id) { mutableStateOf<android.graphics.Bitmap?>(null) }
+
+                        LaunchedEffect(post.id) {
+                            if (post.polyline.size >= 2) {
+                                detailRouteBitmap = withContext(Dispatchers.Default) {
+                                    val pts = post.polyline.mapNotNull { pt ->
+                                        val lat = pt["lat"] ?: return@mapNotNull null
+                                        val lon = pt["lon"] ?: return@mapNotNull null
+                                        GeoPoint(lat, lon)
+                                    }
+                                    if (pts.size >= 2) renderRouteToBitmap(pts) else null
+                                }
+                            }
+                        }
+
+                        if (detailRouteBitmap != null) {
                             Box(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -5078,41 +5088,12 @@
                                     .clip(RoundedCornerShape(16.dp))
                                     .border(1.dp, DividerColor, RoundedCornerShape(16.dp))
                             ) {
-                                AsyncImage(
-                                      model = post.routeImageUrl,
+                                androidx.compose.foundation.Image(
+                                    bitmap = detailRouteBitmap!!.asImageBitmap(),
                                     contentDescription = "Route map",
-                                    contentScale = ContentScale.Crop,
+                                    contentScale = ContentScale.Fit,
                                     modifier = Modifier.fillMaxSize()
                                 )
-                            }
-                        } else if (post.polyline.size >= 2) {
-                            val points = post.polyline.mapNotNull { pt ->
-                                val lat = pt["lat"] ?: return@mapNotNull null
-                                val lon = pt["lon"] ?: return@mapNotNull null
-                                Pair(lat, lon)
-                            }
-                            if (points.size >= 2) {
-                                val routeBitmap = remember(post.id) {
-                                    renderRouteToBitmap(points.map { (lat, lon) -> GeoPoint(lat, lon) })
-                                }
-                                if (routeBitmap != null) {
-                                    Box(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .height(160.dp)
-                                            .padding(horizontal = 14.dp, vertical = 6.dp)
-                                            .clip(RoundedCornerShape(12.dp))
-                                            .border(1.dp, DividerColor, RoundedCornerShape(12.dp))
-                                    ) {
-                                        androidx.compose.foundation.Image(
-                                            bitmap = routeBitmap.asImageBitmap(),
-                                            contentDescription = "Route map",
-                                            contentScale = ContentScale.Crop,
-                                            modifier = Modifier.fillMaxSize()
-                                        )
-
-                                    }
-                                }
                             }
                         }
 

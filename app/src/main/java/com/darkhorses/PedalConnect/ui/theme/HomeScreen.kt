@@ -496,6 +496,7 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
     var isHeadingMode       by remember { mutableStateOf(false) }
     var gpsBearing          by remember { mutableFloatStateOf(0f) }
     var gpsSpeed            by remember { mutableFloatStateOf(0f) }
+    val speedHistory        = remember { ArrayDeque<Float>(3) }
     var mapRotation         by remember { mutableFloatStateOf(0f) }
     var sensorHeadingState  by remember { mutableStateOf<androidx.compose.runtime.State<Float>?>(null) }
     val fusedHeading by rememberFusedHeading(
@@ -549,6 +550,7 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
     fun resetRide() {
         totalDistance = 0.0; elapsedSeconds = 0L; currentSpeedKmh = 0f
         maxSpeedKmh = 0f; elevationGainMeters = 0.0; lastAltitude = Double.MIN_VALUE
+        speedHistory.clear()
         lastTrackedLocation = null; locationPoints = listOf(); rideStartPoint = null
         // Remove all segment polylines from the map
         trailPolylines.forEach { mapViewRef?.overlays?.remove(it) }
@@ -774,6 +776,26 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    // ── Keep screen on during active ride or navigation ───────────────────────
+    val keepScreenOn = isTracking || showTurnPanel
+    DisposableEffect(keepScreenOn) {
+        val activity = context as? android.app.Activity
+        if (keepScreenOn) {
+            activity?.window?.addFlags(
+                android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
+            )
+        } else {
+            activity?.window?.clearFlags(
+                android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
+            )
+        }
+        onDispose {
+            activity?.window?.clearFlags(
+                android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
+            )
+        }
     }
 
     LaunchedEffect(Unit) {
@@ -1362,7 +1384,18 @@ fun HomeScreen(navController: NavController, userName: String, openAlertsTab: Bo
                 currentSpeedKmh     = if (isTracking) rawSpeedKmh else 0f
                 gpsSpeed            = rawSpeedKmh
                 if (location.hasBearing() && rawSpeedKmh >= 5f) gpsBearing = location.bearing
-                if (isTracking && rawSpeedKmh > maxSpeedKmh) maxSpeedKmh = rawSpeedKmh
+                if (isTracking) {
+                    // Median filter on raw speed to eliminate GPS spikes
+                    // without smoothing away genuine peak speeds
+                    val instantKmh = if (location.hasSpeed() && location.speed > 0f)
+                        (location.speed * 3.6f).coerceAtMost(80f) else rawSpeedKmh
+                    if (speedHistory.size >= 3) speedHistory.removeFirst()
+                    speedHistory.addLast(instantKmh)
+                    if (speedHistory.size == 3) {
+                        val median = speedHistory.sorted()[1]
+                        if (median > maxSpeedKmh) maxSpeedKmh = median
+                    }
+                }
                 if (isTracking && location.hasAltitude() && location.accuracy < 20f) {
                     val alt = location.altitude
                     if (lastAltitude != Double.MIN_VALUE) {
