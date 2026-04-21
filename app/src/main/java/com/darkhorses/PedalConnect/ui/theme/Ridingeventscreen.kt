@@ -1299,6 +1299,7 @@ internal fun EventDetailSheet(
                             Brush.verticalGradient(listOf(Green950, Green800)),
                             RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)
                         )
+                        .statusBarsPadding()
                         .padding(top = 12.dp)
                 ) {
                     // Drag handle baked into the hero
