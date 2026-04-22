@@ -65,6 +65,12 @@
         import androidx.compose.material.icons.rounded.Flag
         import com.darkhorses.PedalConnect.BuildConfig
         import androidx.compose.material.ripple.rememberRipple
+        import androidx.compose.material3.FloatingActionButtonDefaults
+        import androidx.compose.material3.SmallFloatingActionButton
+        import androidx.compose.animation.AnimatedContent
+        import androidx.compose.animation.slideInVertically
+        import androidx.compose.animation.fadeIn
+        import androidx.compose.material.icons.automirrored.filled.DirectionsBike
 
         // ─────────────────────────────────────────────────────────────────────────────
         // Design Tokens — shared with RidingEventsScreen
@@ -3462,15 +3468,11 @@
                     },
                     floatingActionButton = {
                         if (!isAdmin) {
-                            FloatingActionButton(
-                                onClick = { navController.navigate("add_post/$userName") },
-                                containerColor = Green900, contentColor = Color.White,
-                                shape = CircleShape,
-                                modifier = Modifier.padding(bottom = paddingValues.calculateBottomPadding())
-                                    .size(56.dp)
-                            ) {
-                                Icon(Icons.Filled.Add, "Add Post", modifier = Modifier.size(26.dp))
-                            }
+                            ExpandingFab(
+                                onShareActivity = { navController.navigate("add_post/$userName") },
+                                onAddPost       = { navController.navigate("add_post_simple/$userName") },
+                                bottomPadding   = paddingValues.calculateBottomPadding()
+                            )
                         }
                     },
                     floatingActionButtonPosition = FabPosition.End,
@@ -3525,10 +3527,6 @@
                                         fontSize = 17.sp,
                                         fontWeight = FontWeight.Bold,
                                         color = TextPrimary
-                                    )
-                                    Text(
-                                        "$acceptedCount ride${if (acceptedCount != 1) "s" else ""} shared",
-                                        fontSize = 12.sp, color = TextMuted
                                     )
                                 }
                                 Spacer(Modifier.height(10.dp))
@@ -5218,6 +5216,143 @@
                 }
             }
             // Profanity filtering delegated to ProfanityFilter singleton — see ProfanityFilter.kt
+
+        // ─────────────────────────────────────────────────────────────────────────────
+        // Expanding FAB — Strava-style two-option launcher
+        // ─────────────────────────────────────────────────────────────────────────────
+        @Composable
+        fun ExpandingFab(
+            onShareActivity: () -> Unit,
+            onAddPost: () -> Unit,
+            bottomPadding: androidx.compose.ui.unit.Dp = 0.dp
+        ) {
+            var expanded by remember { mutableStateOf(false) }
+
+            Box(contentAlignment = Alignment.BottomEnd) {
+                // Dismiss on outside tap via a transparent scrim
+                if (expanded) {
+                    Box(
+                        Modifier
+                            .fillMaxSize()
+                            .clickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null
+                            ) { expanded = false }
+                    )
+                }
+
+                Column(
+                    horizontalAlignment = Alignment.End,
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    modifier = Modifier.padding(bottom = bottomPadding)
+                ) {
+                    // ── Mini action: Add Post ─────────────────────────────────────────────
+                    androidx.compose.animation.AnimatedVisibility(
+                        visible = expanded,
+                        enter = fadeIn() + slideInVertically(initialOffsetY = { it / 2 }),
+                        exit = androidx.compose.animation.fadeOut() +
+                                androidx.compose.animation.slideOutVertically(targetOffsetY = { it / 2 })
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            // Label chip
+                            Box(
+                                Modifier
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(BgSurface)
+                                    .border(1.dp, BorderDefault, RoundedCornerShape(8.dp))
+                                    .padding(horizontal = 12.dp, vertical = 6.dp)
+                            ) {
+                                Text(
+                                    "Add Post",
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = TextPrimary
+                                )
+                            }
+                            SmallFloatingActionButton(
+                                onClick = { expanded = false; onAddPost() },
+                                containerColor = BgSurface,
+                                contentColor = Green900,
+                                shape = CircleShape,
+                                modifier = Modifier.size(46.dp),
+                                elevation = FloatingActionButtonDefaults.elevation(4.dp)
+                            ) {
+                                Icon(
+                                    Icons.Default.Edit,
+                                    "Add Post",
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        }
+                    }
+
+                    // ── Mini action: Share Activity ──────────────────────────────────────
+                    androidx.compose.animation.AnimatedVisibility(
+                        visible = expanded,
+                        enter = fadeIn() + slideInVertically(initialOffsetY = { it / 2 }),
+                        exit = androidx.compose.animation.fadeOut() +
+                                androidx.compose.animation.slideOutVertically(targetOffsetY = { it / 2 })
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Box(
+                                Modifier
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(BgSurface)
+                                    .border(1.dp, BorderDefault, RoundedCornerShape(8.dp))
+                                    .padding(horizontal = 12.dp, vertical = 6.dp)
+                            ) {
+                                Text(
+                                    "Share Activity",
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = TextPrimary
+                                )
+                            }
+                            SmallFloatingActionButton(
+                                onClick = { expanded = false; onShareActivity() },
+                                containerColor = Green900,
+                                contentColor = Color.White,
+                                shape = CircleShape,
+                                modifier = Modifier.size(46.dp),
+                                elevation = FloatingActionButtonDefaults.elevation(4.dp)
+                            ) {
+                                Icon(
+                                    Icons.AutoMirrored.Filled.DirectionsBike,
+                                    "Share Activity",
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        }
+                    }
+
+                    // ── Main FAB ─────────────────────────────────────────────────────────
+                    FloatingActionButton(
+                        onClick = { expanded = !expanded },
+                        containerColor = Green900,
+                        contentColor = Color.White,
+                        shape = CircleShape,
+                        modifier = Modifier.size(56.dp)
+                    ) {
+                        androidx.compose.animation.AnimatedContent(
+                            targetState = expanded,
+                            label = "fab_icon"
+                        ) { isExpanded ->
+                            Icon(
+                                if (isExpanded) Icons.Default.Close else Icons.Filled.Add,
+                                if (isExpanded) "Close" else "Open",
+                                modifier = Modifier.size(26.dp)
+                            )
+                        }
+                    }
+                }
+            }
+        }
 
         private val routeMapUrlCache = java.util.concurrent.ConcurrentHashMap<String, String>()
 

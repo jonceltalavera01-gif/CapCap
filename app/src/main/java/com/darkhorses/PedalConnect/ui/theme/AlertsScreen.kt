@@ -1524,10 +1524,6 @@ fun AlertSummaryBanner(total: Int, high: Int, medium: Int, low: Int) {
                 "$total Active Alert${if (total != 1) "s" else ""}",
                 fontSize = 24.sp, fontWeight = FontWeight.ExtraBold, color = Color.White
             )
-            Text(
-                "Pull down to refresh · Tap a card to expand details",
-                fontSize = 12.sp, color = Color.White.copy(alpha = 0.65f)
-            )
         }
     }
 }

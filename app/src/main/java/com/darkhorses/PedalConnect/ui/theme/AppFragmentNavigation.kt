@@ -84,6 +84,14 @@ fun AppNavigator(paddingValues: PaddingValues) {
         }
 
         composable(
+            "add_post_simple/{userName}",
+            arguments = listOf(navArgument("userName") { type = NavType.StringType })
+        ) { backStackEntry ->
+            val userName = backStackEntry.arguments?.getString("userName") ?: "Rider"
+            AddPostSimpleScreen(navController, userName)
+        }
+
+        composable(
             "public_profile/{targetUserName}",
             arguments = listOf(navArgument("targetUserName") { type = NavType.StringType })
         ) { backStackEntry ->

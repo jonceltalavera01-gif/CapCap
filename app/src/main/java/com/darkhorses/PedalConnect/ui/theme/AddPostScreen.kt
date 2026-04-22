@@ -36,6 +36,13 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
+import androidx.compose.material3.DatePicker
+import androidx.compose.material3.DatePickerDefaults
+import androidx.compose.material3.DatePickerDialog
+import androidx.compose.material3.TimePicker
+import androidx.compose.material3.TimePickerDefaults
+import androidx.compose.material3.rememberDatePickerState
+import androidx.compose.material3.rememberTimePickerState
 import coil.compose.AsyncImage
 import com.google.firebase.firestore.FirebaseFirestore
 
@@ -108,6 +115,13 @@ fun AddPostScreen(navController: NavController, userName: String) {
     var visible           by remember { mutableStateOf(false) }
     var selectedImageUri  by remember { mutableStateOf<Uri?>(null) }
     var imageError        by remember { mutableStateOf("") }
+    var selectedDate      by remember { mutableStateOf(java.util.Calendar.getInstance()) }
+    var selectedTime      by remember {
+        val c = java.util.Calendar.getInstance()
+        mutableStateOf(Pair(c.get(java.util.Calendar.HOUR_OF_DAY), c.get(java.util.Calendar.MINUTE)))
+    }
+    var showDatePicker    by remember { mutableStateOf(false) }
+    var showTimePicker    by remember { mutableStateOf(false) }
     var userPhotoUrl      by remember { mutableStateOf<String?>(null) }
     var userDisplayName   by remember { mutableStateOf("") }
 
@@ -278,24 +292,24 @@ fun AddPostScreen(navController: NavController, userName: String) {
                         }
                     }
 
-                    // ── Photo upload ──────────────────────────────────────────
+                    // ── Photo upload (single) ─────────────────────────────────
                     PostSectionCard(
                         icon  = Icons.Default.Image,
                         title = "Photo",
                         subtitle = "Optional"
                     ) {
                         if (selectedImageUri != null) {
-                            // Preview
                             Box(Modifier.fillMaxWidth()) {
                                 AsyncImage(
-                                    model = selectedImageUri, contentDescription = "Selected photo",
-                                    modifier = Modifier.fillMaxWidth().height(220.dp).clip(RoundedCornerShape(12.dp)),
+                                    model = selectedImageUri,
+                                    contentDescription = "Selected photo",
+                                    modifier = Modifier.fillMaxWidth().height(200.dp)
+                                        .clip(RoundedCornerShape(12.dp)),
                                     contentScale = ContentScale.Crop
                                 )
-                                // Remove button — top-right
                                 Box(
                                     Modifier.align(Alignment.TopEnd).padding(8.dp)
-                                        .size(32.dp).clip(CircleShape)
+                                        .size(28.dp).clip(CircleShape)
                                         .background(Color.Black.copy(alpha = 0.55f))
                                         .clickable(
                                             interactionSource = remember { MutableInteractionSource() },
@@ -303,29 +317,22 @@ fun AddPostScreen(navController: NavController, userName: String) {
                                         ) { selectedImageUri = null; imageError = "" },
                                     Alignment.Center
                                 ) {
-                                    Icon(Icons.Default.Close, "Remove photo", tint = Color.White, modifier = Modifier.size(16.dp))
+                                    Icon(Icons.Default.Close, "Remove", tint = Color.White, modifier = Modifier.size(13.dp))
                                 }
                             }
-                            Spacer(Modifier.height(8.dp))
-                            // Validation status
-                            when {
-                                imageError.isNotEmpty() -> {
-                                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp))
-                                            .background(Red50).padding(horizontal = 10.dp, vertical = 8.dp)) {
-                                        Icon(Icons.Default.Warning, null, tint = Red600, modifier = Modifier.size(14.dp))
-                                        Text(imageError, fontSize = 12.sp, color = Red600)
-                                    }
-                                }
-                                else -> {
-                                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                        Icon(Icons.Default.CheckCircle, null, tint = Color(0xFF16A34A), modifier = Modifier.size(14.dp))
-                                        Text("Photo ready to upload", fontSize = 12.sp, color = Color(0xFF16A34A), fontWeight = FontWeight.Medium)
-                                    }
+                            if (imageError.isNotEmpty()) {
+                                Spacer(Modifier.height(4.dp))
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp))
+                                        .background(Red50).padding(horizontal = 10.dp, vertical = 8.dp)
+                                ) {
+                                    Icon(Icons.Default.Warning, null, tint = Red600, modifier = Modifier.size(14.dp))
+                                    Text(imageError, fontSize = 12.sp, color = Red600)
                                 }
                             }
                         } else {
-                            // Pick photo button
                             Box(
                                 Modifier.fillMaxWidth().height(130.dp)
                                     .clip(RoundedCornerShape(12.dp))
@@ -338,15 +345,136 @@ fun AddPostScreen(navController: NavController, userName: String) {
                                 Alignment.Center
                             ) {
                                 Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    Box(
-                                        Modifier.size(48.dp).clip(CircleShape).background(Green50),
-                                        Alignment.Center
-                                    ) {
+                                    Box(Modifier.size(48.dp).clip(CircleShape).background(Green50), Alignment.Center) {
                                         Icon(Icons.Default.AddPhotoAlternate, null, tint = Green700, modifier = Modifier.size(24.dp))
                                     }
                                     Text("Tap to add a photo", fontSize = 13.sp, color = TextSecondary, fontWeight = FontWeight.Medium)
                                     Text("JPEG / PNG · Max 5 MB", fontSize = 11.sp, color = TextMuted)
                                 }
+                            }
+                        }
+                    }
+
+                    // ── Date & Time ───────────────────────────────────────────
+                    PostSectionCard(
+                        icon  = Icons.Default.CalendarMonth,
+                        title = "Date & Time",
+                        subtitle = "When did you ride?"
+                    ) {
+                        // Date picker row
+                        Row(
+                            Modifier.fillMaxWidth()
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(BgCanvas)
+                                .border(1.dp, BorderDefault, RoundedCornerShape(10.dp))
+                                .clickable(
+                                    interactionSource = remember { MutableInteractionSource() },
+                                    indication = null
+                                ) { showDatePicker = true }
+                                .padding(horizontal = 14.dp, vertical = 13.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Icon(Icons.Default.CalendarToday, null, tint = Green700, modifier = Modifier.size(16.dp))
+                                Text(
+                                    java.text.SimpleDateFormat("EEE, MMM dd yyyy", java.util.Locale.getDefault())
+                                        .format(selectedDate.time),
+                                    fontSize = 14.sp, color = TextPrimary
+                                )
+                            }
+                            Icon(Icons.Default.KeyboardArrowDown, null, tint = TextMuted, modifier = Modifier.size(18.dp))
+                        }
+                        Spacer(Modifier.height(8.dp))
+                        // Time picker row
+                        Row(
+                            Modifier.fillMaxWidth()
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(BgCanvas)
+                                .border(1.dp, BorderDefault, RoundedCornerShape(10.dp))
+                                .clickable(
+                                    interactionSource = remember { MutableInteractionSource() },
+                                    indication = null
+                                ) { showTimePicker = true }
+                                .padding(horizontal = 14.dp, vertical = 13.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Icon(Icons.Default.Schedule, null, tint = Green700, modifier = Modifier.size(16.dp))
+                                val h = selectedTime.first
+                                val m = selectedTime.second
+                                val amPm = if (h < 12) "AM" else "PM"
+                                val h12 = if (h % 12 == 0) 12 else h % 12
+                                Text(
+                                    "${h12}:${m.toString().padStart(2, '0')} $amPm",
+                                    fontSize = 14.sp, color = TextPrimary
+                                )
+                            }
+                            Icon(Icons.Default.KeyboardArrowDown, null, tint = TextMuted, modifier = Modifier.size(18.dp))
+                        }
+
+                        // Date picker dialog
+                        if (showDatePicker) {
+                            val datePickerState = rememberDatePickerState(
+                                initialSelectedDateMillis = selectedDate.timeInMillis
+                            )
+                            DatePickerDialog(
+                                onDismissRequest = { showDatePicker = false },
+                                confirmButton = {
+                                    TextButton(onClick = {
+                                        datePickerState.selectedDateMillis?.let { millis ->
+                                            selectedDate = java.util.Calendar.getInstance().apply {
+                                                timeInMillis = millis
+                                            }
+                                        }
+                                        showDatePicker = false
+                                    }) {
+                                        Text(
+                                            "Confirm",
+                                            color      = MaterialTheme.colorScheme.primary,
+                                            fontWeight = FontWeight.SemiBold
+                                        )
+                                    }
+                                },
+                                dismissButton = {
+                                    TextButton(onClick = { showDatePicker = false }) {
+                                        Text("Cancel", color = MaterialTheme.colorScheme.onSurface)
+                                    }
+                                }
+                            ) {
+                                DatePicker(state = datePickerState)
+                            }
+                        }
+
+                        // Time picker dialog
+                        if (showTimePicker) {
+                            val timePickerState = rememberTimePickerState(
+                                initialHour   = selectedTime.first,
+                                initialMinute = selectedTime.second,
+                                is24Hour      = false
+                            )
+                            DatePickerDialog(
+                                onDismissRequest = { showTimePicker = false },
+                                confirmButton = {
+                                    TextButton(onClick = {
+                                        selectedTime = Pair(timePickerState.hour, timePickerState.minute)
+                                        showTimePicker = false
+                                    }) {
+                                        Text(
+                                            "Confirm",
+                                            color      = MaterialTheme.colorScheme.primary,
+                                            fontWeight = FontWeight.SemiBold
+                                        )
+                                    }
+                                },
+                                dismissButton = {
+                                    TextButton(onClick = { showTimePicker = false }) {
+                                        Text("Cancel", color = MaterialTheme.colorScheme.onSurface)
+                                    }
+                                }
+                            ) {
+                                TimePicker(state = timePickerState)
                             }
                         }
                     }
@@ -461,46 +589,50 @@ fun AddPostScreen(navController: NavController, userName: String) {
                                 isLoading = true
                                 scope.launch {
                                     try {
-                                        val uri = selectedImageUri
-
                                         // File size check
-                                        if (uri != null) {
+                                        if (selectedImageUri != null) {
                                             val fileSize = context.contentResolver
-                                                .openFileDescriptor(uri, "r")?.statSize ?: 0L
+                                                .openFileDescriptor(selectedImageUri!!, "r")?.statSize ?: 0L
                                             if (fileSize > 5 * 1024 * 1024) {
                                                 imageError = "Image must be under 5 MB"
                                                 isLoading  = false
                                                 return@launch
                                             }
                                         }
-
-
-                                        // Compress + upload to ImgBB
-                                        var imageUrl    = ""
-                                        var deleteUrl   = ""
-                                        if (uri != null) {
-                                            val compressed = compressImage(uri)
+                                        // Compress + upload single photo to ImgBB
+                                        var imageUrl  = ""
+                                        var deleteUrl = ""
+                                        if (selectedImageUri != null) {
+                                            val compressed = compressImage(selectedImageUri!!)
                                             val result     = uploadImageBytes(compressed)
                                             imageUrl  = result.url
                                             deleteUrl = result.deleteUrl
                                         }
 
-                                        // Save to Firestore — store deleteUrl so images
-                                        // can be cleaned up when posts are deleted
+                                        // Build rideTimestamp from selected date + time
+                                        val rideTimestamp = java.util.Calendar.getInstance().apply {
+                                            timeInMillis = selectedDate.timeInMillis
+                                            set(java.util.Calendar.HOUR_OF_DAY, selectedTime.first)
+                                            set(java.util.Calendar.MINUTE, selectedTime.second)
+                                            set(java.util.Calendar.SECOND, 0)
+                                        }.timeInMillis
+
+                                        // Save to Firestore
                                         suspendCancellableCoroutine<Unit> { cont ->
                                             db.collection("posts").add(hashMapOf(
-                                                "userName"       to userName,
-                                                "displayName"    to userDisplayName.ifBlank { userName },
-                                                "description"    to description.trim(),
-                                                "activity"       to selectedActivity,
-                                                "distance"       to distance.trim(),
-                                                "timestamp"      to System.currentTimeMillis(),
-                                                "likes"          to 0,
-                                                "comments"       to 0,
-                                                "likedBy"        to emptyList<String>(),
-                                                "status"         to "pending",
-                                                "imageUrl"       to imageUrl,
-                                                "imageDeleteUrl" to deleteUrl
+                                                "userName"        to userName,
+                                                "displayName"     to userDisplayName.ifBlank { userName },
+                                                "description"     to description.trim(),
+                                                "activity"        to selectedActivity,
+                                                "distance"        to distance.trim(),
+                                                "timestamp"       to System.currentTimeMillis(),
+                                                "rideTimestamp"   to rideTimestamp,
+                                                "likes"           to 0,
+                                                "comments"        to 0,
+                                                "likedBy"         to emptyList<String>(),
+                                                "status"          to "pending",
+                                                "imageUrl"        to imageUrl,
+                                                "imageDeleteUrl"  to deleteUrl
                                             ))
                                                 .addOnSuccessListener { cont.resume(Unit) }
                                                 .addOnFailureListener { cont.resumeWithException(it) }
