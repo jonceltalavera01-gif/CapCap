@@ -301,6 +301,7 @@ fun LoginScreen(navController: NavController, paddingValues: PaddingValues) {
                             } else {
                                 val newName = auth.currentUser?.displayName ?: "Rider"
                                 val now     = com.google.firebase.Timestamp.now()
+                                val uid     = auth.currentUser?.uid ?: ""
                                 db.collection("users").add(hashMapOf(
                                     "username"      to newName,
                                     "usernameLower" to newName.lowercase(),
@@ -455,9 +456,10 @@ fun LoginScreen(navController: NavController, paddingValues: PaddingValues) {
                             isRegLoading = false; regEmailError = "Email already registered"; return@addOnSuccessListener
                         }
                         auth.createUserWithEmailAndPassword(trimEmail, regPassword)
-                            .addOnSuccessListener {
+                            .addOnSuccessListener { authResult ->
+                                val uid = authResult.user?.uid ?: auth.currentUser?.uid ?: ""
                                 val now = com.google.firebase.Timestamp.now()
-                                db.collection("users").add(hashMapOf(
+                                db.collection("users").document(uid).set(hashMapOf(
                                     "username"      to trimUser,
                                     "usernameLower" to trimUser.lowercase(),
                                     "email"         to trimEmail,

@@ -78,6 +78,8 @@ fun MessageScreen(
 
     val totalUnread = conversations.sumOf { it.unreadCounts[currentUserId] ?: 0 }
 
+
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -177,7 +179,7 @@ fun MessageScreen(
         },
         floatingActionButton = {
             FloatingActionButton(
-                onClick        = { /* New message */ },
+                onClick        = { showAddFriendDialog = true },
                 containerColor = Green900,
                 contentColor   = Color.White,
                 shape          = CircleShape,
@@ -193,6 +195,7 @@ fun MessageScreen(
         if (showAddFriendDialog) {
             SearchUserDialog(
                 viewModel = viewModel,
+                navController = navController,
                 onDismiss = { showAddFriendDialog = false }
             )
         }
@@ -214,7 +217,7 @@ fun MessageScreen(
             // ── Online riders row ─────────────────────────────────────────────
             if (!showSearch || searchQuery.isBlank()) {
                 item {
-                    OnlineRidersRow(onlineUsers = onlineUsers)
+                    OnlineRidersRow(onlineUsers = onlineUsers, viewModel = viewModel, navController = navController)
                 }
             }
 
@@ -277,7 +280,9 @@ fun MessageScreen(
                     isTyping = otherUserPresence?.typingIn == conversation.id,
                     onClick = {
                         viewModel.markAsRead(conversation.id)
-                        /* Navigate to chat */
+                        navController.navigate(
+                            "chat/${conversation.id}/${otherParticipantId ?: ""}/${otherParticipantName}"
+                        )
                     }
                 )
                 HorizontalDivider(
@@ -390,10 +395,12 @@ fun NotificationsDialog(
 @Composable
 fun SearchUserDialog(
     viewModel: ChatViewModel,
+    navController: NavController,
     onDismiss: () -> Unit
 ) {
     var query by remember { mutableStateOf("") }
     val results by viewModel.searchResults.collectAsStateWithLifecycle()
+    val myFriendIds by viewModel.myFriendIds.collectAsStateWithLifecycle()
     val context = androidx.compose.ui.platform.LocalContext.current
 
     androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
@@ -479,18 +486,35 @@ fun SearchUserDialog(
                                         fontWeight = FontWeight.SemiBold,
                                         modifier = Modifier.weight(1f)
                                     )
-                                    Button(
-                                        onClick = {
-                                            viewModel.sendFriendRequest(user)
-                                            android.widget.Toast.makeText(context, "Request sent!", android.widget.Toast.LENGTH_SHORT).show()
-                                            onDismiss()
-                                        },
-                                        shape = RoundedCornerShape(8.dp),
-                                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
-                                        modifier = Modifier.height(32.dp),
-                                        colors = ButtonDefaults.buttonColors(containerColor = Green900)
-                                    ) {
-                                        Text("Add", fontSize = 12.sp)
+                                    if (myFriendIds.contains(user.uid)) {
+                                        Button(
+                                            onClick = {
+                                                viewModel.getOrCreateConversation(user.uid, user.username) { conversationId ->
+                                                    onDismiss()
+                                                    navController.navigate("chat/$conversationId/${user.uid}/${user.username}")
+                                                }
+                                            },
+                                            shape = RoundedCornerShape(8.dp),
+                                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                                            modifier = Modifier.height(32.dp),
+                                            colors = ButtonDefaults.buttonColors(containerColor = Green700)
+                                        ) {
+                                            Text("Message", fontSize = 12.sp)
+                                        }
+                                    } else {
+                                        Button(
+                                            onClick = {
+                                                viewModel.sendFriendRequest(user)
+                                                android.widget.Toast.makeText(context, "Request sent!", android.widget.Toast.LENGTH_SHORT).show()
+                                                onDismiss()
+                                            },
+                                            shape = RoundedCornerShape(8.dp),
+                                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                                            modifier = Modifier.height(32.dp),
+                                            colors = ButtonDefaults.buttonColors(containerColor = Green900)
+                                        ) {
+                                            Text("Add", fontSize = 12.sp)
+                                        }
                                     }
                                 }
                             }
@@ -511,7 +535,7 @@ fun SearchUserDialog(
 
 // ── Online riders horizontal scroll ──────────────────────────────────────────
 @Composable
-fun OnlineRidersRow(onlineUsers: List<UserPresence>) {
+fun OnlineRidersRow(onlineUsers: List<UserPresence>, viewModel: ChatViewModel, navController: NavController) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -553,7 +577,11 @@ fun OnlineRidersRow(onlineUsers: List<UserPresence>) {
                 val name = presence.userName
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
-                    modifier = Modifier.clickable { /* Open chat */ }
+                    modifier = Modifier.clickable {
+                        viewModel.getOrCreateConversation(presence.userId, name) { conversationId ->
+                            navController.navigate("chat/$conversationId/${presence.userId}/$name")
+                        }
+                    }
                 ) {
                     Box {
                         Box(

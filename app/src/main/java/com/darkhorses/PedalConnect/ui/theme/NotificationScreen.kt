@@ -68,9 +68,6 @@ private data class NotifStyle(
     val label:     String
 )
 
-
-
-
 private fun notifStyle(type: String): NotifStyle = when (type) {
     "accepted"  -> NotifStyle(Icons.Default.CheckCircle,      Color(0xFF388E3C), Color(0xFFE8F5E9), Color(0xFFF1FBF2), "Accepted")
     "rejected"  -> NotifStyle(Icons.Default.Cancel,           Color(0xFFD32F2F), Color(0xFFFFEBEE), Color(0xFFFFF5F5), "Rejected")
@@ -85,7 +82,6 @@ private fun notifStyle(type: String): NotifStyle = when (type) {
     "rating"           -> NotifStyle(Icons.Default.Star,              Color(0xFFF57C00), Color(0xFFFFF3E0), Color(0xFFFFFBF0), "Rating")
     "moderation"       -> NotifStyle(Icons.Default.Gavel,             Color(0xFFD32F2F), Color(0xFFFFEBEE), Color(0xFFFFF5F5), "Moderation")
     "moderation_restored" -> NotifStyle(Icons.Default.CheckCircle,    Color(0xFF388E3C), Color(0xFFE8F5E9), Color(0xFFF1FBF2), "Restored")
-    "rating"           -> NotifStyle(Icons.Default.Star,             Color(0xFFF57C00), Color(0xFFFFF3E0), Color(0xFFFFFBF0), "Rating")
     "report"           -> NotifStyle(Icons.Default.Flag,             Color(0xFFD32F2F), Color(0xFFFFEBEE), Color(0xFFFFF5F5), "Report")
     else               -> NotifStyle(Icons.Default.Notifications,    Color(0xFF7A8F7A), Color(0xFFF0F0F0), Color.White,       "Notification")
 }
@@ -94,6 +90,8 @@ private fun notifStyle(type: String): NotifStyle = when (type) {
 @Composable
 fun NotificationsScreen(navController: NavController, userName: String) {
     val db            = FirebaseFirestore.getInstance()
+    val auth          = remember { com.google.firebase.auth.FirebaseAuth.getInstance() }
+    val currentUserId = remember { auth.currentUser?.uid ?: "" }
     val notifications = remember { mutableStateListOf<NotificationItem>() }
     // Exclude resolve_requested from badge so it never blocks reaching zero
     val unreadCount   = notifications.count { !it.read && it.type != "resolve_requested" }
@@ -114,9 +112,16 @@ fun NotificationsScreen(navController: NavController, userName: String) {
 
     // Single real-time listener — handles both initial load and live updates
     // Pull-to-refresh is visual only; listener keeps data fresh automatically
-    DisposableEffect(userName) {
+    // IMPORTANT: query by toId (recipient's UID), NOT userName. userName on a
+    // notification document refers to whoever triggered/sent the notification
+    // (e.g. the sender's name in a friend request), not who it's intended for.
+    DisposableEffect(currentUserId) {
+        if (currentUserId.isEmpty()) {
+            isLoading = false
+            return@DisposableEffect onDispose { }
+        }
         val registration = db.collection("notifications")
-            .whereEqualTo("userName", userName)
+            .whereEqualTo("toId", currentUserId)
             .addSnapshotListener { snapshot, e ->
                 if (e != null) { isLoading = false; return@addSnapshotListener }
                 snapshot?.let {
@@ -238,6 +243,7 @@ fun NotificationsScreen(navController: NavController, userName: String) {
                                         db.collection("notifications")
                                             .document(notif.id)
                                             .set(hashMapOf(
+                                                "toId"      to currentUserId,
                                                 "userName"  to userName,
                                                 "message"   to notif.message,
                                                 "type"      to notif.type,
@@ -453,6 +459,7 @@ fun NotificationsScreen(navController: NavController, userName: String) {
                                                 db.collection("notifications")
                                                     .document(notif.id)
                                                     .set(hashMapOf(
+                                                        "toId"      to currentUserId,
                                                         "userName"  to userName,
                                                         "message"   to notif.message,
                                                         "type"      to notif.type,
@@ -494,6 +501,7 @@ fun NotificationsScreen(navController: NavController, userName: String) {
                             ) {
                                 NotificationCard(
                                     notif              = notif,
+                                    currentUserId      = currentUserId,
                                     currentUserName    = userName,
                                     onNavigateToAlerts = {
                                         navController.navigate("home_alerts/$userName") {
@@ -524,6 +532,7 @@ fun NotificationsScreen(navController: NavController, userName: String) {
 @Composable
 private fun NotificationCard(
     notif: NotificationItem,
+    currentUserId: String,
     currentUserName: String,
     onNavigateToAlerts: () -> Unit = {},
     onNavigateToRides:  () -> Unit = {},
@@ -537,6 +546,24 @@ private fun NotificationCard(
     val isResolveRequest = notif.type == "resolve_requested"
     val isFriendRequest = notif.type == "friend_request"
 
+    // Resolves a username to their Firestore UID, then writes a notification
+    // with "toId" set to that UID so the recipient's listener picks it up.
+    fun sendNotificationToUsername(targetUsername: String, message: String, type: String) {
+        db.collection("users").whereEqualTo("username", targetUsername)
+            .limit(1).get()
+            .addOnSuccessListener { snap ->
+                val targetUid = snap.documents.firstOrNull()?.id ?: return@addOnSuccessListener
+                db.collection("notifications").add(hashMapOf(
+                    "toId"      to targetUid,
+                    "userName"  to currentUserName,
+                    "message"   to message,
+                    "type"      to type,
+                    "timestamp" to System.currentTimeMillis(),
+                    "read"      to false
+                ))
+            }
+    }
+
     fun sendResponderNotification(alertId: String, confirmed: Boolean) {
         db.collection("alerts").document(alertId).get()
             .addOnSuccessListener { doc ->
@@ -549,29 +576,27 @@ private fun NotificationCard(
                     .addOnSuccessListener { riderSnap ->
                         val riderDisplay = riderSnap.documents.firstOrNull()
                             ?.getString("displayName")?.takeIf { it.isNotBlank() } ?: riderName
-                        db.collection("notifications").add(hashMapOf(
-                            "userName"  to responder,
-                            "message"   to if (confirmed)
-                                "$riderDisplay confirmed the $eType has been resolved. Thank you!"
-                            else
-                                "$riderDisplay still needs help with $eType.",
-                            "type"      to if (confirmed) "accepted" else "alert",
-                            "timestamp" to System.currentTimeMillis(),
-                            "read"      to false
-                        ))
+                        val message = if (confirmed)
+                            "$riderDisplay confirmed the $eType has been resolved. Thank you!"
+                        else
+                            "$riderDisplay still needs help with $eType."
+                        sendNotificationToUsername(
+                            targetUsername = responder,
+                            message        = message,
+                            type           = if (confirmed) "accepted" else "alert"
+                        )
                     }
                     .addOnFailureListener {
                         // Fallback to username if fetch fails
-                        db.collection("notifications").add(hashMapOf(
-                            "userName"  to responder,
-                            "message"   to if (confirmed)
-                                "$riderName confirmed the $eType has been resolved. Thank you!"
-                            else
-                                "$riderName still needs help with $eType.",
-                            "type"      to if (confirmed) "accepted" else "alert",
-                            "timestamp" to System.currentTimeMillis(),
-                            "read"      to false
-                        ))
+                        val message = if (confirmed)
+                            "$riderName confirmed the $eType has been resolved. Thank you!"
+                        else
+                            "$riderName still needs help with $eType."
+                        sendNotificationToUsername(
+                            targetUsername = responder,
+                            message        = message,
+                            type           = if (confirmed) "accepted" else "alert"
+                        )
                     }
             }
     }
@@ -764,15 +789,14 @@ private fun NotificationCard(
                 ) {
                     val repo = remember { ChatRepository() }
                     val coroutineScope = rememberCoroutineScope()
-                    val auth = remember { com.google.firebase.auth.FirebaseAuth.getInstance() }
-                    
+
                     // Accept
                     Button(
-                        onClick  = { 
-                            if (!loading && notif.requestId != null) {
+                        onClick  = {
+                            if (!loading && notif.requestId != null && currentUserId.isNotEmpty()) {
                                 loading = true
                                 coroutineScope.launch {
-                                    repo.respondToFriendRequest(notif.requestId, true, auth.currentUser?.uid ?: "", currentUserName)
+                                    repo.respondToFriendRequest(notif.requestId, true, currentUserId, currentUserName)
                                     db.collection("notifications").document(notif.id).delete()
                                     loading = false
                                 }
@@ -791,11 +815,11 @@ private fun NotificationCard(
                     }
                     // Reject
                     OutlinedButton(
-                        onClick  = { 
-                            if (!loading && notif.requestId != null) {
+                        onClick  = {
+                            if (!loading && notif.requestId != null && currentUserId.isNotEmpty()) {
                                 loading = true
                                 coroutineScope.launch {
-                                    repo.respondToFriendRequest(notif.requestId, false, auth.currentUser?.uid ?: "", currentUserName)
+                                    repo.respondToFriendRequest(notif.requestId, false, currentUserId, currentUserName)
                                     db.collection("notifications").document(notif.id).delete()
                                     loading = false
                                 }

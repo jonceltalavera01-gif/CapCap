@@ -3459,7 +3459,7 @@
                                         )
                                     }
                                 }
-                                IconButton(onClick = { navController.navigate("message") }) {
+                                IconButton(onClick = { navController.navigate("messages") }) {
                                     Icon(Icons.Filled.Message, "Messages", tint = Color.White)
                                 }
                             },

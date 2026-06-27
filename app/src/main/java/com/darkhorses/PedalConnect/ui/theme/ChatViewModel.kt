@@ -3,6 +3,7 @@ package com.darkhorses.PedalConnect.ui.theme
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.google.firebase.auth.FirebaseAuth
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -27,6 +28,14 @@ class ChatViewModel : ViewModel() {
 
     private val _notifications = MutableStateFlow<List<AppNotification>>(emptyList())
     val notifications: StateFlow<List<AppNotification>> = _notifications.asStateFlow()
+
+    private val _myFriendIds = MutableStateFlow<List<String>>(emptyList())
+    val myFriendIds: StateFlow<List<String>> = _myFriendIds.asStateFlow()
+
+    // ── Active chat thread ───────────────────────────────────────────────────
+    private val _activeMessages = MutableStateFlow<List<Message>>(emptyList())
+    val activeMessages: StateFlow<List<Message>> = _activeMessages.asStateFlow()
+    private var activeMessagesJob: Job? = null
 
     init {
         if (currentUserId.isNotEmpty()) {
@@ -65,6 +74,15 @@ class ChatViewModel : ViewModel() {
                     e.printStackTrace()
                 }
             }
+            viewModelScope.launch {
+                try {
+                    repository.getMyFriendIds(currentUserId).collect {
+                        _myFriendIds.value = it
+                    }
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
         }
     }
 
@@ -79,9 +97,23 @@ class ChatViewModel : ViewModel() {
     }
 
     fun sendFriendRequest(toUser: User) {
-        if (currentUserId.isEmpty() || currentUserName.isEmpty()) return
+        if (currentUserId.isEmpty()) return
         viewModelScope.launch {
             try {
+                var attempts = 0
+                while (currentUserName.isEmpty() && attempts < 5) {
+                    try {
+                        val userDoc = db.collection("users").document(currentUserId).get().await()
+                        currentUserName = userDoc.getString("username") ?: ""
+                    } catch (readError: Exception) {
+                        readError.printStackTrace()
+                    }
+                    if (currentUserName.isEmpty()) {
+                        attempts++
+                        kotlinx.coroutines.delay(400)
+                    }
+                }
+                if (currentUserName.isEmpty()) return@launch
                 repository.sendFriendRequest(currentUserId, currentUserName, toUser.uid, toUser.username)
             } catch (e: Exception) {
                 e.printStackTrace()
@@ -122,6 +154,83 @@ class ChatViewModel : ViewModel() {
         if (currentUserId.isNotEmpty()) {
             viewModelScope.launch {
                 repository.markConversationAsRead(conversationId, currentUserId)
+            }
+        }
+    }
+
+    // ── Starting / opening a conversation ────────────────────────────────────
+
+    /**
+     * Finds an existing 1:1 conversation with [otherUserId], or creates one if
+     * none exists yet. Calls [onResult] with the resulting conversationId.
+     */
+    fun getOrCreateConversation(otherUserId: String, otherUserName: String, onResult: (String) -> Unit) {
+        if (currentUserId.isEmpty()) return
+        viewModelScope.launch {
+            try {
+                val existingId = repository.findExistingConversation(currentUserId, otherUserId)
+                if (existingId != null) {
+                    onResult(existingId)
+                } else {
+                    var myName = currentUserName
+                    if (myName.isEmpty()) {
+                        val userDoc = db.collection("users").document(currentUserId).get().await()
+                        myName = userDoc.getString("username") ?: "Rider"
+                        currentUserName = myName
+                    }
+                    val newId = repository.createConversation(
+                        currentUserId, myName, otherUserId, otherUserName
+                    )
+                    onResult(newId)
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+    }
+
+    fun openConversation(conversationId: String) {
+        activeMessagesJob?.cancel()
+        activeMessagesJob = viewModelScope.launch {
+            try {
+                repository.getMessagesForConversation(conversationId).collect {
+                    _activeMessages.value = it
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+    }
+
+    fun closeConversation() {
+        activeMessagesJob?.cancel()
+        activeMessagesJob = null
+        _activeMessages.value = emptyList()
+    }
+
+    fun sendMessage(conversationId: String, otherUserId: String, text: String) {
+        if (currentUserId.isEmpty() || text.isBlank()) return
+        viewModelScope.launch {
+            try {
+                repository.sendMessage(
+                    conversationId = conversationId,
+                    senderId = currentUserId,
+                    text = text,
+                    participantIds = listOf(currentUserId, otherUserId)
+                )
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+    }
+
+    fun setTyping(conversationId: String, isTyping: Boolean) {
+        if (currentUserId.isEmpty()) return
+        viewModelScope.launch {
+            try {
+                repository.setTypingStatus(currentUserId, if (isTyping) conversationId else null)
+            } catch (e: Exception) {
+                e.printStackTrace()
             }
         }
     }

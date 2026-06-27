@@ -2,6 +2,7 @@ package com.darkhorses.PedalConnect.ui.theme
 
 import com.google.firebase.Timestamp
 import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.Query
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
@@ -89,6 +90,8 @@ class ChatRepository {
 
     // ── Friend requests ─────────────────────────────────────────────────────
     suspend fun sendFriendRequest(fromId: String, fromName: String, toId: String, toName: String) {
+        if (fromId == toId) return  // never allow self-friending
+
         val existing = db.collection("friend_requests")
             .whereEqualTo("fromId", fromId)
             .whereEqualTo("toId", toId)
@@ -123,6 +126,7 @@ class ChatRepository {
         if (!snapshot.exists()) return
 
         val fromId = snapshot.getString("fromId") ?: ""
+        if (fromId == currentUserId) return  // safety guard, should never happen
 
         if (accept) {
             db.runBatch { batch ->
@@ -146,6 +150,21 @@ class ChatRepository {
     }
 
     // ── Notifications ───────────────────────────────────────────────────────
+
+    /** Live stream of the current user's own friends array. */
+    fun getMyFriendIds(userId: String): Flow<List<String>> = callbackFlow {
+        val registration = db.collection("users").document(userId)
+            .addSnapshotListener { doc, error ->
+                if (error != null) {
+                    trySend(emptyList())
+                    return@addSnapshotListener
+                }
+                val friends = (doc?.get("friends") as? List<*>)?.filterIsInstance<String>() ?: emptyList()
+                trySend(friends)
+            }
+        awaitClose { registration.remove() }
+    }
+
     fun getNotificationsForUser(userId: String): Flow<List<AppNotification>> = callbackFlow {
         val registration = db.collection("notifications")
             .whereEqualTo("toId", userId)
@@ -168,6 +187,57 @@ class ChatRepository {
         db.collection("notifications").document(notificationId)
             .update("read", true)
             .await()
+    }
+
+    // ── Conversations ────────────────────────────────────────────────────────
+
+    /** Returns the id of an existing 1:1 conversation between these two users, or null. */
+    suspend fun findExistingConversation(userId: String, otherUserId: String): String? {
+        val snapshot = db.collection("conversations")
+            .whereArrayContains("participantIds", userId)
+            .get()
+            .await()
+        return snapshot.documents.firstOrNull { doc ->
+            val ids = doc.get("participantIds") as? List<*>
+            ids != null && ids.size == 2 && ids.contains(otherUserId)
+        }?.id
+    }
+
+    /** Creates a new empty conversation between two users and returns its id. */
+    suspend fun createConversation(
+        userId: String, userName: String,
+        otherUserId: String, otherUserName: String
+    ): String {
+        val conversation = hashMapOf(
+            "participantIds" to listOf(userId, otherUserId),
+            "participantNames" to mapOf(userId to userName, otherUserId to otherUserName),
+            "lastMessage" to "",
+            "lastMessageSenderId" to "",
+            "lastMessageTimestamp" to Timestamp.now(),
+            "unreadCounts" to mapOf(userId to 0, otherUserId to 0),
+            "isGroup" to false
+        )
+        val docRef = db.collection("conversations").add(conversation).await()
+        return docRef.id
+    }
+
+    /** Real-time stream of messages within a single conversation, oldest first. */
+    fun getMessagesForConversation(conversationId: String): Flow<List<Message>> = callbackFlow {
+        val registration = db.collection("conversations").document(conversationId)
+            .collection("messages")
+            .orderBy("timestamp", Query.Direction.ASCENDING)
+            .addSnapshotListener { snapshot, error ->
+                if (error != null) {
+                    error.printStackTrace()
+                    trySend(emptyList())
+                    return@addSnapshotListener
+                }
+                val messages = snapshot?.documents?.mapNotNull { doc ->
+                    doc.toObject(Message::class.java)?.copy(id = doc.id)
+                } ?: emptyList()
+                trySend(messages)
+            }
+        awaitClose { registration.remove() }
     }
 
     // ── Messaging ────────────────────────────────────────────────────────────

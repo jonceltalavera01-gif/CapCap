@@ -77,7 +77,28 @@ fun AppNavigator(paddingValues: PaddingValues) {
             HomeScreen(navController, userName, initialTab = 0)
         }
 
-        composable("message") {
+        composable(
+            route = "chat/{conversationId}/{otherUserId}/{otherUserName}",
+            arguments = listOf(
+                navArgument("conversationId") { type = NavType.StringType },
+                navArgument("otherUserId") { type = NavType.StringType },
+                navArgument("otherUserName") { type = NavType.StringType }
+            )
+        ) { backStackEntry ->
+            val conversationId = backStackEntry.arguments?.getString("conversationId") ?: ""
+            val otherUserId = backStackEntry.arguments?.getString("otherUserId") ?: ""
+            val otherUserName = backStackEntry.arguments?.getString("otherUserName") ?: "Rider"
+
+            ChatScreen(
+                navController = navController,
+                paddingValues = paddingValues, // pass whatever PaddingValues you use elsewhere
+                conversationId = conversationId,
+                otherUserId = otherUserId,
+                otherUserName = otherUserName
+            )
+        }
+
+        composable("messages") {
             MessageScreen(navController, paddingValues)
         }
 
