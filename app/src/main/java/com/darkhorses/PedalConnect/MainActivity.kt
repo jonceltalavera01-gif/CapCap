@@ -18,6 +18,10 @@ import androidx.core.content.ContextCompat
 import android.content.Intent
 import com.darkhorses.PedalConnect.services.FirestoreNotificationService
 import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.firestore.FirebaseFirestore
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.tasks.await
 
 class MainActivity : FragmentActivity() {
 
@@ -57,7 +61,36 @@ class MainActivity : FragmentActivity() {
     }
 
     private fun startNotificationService() {
-        val intent = Intent(this, FirestoreNotificationService::class.java)
+        val email = FirebaseAuth.getInstance().currentUser?.email
+        if (email.isNullOrBlank()) {
+            // Not logged in yet — nothing to gate against, default to starting.
+            // (LoginScreen/session flow will re-trigger this after auth if needed.)
+            launchNotificationServiceStart()
+            return
+        }
+
+        lifecycleScope.launch {
+            val notificationsEnabled = try {
+                val snap = FirebaseFirestore.getInstance().collection("users")
+                    .whereEqualTo("email", email)
+                    .limit(1).get().await()
+                val prefs = snap.documents.firstOrNull()?.get("settings") as? Map<*, *>
+                prefs?.get("notificationsEnabled") as? Boolean ?: true
+            } catch (e: Exception) {
+                // Fail open — don't silently break notifications on a transient read error
+                true
+            }
+
+            if (notificationsEnabled) {
+                launchNotificationServiceStart()
+            }
+        }
+    }
+
+    private fun launchNotificationServiceStart() {
+        val intent = Intent(this, FirestoreNotificationService::class.java).apply {
+            action = FirestoreNotificationService.ACTION_START
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             startForegroundService(intent)
         } else {

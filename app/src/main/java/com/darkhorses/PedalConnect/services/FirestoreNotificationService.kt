@@ -17,14 +17,22 @@ import com.google.firebase.firestore.ListenerRegistration
 class FirestoreNotificationService : Service() {
 
     private var listenerRegistration: ListenerRegistration? = null
+    private var settingsListenerRegistration: ListenerRegistration? = null
     private val db = FirebaseFirestore.getInstance()
     private val auth = FirebaseAuth.getInstance()
+
+    // Cached in-memory from a realtime Firestore listener so we don't need an
+    // async read on every incoming notification. Defaults to true (matches
+    // the default used in SettingsScreen) until the first snapshot arrives.
+    @Volatile private var notificationsEnabled = true
 
     companion object {
         const val CHANNEL_ID = "FirestoreNotificationChannel"
         const val ALERT_CHANNEL_ID = "PedalConnectAlertChannel"
         const val NOTIFICATION_ID = 2001
         const val SYSTEM_NOTIFICATION_ID = 3001
+        const val ACTION_START = "com.darkhorses.PedalConnect.action.START_NOTIFICATIONS"
+        const val ACTION_STOP = "com.darkhorses.PedalConnect.action.STOP_NOTIFICATIONS"
     }
 
     override fun onCreate() {
@@ -33,6 +41,15 @@ class FirestoreNotificationService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == ACTION_STOP) {
+            Log.d("NotificationService", "Stop requested — user disabled in-app notifications")
+            listenerRegistration?.remove()
+            listenerRegistration = null
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelf()
+            return START_NOT_STICKY
+        }
+
         // Ensure notification channels exist
         createNotificationChannels()
 
@@ -62,10 +79,14 @@ class FirestoreNotificationService : Service() {
             if (user != null) {
                 Log.d("NotificationService", "User logged in: ${user.uid}, starting listener")
                 startListening(user.uid)
+                startListeningToNotificationSetting(user.email)
             } else {
                 Log.d("NotificationService", "User logged out, stopping listener")
                 listenerRegistration?.remove()
                 listenerRegistration = null
+                settingsListenerRegistration?.remove()
+                settingsListenerRegistration = null
+                notificationsEnabled = true
             }
         }
 
@@ -106,7 +127,9 @@ class FirestoreNotificationService : Service() {
 
                         // Ignore notifications older than 10 minutes from now
                         if (Math.abs(System.currentTimeMillis() - timestamp) < 600_000) {
-                            if (!isAppInForeground()) {
+                            if (!notificationsEnabled) {
+                                Log.d("NotificationService", "Notifications disabled by user, skipping system notification.")
+                            } else if (!isAppInForeground()) {
                                 showSystemNotification(message, type, userName)
                             } else {
                                 Log.d("NotificationService", "App is in foreground, skipping system notification.")
@@ -122,6 +145,30 @@ class FirestoreNotificationService : Service() {
                         }
                     }
                 }
+            }
+    }
+
+    /**
+     * Keeps [notificationsEnabled] in sync in real time with the user's
+     * "In-App Notifications" toggle in Settings, so a change takes effect
+     * immediately without restarting this service.
+     */
+    private fun startListeningToNotificationSetting(email: String?) {
+        settingsListenerRegistration?.remove()
+        if (email.isNullOrBlank()) return
+
+        settingsListenerRegistration = db.collection("users")
+            .whereEqualTo("email", email)
+            .limit(1)
+            .addSnapshotListener { snapshots, e ->
+                if (e != null) {
+                    Log.w("NotificationService", "Settings listen failed: ${e.message}", e)
+                    return@addSnapshotListener
+                }
+                val doc = snapshots?.documents?.firstOrNull() ?: return@addSnapshotListener
+                val prefs = doc.get("settings") as? Map<*, *>
+                notificationsEnabled = prefs?.get("notificationsEnabled") as? Boolean ?: true
+                Log.d("NotificationService", "notificationsEnabled updated: $notificationsEnabled")
             }
     }
 
@@ -196,8 +243,8 @@ class FirestoreNotificationService : Service() {
 
     override fun onDestroy() {
         listenerRegistration?.remove()
+        settingsListenerRegistration?.remove()
         super.onDestroy()
     }
-
     override fun onBind(intent: Intent?): IBinder? = null
 }

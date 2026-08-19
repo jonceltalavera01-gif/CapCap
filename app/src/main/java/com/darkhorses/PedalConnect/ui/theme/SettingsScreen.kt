@@ -45,6 +45,7 @@ import com.google.firebase.auth.userProfileChangeRequest
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.SetOptions
 import com.darkhorses.PedalConnect.services.FallDetectionService
+import com.darkhorses.PedalConnect.services.FirestoreNotificationService
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -192,6 +193,29 @@ fun SettingsScreen(navController: NavController) {
                 "Failed to load settings: ${e.message?.take(60)}", Toast.LENGTH_SHORT).show()
         }
         isLoadingSettings = false
+    }
+
+    // Keeps the background notification service in sync with the saved
+    // preference — fires once after initial load, and again on every toggle
+    // flip, so we don't need to duplicate this logic inside onCheckedChange.
+    LaunchedEffect(isLoadingSettings, settings.notificationsEnabled) {
+        if (isLoadingSettings) return@LaunchedEffect
+        val intent = Intent(context, FirestoreNotificationService::class.java)
+        try {
+            if (settings.notificationsEnabled) {
+                intent.action = FirestoreNotificationService.ACTION_START
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    context.startForegroundService(intent)
+                } else {
+                    context.startService(intent)
+                }
+            } else {
+                intent.action = FirestoreNotificationService.ACTION_STOP
+                context.startService(intent)
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("Settings", "Failed to sync notification service state", e)
+        }
     }
 
     // ── Helper: save a single boolean toggle to Firestore ─────────────────────
