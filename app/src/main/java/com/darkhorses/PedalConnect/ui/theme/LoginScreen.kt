@@ -753,7 +753,12 @@ fun LoginScreen(navController: NavController, paddingValues: PaddingValues) {
                     navController.navigate("home/$pendingUsername") { popUpTo(0) { inclusive = true } }
                 },
                 title = { Text("Enable Fingerprint Login", fontWeight = FontWeight.Bold, color = LGreen900) },
-                text = { Text("Would you like to use your fingerprint for faster login next time?") },
+                text = {
+                    Text(
+                        "Would you like to use your fingerprint for faster login next time?",
+                        color = Color(0xFF4B5563)
+                    )
+                },
                 confirmButton = {
                     TextButton(onClick = {
                         showBiometricOffer = false

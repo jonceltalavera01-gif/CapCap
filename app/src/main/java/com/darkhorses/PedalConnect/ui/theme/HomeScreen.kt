@@ -458,9 +458,9 @@ fun HomeScreen(
     }
 
     val items = if (isAdmin)
-        listOf("Home", "Moderate", "Analytics", "Alert", "Profile")
+        listOf("Home", "Moderate", "Analytics", "Alert", "You")
     else
-        listOf("Home", "Map", "Services", "Alert", "Profile")
+        listOf("Home", "Map", "Services", "Alert", "You")
 
     val icons = if (isAdmin) listOf(
         Icons.Filled.Home, Icons.Filled.AdminPanelSettings, Icons.Filled.Analytics,

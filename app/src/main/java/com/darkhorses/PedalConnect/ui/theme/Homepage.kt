@@ -3623,8 +3623,10 @@ fun userInitials(name: String): String {          val parts = name.trim().split(
                                         )
                                     }
                                 }
-                                IconButton(onClick = { navController.navigate("messages") }) {
-                                    Icon(Icons.Filled.Message, "Messages", tint = Color.White)
+                                if (!isAdmin) {
+                                    IconButton(onClick = { navController.navigate("messages") }) {
+                                        Icon(Icons.Filled.Message, "Messages", tint = Color.White)
+                                    }
                                 }
                             },
                             colors = TopAppBarDefaults.topAppBarColors(containerColor = Green900),

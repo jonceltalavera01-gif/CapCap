@@ -72,6 +72,7 @@ fun PublicProfileScreen(
     currentUserName : String
 ) {
     val db = FirebaseFirestore.getInstance()
+    val context = androidx.compose.ui.platform.LocalContext.current
 
     // ── Profile state ─────────────────────────────────────────────────────────
     var displayName  by remember { mutableStateOf("") }
@@ -1643,7 +1644,7 @@ fun PublicProfileScreen(
                     }
                 },
                 actions = {
-                    if (targetUserName != currentUserName) {
+                    if (targetUserName != currentUserName && !isAdmin) {
                         IconButton(
                             onClick = {
                                 if (!hasAlreadyReportedUser) {
@@ -1747,8 +1748,8 @@ fun PublicProfileScreen(
                                 )
                             }
 
-                            // ── Friend action — hidden on your own profile ─────────
-                            if (!isOwnProfile) {
+                            // ── Friend action — hidden on your own profile and for admins ──
+                            if (!isOwnProfile && !isAdmin) {
                                 if (isFriend) {
                                     Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                                         IconButton(
@@ -1776,7 +1777,16 @@ fun PublicProfileScreen(
                                     }
                                 } else {
                                     IconButton(
-                                        onClick = { chatViewModel.sendFriendRequest(User(uid = targetUid, username = targetUserName)) },
+                                        onClick = {
+                                            if (targetUid.isBlank()) {
+                                                android.widget.Toast.makeText(context, "Still loading profile — try again in a moment.", android.widget.Toast.LENGTH_SHORT).show()
+                                            } else {
+                                                chatViewModel.sendFriendRequest(User(uid = targetUid, username = targetUserName)) { created ->
+                                                    val msg = if (created) "Request sent!" else "You already sent a request to this person."
+                                                    android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_SHORT).show()
+                                                }
+                                            }
+                                        },
                                         modifier = Modifier
                                             .size(36.dp)
                                             .clip(CircleShape)

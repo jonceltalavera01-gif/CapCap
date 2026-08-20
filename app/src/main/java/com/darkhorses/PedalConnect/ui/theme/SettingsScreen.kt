@@ -356,16 +356,22 @@ fun SettingsScreen(navController: NavController) {
                     color = Color(0xFF5A6B5A), fontSize = 14.sp)
             },
             confirmButton = {
-                Button(
-                    onClick = { showLogoutDialog = false; logoutAndNavigate(context, navController) },
-                    colors  = ButtonDefaults.buttonColors(containerColor = DangerRed),
-                    shape   = RoundedCornerShape(10.dp)
-                ) { Text("Log Out", color = Color.White, fontWeight = FontWeight.SemiBold) }
-            },
-            dismissButton = {
-                OutlinedButton(onClick = { showLogoutDialog = false },
-                    shape = RoundedCornerShape(10.dp)) {
-                    Text("Cancel", color = SettingsGreen900)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.Center
+                ) {
+                    OutlinedButton(
+                        onClick = { showLogoutDialog = false },
+                        shape   = RoundedCornerShape(10.dp)
+                    ) {
+                        Text("Cancel", color = SettingsGreen900)
+                    }
+                    Spacer(Modifier.width(10.dp))
+                    Button(
+                        onClick = { showLogoutDialog = false; logoutAndNavigate(context, navController) },
+                        colors  = ButtonDefaults.buttonColors(containerColor = DangerRed),
+                        shape   = RoundedCornerShape(10.dp)
+                    ) { Text("Log Out", color = Color.White, fontWeight = FontWeight.SemiBold) }
                 }
             },
             containerColor = Color(0xFFF5F7F5), shape = RoundedCornerShape(20.dp)
