@@ -95,7 +95,7 @@ fun ShopsScreen(
     isLoadingShops  : Boolean            = false,
     fetchFailed     : Boolean            = false,
     onRetry         : () -> Unit         = {},
-    onDirectionClick: (GeoPoint) -> Unit
+    onDirectionClick: (ShopItem) -> Unit
 ) {
     var selectedFilter by remember { mutableStateOf("All") }
     var searchQuery    by remember { mutableStateOf("") }
@@ -379,7 +379,7 @@ fun ShopsScreen(
 @Composable
 fun ShopCard(
     shop            : ShopItem,
-    onDirectionClick: (GeoPoint) -> Unit,
+    onDirectionClick: (ShopItem) -> Unit,
     modifier        : Modifier = Modifier
 ) {
     val meta         = shopTypeMeta(shop.type)
@@ -564,7 +564,7 @@ fun ShopCard(
 
                     // ── Get Directions button ─────────────────────────────────
                     Button(
-                        onClick  = { onDirectionClick(shop.location) },
+                        onClick  = { onDirectionClick(shop) },
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(44.dp),

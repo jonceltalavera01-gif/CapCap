@@ -499,7 +499,11 @@ fun HomeScreen(
     var isLocationEnabled by remember { mutableStateOf(true) }
     var currentRoute      by remember { mutableStateOf<Polyline?>(null) }
     var altRoute          by remember { mutableStateOf<Polyline?>(null) }
-    var destinationPoint  by remember { mutableStateOf<GeoPoint?>(null) }
+    var destinationPoint    by remember { mutableStateOf<GeoPoint?>(null) }
+    // Remembers which POI category (if any) the current destination came from,
+    // so the map pin can keep that marker's identity instead of collapsing to
+    // a generic flag. Null = free-text search / no known category.
+    var destinationShopType by remember { mutableStateOf<ShopType?>(null) }
 
     data class RouteOption(
         val label: String, val description: String, val distanceKm: Double,
@@ -507,6 +511,11 @@ fun HomeScreen(
         val color: androidx.compose.ui.graphics.Color
     )
     var routeOptions     by remember { mutableStateOf<List<RouteOption>>(emptyList()) }
+    // Ticket counter for route fetches. Bumped on every new fetch AND on every
+    // cancel, so a slow/in-flight fetchRoutes() result that arrives after the
+    // user already cancelled can be detected and discarded instead of silently
+    // re-adding a polyline the user just dismissed.
+    var routeRequestId   by remember { mutableIntStateOf(0) }
     var selectedRouteIdx by remember { mutableIntStateOf(0) }
     var showRoutePanel   by remember { mutableStateOf(false) }
     var showShopMarkers  by remember { mutableStateOf(true) }
@@ -801,10 +810,25 @@ fun HomeScreen(
 
     // ── Proximity / shops state ───────────────────────────────────────────────
     var userGeoPoint        by remember { mutableStateOf<GeoPoint?>(null) }
+    val nearbyOthersAlerts by remember {
+        derivedStateOf {
+            val loc = userGeoPoint
+            alerts.filter { alert ->
+                if (alert.riderName.trim().lowercase() == userName.trim().lowercase()) return@filter false
+                if (loc == null) return@filter true
+                haversineKm(loc.latitude, loc.longitude, alert.coordinates.latitude, alert.coordinates.longitude) <= 3.0
+            }
+        }
+    }
     val nearbyUsers         = remember { mutableStateListOf<NearbyUser>() }
     val nearbyShops         = remember { mutableStateListOf<ShopItem>() }
     var isLoadingShops      by remember { mutableStateOf(false) }
     var fetchFailed         by remember { mutableStateOf(false) }
+    // True when the last location-publish write to Firestore failed. Unlike
+    // fetchFailed (nearby places, best-effort), this means other users may be
+    // seeing a stale/missing position for you — worth a persistent signal
+    // rather than a one-off silent log line, especially during an active alert.
+    var locationSyncFailed  by remember { mutableStateOf(false) }
     // Tapped shop — drives the bottom sheet
     var selectedShop        by remember { mutableStateOf<ShopItem?>(null) }
     var lastOverpassFetchMs   by remember { mutableLongStateOf(0L) }
@@ -812,6 +836,8 @@ fun HomeScreen(
     var mapFocusFilter        by remember { mutableStateOf<ShopType?>(null) }
     var firstFetchCompleted   by remember { mutableStateOf(false) }
     // ── Per-category pin visibility — persisted so toggles survive app restarts ──
+    var showHospitalPins      by remember { mutableStateOf(prefs.getBoolean("show_hospital_pins", true)) }
+    var showBikeShopPins      by remember { mutableStateOf(prefs.getBoolean("show_bike_shop_pins", true)) }
     var showBikeRackPins      by remember { mutableStateOf(prefs.getBoolean("show_bike_rack_pins", true)) }
     var showGasStationPins    by remember { mutableStateOf(prefs.getBoolean("show_gas_station_pins", true)) }
     var showWaterPins         by remember { mutableStateOf(prefs.getBoolean("show_water_pins", true)) }
@@ -1124,6 +1150,11 @@ fun HomeScreen(
                 "longitude" to loc.longitude,
                 "timestamp" to System.currentTimeMillis()
             ))
+            .addOnSuccessListener { locationSyncFailed = false }
+            .addOnFailureListener { e ->
+                locationSyncFailed = true
+                android.util.Log.e("HomeScreen", "Failed to publish location", e)
+            }
         val now2 = System.currentTimeMillis()
 
         // Publish rider location if this user has an active responding alert
@@ -1206,9 +1237,15 @@ fun HomeScreen(
         }
     }
 
+    var alertsListenerError by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
         db.collection("alerts").addSnapshotListener { snapshot, e ->
-            if (e != null) return@addSnapshotListener
+            if (e != null) {
+                alertsListenerError = true
+                android.util.Log.e("HomeScreen", "Alerts listener failed", e)
+                return@addSnapshotListener
+            }
+            alertsListenerError = false
             snapshot?.let {
                 alerts.clear()
                 for (doc in it.documents) {
@@ -1239,11 +1276,22 @@ fun HomeScreen(
             }
         }
     }
-
+    // One-shot toast per failure transition — avoids spamming if the listener
+    // keeps erroring on a flaky connection, since this only fires on the
+    // false→true edge, not on every recomposition while it stays true.
+    LaunchedEffect(alertsListenerError) {
+        if (alertsListenerError) {
+            Toast.makeText(
+                context,
+                "Couldn't load alerts — you may not see new SOS alerts until this reconnects.",
+                Toast.LENGTH_LONG
+            ).show()
+        }
+    }
     // ── Nearby users — reliable periodic poll ─────────────────────────────────
-// Replaces the snapshot listener + isFirstFix bulk read combo.
-// Polls every 8 seconds once GPS is available so all devices converge
-// on the same view regardless of open order or movement.
+        // Replaces the snapshot listener + isFirstFix bulk read combo.
+        // Polls every 8 seconds once GPS is available so all devices converge
+        // on the same view regardless of open order or movement.
     // ── Nearby alert banner trigger ───────────────────────────────────────────
     LaunchedEffect(alerts.size) {
         val center = userGeoPoint ?: myLocationOverlay?.myLocation ?: return@LaunchedEffect
@@ -1326,10 +1374,10 @@ fun HomeScreen(
                 val helperMap = snapshot?.get("helper") as? Map<*, *>
                 val lat = helperMap?.get("lat") as? Double
                 val lng = helperMap?.get("lng") as? Double
-                if (lat != null && lng != null) {
-                    helperLiveLocation = GeoPoint(lat, lng)
-                    mapRedrawTrigger++
-                }
+                // Doc missing/deleted (cancelled response, resolved alert) — clear the
+                // stale pin instead of leaving the last known position on the map.
+                helperLiveLocation = if (lat != null && lng != null) GeoPoint(lat, lng) else null
+                mapRedrawTrigger++
             }
         onDispose { listener.remove() }
     }
@@ -1449,9 +1497,18 @@ fun HomeScreen(
         }
     }
 
-    fun fetchRoutes(start: GeoPoint, end: GeoPoint) {
-        isLoadingRoute = true; showRoutePanel = false; showTurnPanel = false
-        routeDismissed = false; showShopMarkers = false
+    fun fetchRoutes(start: GeoPoint, end: GeoPoint, isReroute: Boolean = false) {
+        val requestId = ++routeRequestId
+        // Snapshot what the user was looking at — a background reroute correction
+        // (triggered by drifting off-route) must restore this on completion instead
+        // of always forcing the full route panel open or dropping out of turn-by-turn.
+        val wasTurnPanelActive = showTurnPanel
+        val wasDismissed       = routeDismissed
+        isLoadingRoute = true
+        if (!isReroute) {
+            showRoutePanel = false; showTurnPanel = false
+            routeDismissed = false; showShopMarkers = false
+        }
         turnSteps = emptyList()
         mapViewRef?.let { map -> activePolylines.forEach { map.overlays.remove(it) } }
         val profiles = listOf(
@@ -1509,8 +1566,11 @@ fun HomeScreen(
                 } catch (e: Exception) { e.printStackTrace() }
             }
             withContext(Dispatchers.Main) {
-                routeOptions   = fetched
                 isLoadingRoute = false
+                // Superseded by a newer fetch, or the user cancelled while this
+                // was in flight — discard instead of reviving a dismissed route.
+                if (requestId != routeRequestId) return@withContext
+                routeOptions   = fetched
                 if (fetched.isEmpty()) {
                     Toast.makeText(
                         context,
@@ -1548,8 +1608,15 @@ fun HomeScreen(
                 }
                 newPolylines.forEach { liveMap.overlays.add(it) }
                 activePolylines = newPolylines
-                showRoutePanel  = if (isRespondingToAlert) false else true
-                showTurnPanel   = if (isRespondingToAlert) true else false
+                if (isReroute) {
+                    // Background correction — keep whatever the user was looking at.
+                    showTurnPanel  = wasTurnPanelActive
+                    showRoutePanel = !wasDismissed && !wasTurnPanelActive && !isRespondingToAlert
+                    routeDismissed = wasDismissed
+                } else {
+                    showRoutePanel  = if (isRespondingToAlert) false else true
+                    showTurnPanel   = if (isRespondingToAlert) true else false
+                }
                 pendingRouteIdx = -1
                 currentStepIdx  = 0
                 liveMap.invalidate()
@@ -1575,8 +1642,13 @@ fun HomeScreen(
                         distKm > 2.0  -> 14.0
                         else          -> 15.0
                     }
-                    liveMap.controller.animateTo(GeoPoint(centerLat, centerLon), zoom, 1000L)
-                    isFollowingLocation = false
+                    if (!isReroute) {
+                        // Only steal the camera for a user-initiated route request.
+                        // A background correction shouldn't yank the map away from
+                        // live GPS following while the user is mid-ride.
+                        liveMap.controller.animateTo(GeoPoint(centerLat, centerLon), zoom, 1000L)
+                        isFollowingLocation = false
+                    }
                 }
 
 
@@ -1626,7 +1698,8 @@ fun HomeScreen(
                 val place = json.getJSONObject(0)
                 val dest  = GeoPoint(place.getDouble("lat"), place.getDouble("lon"))
                 withContext(Dispatchers.Main) {
-                    destinationPoint  = dest; searchSuggestions = emptyList()
+                    destinationPoint    = dest; destinationShopType = null
+                    searchSuggestions   = emptyList()
                     val start = userGeoPoint ?: myLocationOverlay?.myLocation
                     ?: lastTrackedLocation?.let { GeoPoint(it.latitude, it.longitude) }
                     if (start != null) {
@@ -1773,6 +1846,7 @@ fun HomeScreen(
         mapViewRef?.overlays?.add(poly)
         activePolylines       = listOf(poly)
         destinationPoint      = points.last()
+        destinationShopType   = null
         routeOptions          = emptyList()
         turnSteps              = emptyList()
         showTurnPanel          = false
@@ -1891,7 +1965,8 @@ fun HomeScreen(
                 startBreadcrumbRoute(pendingPolylinePoints)
             } else {
                 val dest = GeoPoint(destLat, destLon)
-                destinationPoint = dest
+                destinationPoint    = dest
+                destinationShopType = null
                 fetchRoutes(start, dest)
             }
         }
@@ -1920,7 +1995,7 @@ fun HomeScreen(
             val now = System.currentTimeMillis()
             if (now - lastRerouteMs < 10_000L) return
             lastRerouteMs = now
-            fetchRoutes(loc, destinationPoint ?: return)
+            fetchRoutes(loc, destinationPoint ?: return, isReroute = true)
         }
     }
 
@@ -2192,7 +2267,7 @@ fun HomeScreen(
                                     val shouldDot = if (isAdmin) {
                                         alerts.any { it.status == "active" }
                                     } else {
-                                        alerts.isNotEmpty()
+                                        nearbyOthersAlerts.isNotEmpty()
                                     }
                                     if (shouldDot) {
                                         Box(
@@ -2312,8 +2387,10 @@ fun HomeScreen(
                                 append(nearbyShops.size); append(':'); append(nearbyShops.hashCode()); append('|')
                                 append(nearbyUsers.joinToString(",") { "${it.userName}:${it.layer}" }); append('|')
                                 append(destinationPoint); append('|')
+                                append(destinationShopType); append('|')
                                 append(rideStartPoint); append('|')
                                 append(mapFocusFilter); append('|')
+                                append(showHospitalPins); append(showBikeShopPins); append('|')
                                 append(showBikeRackPins); append(showGasStationPins); append(showWaterPins); append('|')
                                 append(zoomBucket)
                             }
@@ -2337,12 +2414,14 @@ fun HomeScreen(
                                 }
                                 if (showShopMarkers) nearbyShops.forEach { shop ->
                                 // User-controlled visibility — hides these POI categories entirely
-                                when (shop.type) {
-                                    ShopType.BIKE_RACK      -> if (!showBikeRackPins)   return@forEach
-                                    ShopType.GAS_STATION    -> if (!showGasStationPins) return@forEach
-                                    ShopType.DRINKING_WATER -> if (!showWaterPins)      return@forEach
-                                    else -> {}
-                                }
+                                    when (shop.type) {
+                                        ShopType.HOSPITAL       -> if (!showHospitalPins)   return@forEach
+                                        ShopType.BIKE_SHOP      -> if (!showBikeShopPins)   return@forEach
+                                        ShopType.BIKE_RACK      -> if (!showBikeRackPins)   return@forEach
+                                        ShopType.GAS_STATION    -> if (!showGasStationPins) return@forEach
+                                        ShopType.DRINKING_WATER -> if (!showWaterPins)      return@forEach
+                                        else -> {}
+                                    }
                                 // Bike racks / drinking water / gas stations only show once zoomed in close
                                 // enough to be individually useful — avoids cluttering city-block
                                 // zoom with low-priority POIs.
@@ -2445,12 +2524,13 @@ fun HomeScreen(
                             // ── Live helper marker — only shown when helper is responding ──
                             // Runs every tick (outside the gate above) since it already
                             // updates in place rather than tearing down and rebuilding.
-                            helperLiveLocation?.let { helperGp ->
-                                val existingHelperMarker = view.overlays
-                                    .filterIsInstance<org.osmdroid.views.overlay.Marker>()
-                                    .firstOrNull { it.id == "live_helper" }
+                            val existingHelperMarker = view.overlays
+                                .filterIsInstance<org.osmdroid.views.overlay.Marker>()
+                                .firstOrNull { it.id == "live_helper" }
+                            val helperGpNow = helperLiveLocation
+                            if (helperGpNow != null) {
                                 if (existingHelperMarker != null) {
-                                    existingHelperMarker.position = helperGp
+                                    existingHelperMarker.position = helperGpNow
                                 } else {
                                     val helperBitmap = makeMarkerBitmap(
                                         context    = view.context,
@@ -2462,7 +2542,7 @@ fun HomeScreen(
                                     )
                                     Marker(view).apply {
                                         id       = "live_helper"
-                                        position = helperGp
+                                        position = helperGpNow
                                         title    = "🚴 Helper is on the way"
                                         setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
                                         icon = android.graphics.drawable.BitmapDrawable(
@@ -2471,6 +2551,9 @@ fun HomeScreen(
                                         view.overlays.add(this)
                                     }
                                 }
+                            } else if (existingHelperMarker != null) {
+                                // Responder cancelled / alert resolved — remove the stale pin.
+                                view.overlays.remove(existingHelperMarker)
                             }
                             if (contentChanged) {
                                 val activeResponderNames = alerts
@@ -2596,16 +2679,35 @@ fun HomeScreen(
                                         ) < 0.01  // ~10m — same point, allows for float rounding
                                     }
                                     if (!isAlertDestination) {
-                                        val destBitmap = makeMarkerBitmap(
-                                            view.context,
-                                            android.graphics.Color.argb(255, 211, 47, 47),
-                                            isHospital = false,
-                                            sizePx     = 76,
-                                            isCheckeredFlag = true
-                                        )
+                                        // Preserve the origin marker's identity when the destination
+                                        // came from a known POI (tapped from the shop sheet), instead
+                                        // of collapsing every destination to the same generic flag.
+                                        // Free-text search / breadcrumb / no-category destinations
+                                        // still fall back to the checkered flag below.
+                                        val (destBitmap, destTitle) = when (destinationShopType) {
+                                            ShopType.HOSPITAL -> makeMarkerBitmap(
+                                                view.context,
+                                                android.graphics.Color.argb(255, 211, 47, 47),
+                                                isHospital = true,
+                                                sizePx     = 76
+                                            ) to "🏥 Destination"
+                                            ShopType.BIKE_SHOP -> makeMarkerBitmap(
+                                                view.context,
+                                                android.graphics.Color.argb(255, 10, 92, 61),
+                                                isHospital = false,
+                                                sizePx     = 76
+                                            ) to "🔧 Destination"
+                                            else -> makeMarkerBitmap(
+                                                view.context,
+                                                android.graphics.Color.argb(255, 211, 47, 47),
+                                                isHospital = false,
+                                                sizePx     = 76,
+                                                isCheckeredFlag = true
+                                            ) to "🏁 Destination"
+                                        }
                                         Marker(view).apply {
                                             position = dest
-                                            title    = "🏁 Destination"
+                                            title    = destTitle
                                             setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
                                             icon = android.graphics.drawable.BitmapDrawable(view.context.resources, destBitmap)
                                             view.overlays.add(this)
@@ -2657,6 +2759,32 @@ fun HomeScreen(
                                 elevation      = FloatingActionButtonDefaults.elevation(6.dp)
                             ) {
                                 Icon(Icons.Default.Refresh, "Retry loading services",
+                                    modifier = Modifier.size(20.dp))
+                            }
+                        }
+                        androidx.compose.animation.AnimatedVisibility(
+                            visible = locationSyncFailed && !userName.trim().equals("Admin", ignoreCase = true),
+                            enter   = fadeIn() + scaleIn(),
+                            exit    = fadeOut() + scaleOut()
+                        ) {
+                            // Not directly retryable — the next successful GPS fix will
+                            // clear it on its own. Tapping just re-confirms the state to
+                            // the user rather than pretending to force a retry.
+                            FloatingActionButton(
+                                onClick = {
+                                    Toast.makeText(
+                                        context,
+                                        "Your location isn't syncing — nearby cyclists may not see your current position. Check your connection.",
+                                        Toast.LENGTH_LONG
+                                    ).show()
+                                },
+                                modifier       = Modifier.size(44.dp),
+                                shape          = CircleShape,
+                                containerColor = Color(0xFFFFF3E0),
+                                contentColor   = Color(0xFFF57C00),
+                                elevation      = FloatingActionButtonDefaults.elevation(6.dp)
+                            ) {
+                                Icon(Icons.Default.LocationOff, "Location not syncing",
                                     modifier = Modifier.size(20.dp))
                             }
                         }
@@ -2772,7 +2900,10 @@ fun HomeScreen(
                     ) {
                         val focusManager = LocalFocusManager.current
                         fun clearDestination() {
-                            searchQuery = ""; searchSuggestions = emptyList(); destinationPoint = null
+                            routeRequestId++     // invalidate any in-flight reroute fetch
+                            isLoadingRoute = false
+                            searchQuery = ""; searchSuggestions = emptyList()
+                            destinationPoint = null; destinationShopType = null
                             activePolylines.forEach { mapViewRef?.overlays?.remove(it) }
                             activePolylines = emptyList(); routeOptions = emptyList()
                             showRoutePanel = false; showTurnPanel = false
@@ -2922,18 +3053,20 @@ fun HomeScreen(
                                             fontWeight = FontWeight.Medium
                                         )
                                         IconButton(onClick = {
-                                            showTurnPanel       = false
-                                            showRoutePanel      = false
-                                            routeDismissed      = false
-                                            showShopMarkers     = true
-                                            isRespondingToAlert = false
-                                            mapFocusFilter      = null
+                                            routeRequestId++     // invalidate any in-flight reroute fetch
+                                            isLoadingRoute       = false
+                                            showTurnPanel        = false
+                                            showRoutePanel       = false
+                                            routeDismissed       = false
+                                            showShopMarkers      = true
+                                            isRespondingToAlert  = false
+                                            mapFocusFilter       = null
                                             mapRedrawTrigger++
                                             activePolylines.forEach { mapViewRef?.overlays?.remove(it) }
-                                            activePolylines  = emptyList()
-                                            routeOptions     = emptyList()
-                                            destinationPoint = null
-                                            searchQuery      = ""
+                                            activePolylines   = emptyList()
+                                            routeOptions      = emptyList()
+                                            destinationPoint  = null
+                                            searchQuery       = ""
                                             searchSuggestions = emptyList()
                                             mapViewRef?.invalidate()
                                             isFollowingLocation = true
@@ -3510,7 +3643,15 @@ fun HomeScreen(
                                                 Row(
                                                     modifier = Modifier
                                                         .clip(RoundedCornerShape(20.dp))
-                                                        .background(Color(0xFFD32F2F))
+                                                        .background(if (showHospitalPins) Color(0xFFD32F2F) else Color(0xFFD32F2F).copy(alpha = 0.35f))
+                                                        .clickable(
+                                                            interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                                                            indication        = null
+                                                        ) {
+                                                            showHospitalPins = !showHospitalPins
+                                                            prefs.edit().putBoolean("show_hospital_pins", showHospitalPins).apply()
+                                                            mapRedrawTrigger++; mapViewRef?.invalidate()
+                                                        }
                                                         .padding(horizontal = 7.dp, vertical = 4.dp),
                                                     verticalAlignment = Alignment.CenterVertically,
                                                     horizontalArrangement = Arrangement.spacedBy(3.dp)
@@ -3522,13 +3663,21 @@ fun HomeScreen(
                                                 Row(
                                                     modifier = Modifier
                                                         .clip(RoundedCornerShape(20.dp))
-                                                        .background(Color(0xFFE0F2F1))
+                                                        .background(if (showBikeShopPins) Color(0xFFE0F2F1) else Color(0xFFE0F2F1).copy(alpha = 0.5f))
+                                                        .clickable(
+                                                            interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                                                            indication        = null
+                                                        ) {
+                                                            showBikeShopPins = !showBikeShopPins
+                                                            prefs.edit().putBoolean("show_bike_shop_pins", showBikeShopPins).apply()
+                                                            mapRedrawTrigger++; mapViewRef?.invalidate()
+                                                        }
                                                         .padding(horizontal = 7.dp, vertical = 4.dp),
                                                     verticalAlignment = Alignment.CenterVertically,
                                                     horizontalArrangement = Arrangement.spacedBy(3.dp)
                                                 ) {
-                                                    Icon(Icons.Default.HomeRepairService, null, tint = Color(0xFF00796B), modifier = Modifier.size(11.dp))
-                                                    Text("$nearbyBikeShopsCard", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFF00796B))
+                                                    Icon(Icons.Default.HomeRepairService, null, tint = if (showBikeShopPins) Color(0xFF00796B) else Color(0xFF00796B).copy(alpha = 0.5f), modifier = Modifier.size(11.dp))
+                                                    Text("$nearbyBikeShopsCard", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = if (showBikeShopPins) Color(0xFF00796B) else Color(0xFF00796B).copy(alpha = 0.5f))
                                                 }
                                             }
                                         } else {
@@ -3660,7 +3809,15 @@ fun HomeScreen(
                                     Row(
                                         modifier = Modifier
                                             .clip(RoundedCornerShape(20.dp))
-                                            .background(Color(0xFFD32F2F))
+                                            .background(if (showHospitalPins) Color(0xFFD32F2F) else Color(0xFFD32F2F).copy(alpha = 0.35f))
+                                            .clickable(
+                                                interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                                                indication        = null
+                                            ) {
+                                                showHospitalPins = !showHospitalPins
+                                                prefs.edit().putBoolean("show_hospital_pins", showHospitalPins).apply()
+                                                mapRedrawTrigger++; mapViewRef?.invalidate()
+                                            }
                                             .padding(horizontal = 11.dp, vertical = 6.dp),
                                         verticalAlignment     = Alignment.CenterVertically,
                                         horizontalArrangement = Arrangement.spacedBy(5.dp)
@@ -3675,17 +3832,25 @@ fun HomeScreen(
                                     Row(
                                         modifier = Modifier
                                             .clip(RoundedCornerShape(20.dp))
-                                            .background(Color(0xFFE0F2F1))
+                                            .background(if (showBikeShopPins) Color(0xFFE0F2F1) else Color(0xFFE0F2F1).copy(alpha = 0.5f))
+                                            .clickable(
+                                                interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                                                indication        = null
+                                            ) {
+                                                showBikeShopPins = !showBikeShopPins
+                                                prefs.edit().putBoolean("show_bike_shop_pins", showBikeShopPins).apply()
+                                                mapRedrawTrigger++; mapViewRef?.invalidate()
+                                            }
                                             .padding(horizontal = 11.dp, vertical = 6.dp),
                                         verticalAlignment     = Alignment.CenterVertically,
                                         horizontalArrangement = Arrangement.spacedBy(5.dp)
                                     ) {
                                         Icon(Icons.Default.HomeRepairService, null,
-                                            tint     = Color(0xFF00796B),
+                                            tint     = if (showBikeShopPins) Color(0xFF00796B) else Color(0xFF00796B).copy(alpha = 0.5f),
                                             modifier = Modifier.size(13.dp))
                                         Text("$nearbyBikeShops2 shops", fontSize = 12.sp,
                                             fontWeight = FontWeight.Bold,
-                                            color      = Color(0xFF00796B))
+                                            color      = if (showBikeShopPins) Color(0xFF00796B) else Color(0xFF00796B).copy(alpha = 0.5f))
                                     }
                                 }
                             }
@@ -3802,8 +3967,9 @@ fun HomeScreen(
                             shop       = shop,
                             onDismiss  = { selectedShop = null },
                             onNavigate = { location ->
-                                destinationPoint = location
-                                selectedShop     = null
+                                destinationPoint     = location
+                                destinationShopType   = shop.type
+                                selectedShop         = null
                                 isRespondingToAlert = false // Reset alert responding state when navigating to a shop
                                 val start = userGeoPoint ?: myLocationOverlay?.myLocation
                                 if (start != null) {
@@ -3817,18 +3983,23 @@ fun HomeScreen(
                 } // end map tab else branch
                 2 -> if (isAdmin) {
                     AdminAnalyticsScreen(paddingValues = innerPadding)
-                } else ShopsScreen(
+                }  else ShopsScreen(
                     paddingValues    = innerPadding,
-                    shops            = nearbyShops.toList(),
-                    isLoadingShops   = isLoadingShops,
-                    fetchFailed      = fetchFailed,
-                    onRetry          = { userGeoPoint?.let { fetchNearbyPlaces(it) } },
-                    onDirectionClick = { destination ->
-                        destinationPoint = destination
-                        mapFocusFilter   = null
-                        isRespondingToAlert = false
-                        selectedItem     = 1
-                    }
+                        shops            = nearbyShops.toList(),
+                        isLoadingShops   = isLoadingShops,
+                        fetchFailed      = fetchFailed,
+                        onRetry          = { userGeoPoint?.let { fetchNearbyPlaces(it) } },
+                        onDirectionClick = { destination ->
+                            destinationPoint    = destination.location
+                            destinationShopType = destination.type
+                            mapFocusFilter       = null
+                            isRespondingToAlert  = false
+                            selectedItem         = 1
+                            val start = userGeoPoint ?: myLocationOverlay?.myLocation
+                            if (start != null) {
+                                fetchRoutes(start, destination.location)
+                }
+            }
                 )
 
                 3 -> AlertsScreen(
@@ -3842,8 +4013,9 @@ fun HomeScreen(
                         // to decide whether to show the turn-by-turn panel (responding)
                         // vs. the route-picker panel (normal search destination).
                         isRespondingToAlert = true
-                        destinationPoint = coordinates
-                        mapFocusFilter   = emergencyToShopType(emergencyType)
+                        destinationPoint    = coordinates
+                        destinationShopType = null
+                        mapFocusFilter      = emergencyToShopType(emergencyType)
                         selectedItem     = 1
                         val start = userGeoPoint ?: myLocationOverlay?.myLocation
                         val map   = mapViewRef
@@ -3855,6 +4027,7 @@ fun HomeScreen(
                     onImOnMyWay      = { alert ->
                         isRespondingToAlert = true
                         destinationPoint    = alert.coordinates
+                        destinationShopType = null
                         selectedItem        = 1
                         val start = userGeoPoint ?: myLocationOverlay?.myLocation
                         if (start != null) {
@@ -4171,6 +4344,8 @@ fun HomeScreen(
 
                                         // ── Clear the map/route immediately — local, synchronous, doesn't
                                         // wait on Firestore. Rolled back below only if the write fails.
+                                        routeRequestId++     // invalidate any in-flight reroute fetch
+                                        isLoadingRoute      = false
                                         isRespondingToAlert = false
                                         showTurnPanel       = false
                                         showRoutePanel      = false
@@ -4192,6 +4367,11 @@ fun HomeScreen(
                                                 "responderDisplayName" to ""
                                             ))
                                             .addOnSuccessListener {
+                                                // Revoke live location — otherwise the rider's map keeps
+                                                // showing the last known helper pin indefinitely.
+                                                db.collection("live_locations")
+                                                    .document(alert.id)
+                                                    .delete()
                                                 Toast.makeText(context,
                                                     "Response cancelled. The rider has been notified.",
                                                     Toast.LENGTH_SHORT).show()
