@@ -118,7 +118,7 @@ fun PublicProfileScreen(
         db.collection("users").whereEqualTo("username", currentUserName)
             .limit(1).get()
             .addOnSuccessListener { snap ->
-                isAdmin = snap.documents.firstOrNull()?.getBoolean("isAdmin") ?: false
+                isAdmin = snap.documents.firstOrNull()?.getString("role") == "admin"
             }
     }
 

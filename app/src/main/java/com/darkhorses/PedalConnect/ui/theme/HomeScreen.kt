@@ -140,6 +140,26 @@ fun haversineKm(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double 
     return R * 2 * atan2(sqrt(a), sqrt(1 - a))
 }
 
+// Single source of truth for "alerts relevant to this user": excludes the
+// user's own alert and anything beyond radiusKm. Used by both AlertsScreen
+// (the list) and HomeScreen (the nav-bar badge) so they can never drift.
+fun filterNearbyAlerts(
+    alerts: List<AlertItem>,
+    currentUserName: String,
+    userLocation: GeoPoint?,
+    radiusKm: Double = 3.0
+): List<AlertItem> {
+    val currentUserLower = currentUserName.trim().lowercase()
+    return alerts.filter { alert ->
+        if (alert.riderName.trim().lowercase() == currentUserLower) return@filter false
+        if (userLocation == null) return@filter true // show all if GPS not ready yet
+        haversineKm(
+            userLocation.latitude, userLocation.longitude,
+            alert.coordinates.latitude, alert.coordinates.longitude
+        ) <= radiusKm
+    }
+}
+
 private fun buildCirclePoints(center: GeoPoint, radiusKm: Double): List<GeoPoint> {
     val points      = mutableListOf<GeoPoint>()
     val earthRadius = 6371.0
@@ -811,14 +831,7 @@ fun HomeScreen(
     // ── Proximity / shops state ───────────────────────────────────────────────
     var userGeoPoint        by remember { mutableStateOf<GeoPoint?>(null) }
     val nearbyOthersAlerts by remember {
-        derivedStateOf {
-            val loc = userGeoPoint
-            alerts.filter { alert ->
-                if (alert.riderName.trim().lowercase() == userName.trim().lowercase()) return@filter false
-                if (loc == null) return@filter true
-                haversineKm(loc.latitude, loc.longitude, alert.coordinates.latitude, alert.coordinates.longitude) <= 3.0
-            }
-        }
+        derivedStateOf { filterNearbyAlerts(alerts, userName, userGeoPoint) }
     }
     val nearbyUsers         = remember { mutableStateListOf<NearbyUser>() }
     val nearbyShops         = remember { mutableStateListOf<ShopItem>() }

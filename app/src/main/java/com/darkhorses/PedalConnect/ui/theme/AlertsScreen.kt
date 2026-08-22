@@ -165,16 +165,8 @@ fun AlertsScreen(
     }
 
     val currentUserLower = helperName.trim().lowercase()
-    val ownAlert         = alerts.firstOrNull { it.riderNameLower == currentUserLower }
-    val othersAlerts     = alerts.filter { alert ->
-        if (alert.riderNameLower == currentUserLower) return@filter false
-        if (userLocation == null) return@filter true // show all if GPS not ready yet
-        val dist = haversineKm(
-            userLocation.latitude, userLocation.longitude,
-            alert.coordinates.latitude, alert.coordinates.longitude
-        )
-        dist <= 3.0
-    }
+    val ownAlert         = alerts.firstOrNull { it.riderName.trim().lowercase() == currentUserLower }
+    val othersAlerts     = filterNearbyAlerts(alerts, helperName, userLocation)
 
     val filteredAlerts = othersAlerts // already sorted by newest from Firestore listener
     LaunchedEffect(successMessage, errorMessage) {

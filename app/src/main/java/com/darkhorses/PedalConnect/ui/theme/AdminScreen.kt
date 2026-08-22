@@ -10,6 +10,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -119,7 +120,13 @@ private data class AuditLogEntry(
     val detail: String,
     val timestamp: Long
 )
-
+private data class AdminUser(
+    val id: String, val username: String, val displayName: String, val email: String,
+    val role: String, val createdAt: Long, val photoUrl: String,
+    val pendingDeletion: Boolean, val deletionScheduledAt: Long,
+    val warningCount: Int = 0,
+    val suspended: Boolean = false, val suspendedUntil: Long = 0L
+)
 private data class TrashItem(
     val id: String,
     val type: String,           // "post" or "comment"
@@ -133,7 +140,11 @@ private data class TrashItem(
     val deletedAt: Long,
     val expiresAt: Long
 )
-
+private object AdminSection {
+    const val DASHBOARD = 0; const val POSTS = 1; const val ALERT_HISTORY = 2
+    const val PRONE_AREAS = 3; const val USERS = 4; const val RIDES = 5
+    const val REPORTS = 6; const val PROFANITY = 7; const val AUDIT = 8; const val TRASH = 9
+}
 
 // ── Screen ────────────────────────────────────────────────────────────────────
 @OptIn(ExperimentalMaterial3Api::class)
@@ -150,6 +161,16 @@ fun AdminScreen(paddingValues: PaddingValues, adminUserName: String = "") {
     val reportedImages  = remember { mutableStateListOf<ReportedImage>() }
     val reportedPosts   = remember { mutableStateListOf<AdminPost>() }
     val reportedComments    = remember { mutableStateListOf<ReportedComment>() }
+    val allUsers = remember { mutableStateListOf<AdminUser>() }
+    var isLoadingUsers by remember { mutableStateOf(true) }
+    var userSearchQuery by remember { mutableStateOf("") }
+
+    val proneAreas = remember { mutableStateListOf<ProneAreaStat>() }
+    var isLoadingProneAreas by remember { mutableStateOf(true) }
+
+    val alertHistory = remember { mutableStateListOf<AdminAlertRecord>() }
+    var isLoadingAlertHistory by remember { mutableStateOf(true) }
+    var expandedAlertHistoryId by remember { mutableStateOf<String?>(null) }
 
     // Dashboard state
     var totalUsers          by remember { mutableIntStateOf(0) }
@@ -212,6 +233,31 @@ fun AdminScreen(paddingValues: PaddingValues, adminUserName: String = "") {
                 isLoadingPosts = false
             }
     }
+    LaunchedEffect(Unit) {
+        db.collection("users").addSnapshotListener { snap, _ ->
+            if (snap == null) { isLoadingUsers = false; return@addSnapshotListener }
+            allUsers.clear()
+            for (doc in snap.documents) {
+                allUsers.add(AdminUser(
+                    id = doc.id,
+                    username = doc.getString("username") ?: "",
+                    displayName = doc.getString("displayName")?.takeIf { it.isNotBlank() }
+                        ?: doc.getString("username") ?: "",
+                    email = doc.getString("email") ?: "",
+                    role = doc.getString("role") ?: "rider",
+                    createdAt = doc.getTimestamp("createdAt")?.toDate()?.time ?: 0L,
+                    photoUrl = doc.getString("photoUrl") ?: "",
+                    pendingDeletion = doc.getBoolean("pendingDeletion") ?: false,
+                    deletionScheduledAt = doc.getTimestamp("deletionScheduledAt")?.toDate()?.time ?: 0L,
+                    warningCount = (doc.getLong("warningCount") ?: 0L).toInt(),
+                    suspended = doc.getBoolean("suspended") ?: false,
+                    suspendedUntil = doc.getTimestamp("suspendedUntil")?.toDate()?.time ?: 0L
+                ))
+            }
+            allUsers.sortByDescending { it.createdAt }
+            isLoadingUsers = false
+        }
+    }
 
     LaunchedEffect(Unit) {
         db.collection("rideEvents").whereEqualTo("status", "pending")
@@ -251,7 +297,7 @@ fun AdminScreen(paddingValues: PaddingValues, adminUserName: String = "") {
                 if (reportedPosts.size != grouped.size) {
                     // Just enough to keep the badge count accurate
                     // Full data loads when section 3 is selected
-                    if (selectedSection != 3) {
+                    if (selectedSection != AdminSection.REPORTS) {
                         reportedPosts.clear()
                         grouped.forEach { postId ->
                             reportedPosts.add(AdminPost(
@@ -273,7 +319,7 @@ fun AdminScreen(paddingValues: PaddingValues, adminUserName: String = "") {
                 val grouped = snap.documents
                     .mapNotNull { doc -> doc.getString("commentId") }
                     .distinct()
-                if (selectedSection != 3) {
+                if (selectedSection != AdminSection.REPORTS) {
                     reportedComments.clear()
                     grouped.forEach { commentId ->
                         reportedComments.add(ReportedComment(
@@ -294,7 +340,7 @@ fun AdminScreen(paddingValues: PaddingValues, adminUserName: String = "") {
                 val grouped = snap.documents
                     .mapNotNull { doc -> doc.getString("alertId") }
                     .distinct()
-                if (selectedSection != 4) {
+                if (selectedSection != AdminSection.REPORTS) {
                     reportedImages.clear()
                     grouped.forEach { alertId ->
                         reportedImages.add(ReportedImage(
@@ -312,7 +358,7 @@ fun AdminScreen(paddingValues: PaddingValues, adminUserName: String = "") {
             .whereEqualTo("reviewed", false)
             .addSnapshotListener { snap, _ ->
                 if (snap == null) return@addSnapshotListener
-                if (selectedSection != 6) {
+                if (selectedSection != AdminSection.PROFANITY) {
                     moderationLogs.clear()
                     for (doc in snap.documents) {
                         moderationLogs.add(ModerationLog(
@@ -335,7 +381,7 @@ fun AdminScreen(paddingValues: PaddingValues, adminUserName: String = "") {
             .whereEqualTo("reviewed", false)
             .addSnapshotListener { snap, _ ->
                 if (snap == null) return@addSnapshotListener
-                if (selectedSection != 8) {
+                if (selectedSection != AdminSection.REPORTS) {
                     userReports.clear()
                     for (doc in snap.documents) {
                         userReports.add(UserReport(
@@ -360,7 +406,7 @@ fun AdminScreen(paddingValues: PaddingValues, adminUserName: String = "") {
         db.collection("adminTrash")
             .addSnapshotListener { snap, _ ->
                 if (snap == null) return@addSnapshotListener
-                if (selectedSection != 9) {
+                if (selectedSection != AdminSection.TRASH) {
                     trashItems.clear()
                     for (doc in snap.documents) {
                         trashItems.add(TrashItem(
@@ -388,7 +434,7 @@ fun AdminScreen(paddingValues: PaddingValues, adminUserName: String = "") {
             .limit(100)
             .addSnapshotListener { snap, _ ->
                 if (snap == null) return@addSnapshotListener
-                if (selectedSection != 7) {
+                if (selectedSection != AdminSection.AUDIT) {
                     val now = System.currentTimeMillis()
                     auditLogs.clear()
                     for (doc in snap.documents) {
@@ -438,7 +484,7 @@ fun AdminScreen(paddingValues: PaddingValues, adminUserName: String = "") {
     }
 
     LaunchedEffect(selectedSection) {
-        if (selectedSection != 2) return@LaunchedEffect
+        if (selectedSection != AdminSection.RIDES) return@LaunchedEffect
         db.collection("rideEvents")
             .whereEqualTo("status", "pending")
             .orderBy("timestamp", Query.Direction.ASCENDING)
@@ -473,7 +519,7 @@ fun AdminScreen(paddingValues: PaddingValues, adminUserName: String = "") {
     // Key: postId → Pair(reasons, reportedByList)
 
     LaunchedEffect(selectedSection) {
-        if (selectedSection != 3) return@LaunchedEffect
+        if (selectedSection != AdminSection.REPORTS) return@LaunchedEffect
         db.collection("reportedPosts")
             .orderBy("timestamp", Query.Direction.DESCENDING)
             .addSnapshotListener { snap, _ ->
@@ -529,7 +575,7 @@ fun AdminScreen(paddingValues: PaddingValues, adminUserName: String = "") {
 
 
     LaunchedEffect(selectedSection) {
-        if (selectedSection != 4) return@LaunchedEffect
+        if (selectedSection != AdminSection.REPORTS) return@LaunchedEffect
         db.collection("reportedImages")
             .orderBy("timestamp", Query.Direction.DESCENDING)
             .addSnapshotListener { snap, _ ->
@@ -559,7 +605,7 @@ fun AdminScreen(paddingValues: PaddingValues, adminUserName: String = "") {
     }
 
     LaunchedEffect(selectedSection) {
-        if (selectedSection != 3) return@LaunchedEffect
+        if (selectedSection != AdminSection.REPORTS) return@LaunchedEffect
         db.collection("reportedComments")
             .orderBy("timestamp", Query.Direction.DESCENDING)
             .addSnapshotListener { snap, _ ->
@@ -687,7 +733,7 @@ fun AdminScreen(paddingValues: PaddingValues, adminUserName: String = "") {
     }
 
     LaunchedEffect(selectedSection) {
-        if (selectedSection != 6) return@LaunchedEffect
+        if (selectedSection != AdminSection.PROFANITY) return@LaunchedEffect
         db.collection("moderationLogs")
             .whereEqualTo("reviewed", false)
             .orderBy("timestamp", Query.Direction.DESCENDING)
@@ -709,7 +755,7 @@ fun AdminScreen(paddingValues: PaddingValues, adminUserName: String = "") {
             }
     }
     LaunchedEffect(selectedSection) {
-        if (selectedSection != 5) return@LaunchedEffect
+        if (selectedSection != AdminSection.REPORTS) return@LaunchedEffect
         db.collection("userReports")
             .whereEqualTo("reviewed", false)
             .orderBy("timestamp", Query.Direction.DESCENDING)
@@ -735,7 +781,7 @@ fun AdminScreen(paddingValues: PaddingValues, adminUserName: String = "") {
     }
 
     LaunchedEffect(selectedSection) {
-        if (selectedSection != 7) return@LaunchedEffect
+        if (selectedSection != AdminSection.AUDIT) return@LaunchedEffect
         db.collection("moderationAuditLog")
             .orderBy("timestamp", Query.Direction.DESCENDING)
             .limit(100)
@@ -766,7 +812,7 @@ fun AdminScreen(paddingValues: PaddingValues, adminUserName: String = "") {
     }
 
     LaunchedEffect(selectedSection) {
-        if (selectedSection != 8) return@LaunchedEffect
+        if (selectedSection != AdminSection.TRASH) return@LaunchedEffect
         db.collection("adminTrash")
             .orderBy("deletedAt", Query.Direction.DESCENDING)
             .addSnapshotListener { snap, _ ->
@@ -796,6 +842,68 @@ fun AdminScreen(paddingValues: PaddingValues, adminUserName: String = "") {
                 }
                 isLoadingTrash = false
             }
+    }
+
+    LaunchedEffect(selectedSection) {
+        if (selectedSection != AdminSection.ALERT_HISTORY) return@LaunchedEffect
+        isLoadingAlertHistory = true
+        db.collection("alerts")
+            .orderBy("timestamp", Query.Direction.DESCENDING)
+            .get()
+            .addOnSuccessListener { snap ->
+                val records = snap.documents.map { doc ->
+                    val riderName = doc.getString("riderName") ?: ""
+                    AdminAlertRecord(
+                        id                    = doc.id,
+                        riderName             = riderName,
+                        riderDisplayName      = doc.getString("riderDisplayName") ?: "",
+                        emergencyType         = doc.getString("emergencyType") ?: "Alert",
+                        locationName          = doc.getString("locationName") ?: "",
+                        latitude              = doc.getDouble("latitude") ?: 0.0,
+                        longitude             = doc.getDouble("longitude") ?: 0.0,
+                        timestamp             = doc.getLong("timestamp") ?: 0L,
+                        status                = doc.getString("status") ?: "active",
+                        responderName         = doc.getString("responderName") ?: "",
+                        responderDisplayName  = doc.getString("responderDisplayName") ?: "",
+                        additionalDetails     = doc.getString("additionalDetails") ?: "",
+                        contactNumber         = doc.getString("contactNumber") ?: "",
+                        photoUrl              = doc.getString("photoUrl") ?: "",
+                        ratingGiven           = doc.getBoolean("ratingGiven") ?: false,
+                        ratingValue           = doc.getLong("ratingValue")?.toInt(),
+                        ratingReview          = doc.getString("ratingReview") ?: ""
+                    )
+                }
+                alertHistory.clear()
+                alertHistory.addAll(records)
+                isLoadingAlertHistory = false
+            }
+            .addOnFailureListener { isLoadingAlertHistory = false }
+    }
+
+    LaunchedEffect(selectedSection) {
+        if (selectedSection != AdminSection.PRONE_AREAS) return@LaunchedEffect
+        isLoadingProneAreas = true
+        db.collection("alerts").get()
+            .addOnSuccessListener { snap ->
+                val counts = snap.documents
+                    .mapNotNull { it.getString("locationName")?.trim()?.takeIf { loc -> loc.isNotBlank() } }
+                    .groupingBy { it }
+                    .eachCount()
+                val total = counts.values.sum()
+                val ranked = counts.entries
+                    .sortedByDescending { it.value }
+                    .map { (loc, count) ->
+                        ProneAreaStat(
+                            location   = loc,
+                            count      = count,
+                            percentage = if (total > 0) ((count * 100) / total) else 0
+                        )
+                    }
+                proneAreas.clear()
+                proneAreas.addAll(ranked)
+                isLoadingProneAreas = false
+            }
+            .addOnFailureListener { isLoadingProneAreas = false }
     }
 
     fun logAudit(action: String, targetType: String, targetUser: String, detail: String) {
@@ -1001,15 +1109,16 @@ fun AdminScreen(paddingValues: PaddingValues, adminUserName: String = "") {
         val badgeColor: Color
     )
     val sections = listOf(
-        NavSection("Dashboard",      Icons.Default.Dashboard,      0,                                          AGreen700),
-        NavSection("Posts",          Icons.Default.Article,        pendingPosts.size,                          AAmber500),
-        NavSection("Rides",          Icons.Default.DirectionsBike, pendingRides.size,                          Color(0xFF1976D2)),
-        NavSection("Reports",        Icons.Default.Flag,           reportedPosts.size + reportedComments.size, ARedColor),
-        NavSection("Photo Reports",  Icons.Default.Image,          reportedImages.size,                        Color(0xFFEA580C)),
-        NavSection("User Reports",   Icons.Default.PersonOff,      userReports.size,                           Color(0xFF7C3AED)),
-        NavSection("Profanity Logs", Icons.Default.Shield,         moderationLogs.size,                        Color(0xFF7C3AED)),
-        NavSection("Audit Log",      Icons.Default.ManageAccounts, auditLogs.size,                             Color(0xFF0891B2)),
-        NavSection("Trash Bin",          Icons.Default.DeleteSweep,    trashItems.size,                            Color(0xFF6B7280))
+        NavSection("Dashboard",      Icons.Default.Dashboard,      0,                                                                                    AGreen700),
+        NavSection("Posts",          Icons.Default.Article,        pendingPosts.size,                                                                    AAmber500),
+        NavSection("Alerts",  Icons.Default.History,        0,                                                                                    Color(0xFF1565C0)),
+        NavSection("Most Prone Areas",    Icons.Default.LocationOn,     0,                                                                                    ARedColor),
+        NavSection("Users Management",          Icons.Default.People,         allUsers.count { it.pendingDeletion },                                                Color(0xFF0288D1)),
+        NavSection("Ride Events",          Icons.Default.DirectionsBike, pendingRides.size,                                                                    Color(0xFF1976D2)),
+        NavSection("Reports",        Icons.Default.Flag,           reportedPosts.size + reportedComments.size + reportedImages.size + userReports.size,  ARedColor),
+        NavSection("Profanity Logs", Icons.Default.Shield,         moderationLogs.size,                                                                   Color(0xFF7C3AED)),
+        NavSection("Audit Log",      Icons.Default.ManageAccounts, auditLogs.size,                                                                        Color(0xFF0891B2)),
+        NavSection("Trash Bin",      Icons.Default.DeleteSweep,    trashItems.size,                                                                       Color(0xFF6B7280))
     )
     // ── Drawer state ──────────────────────────────────────────────────────────
     val drawerState = rememberDrawerState(DrawerValue.Closed)
@@ -1181,15 +1290,16 @@ fun AdminScreen(paddingValues: PaddingValues, adminUserName: String = "") {
                                     fontWeight = FontWeight.ExtraBold,
                                     fontSize   = 17.sp, color = Color.White)
                                 Text(when (selectedSection) {
-                                    0 -> "Overview"
-                                    1 -> "${pendingPosts.size} pending"
-                                    2 -> "${pendingRides.size} pending"
-                                    3 -> "${reportedPosts.size + reportedComments.size} reported"
-                                    4 -> "${reportedImages.size} reported"
-                                    5 -> "${userReports.size} pending"
-                                    6 -> "${moderationLogs.size} entries"
-                                    7 -> "${auditLogs.size} entries"
-                                    8 -> "${trashItems.size} item${if (trashItems.size != 1) "s" else ""}"
+                                    AdminSection.DASHBOARD     -> "Overview"
+                                    AdminSection.POSTS         -> "${pendingPosts.size} pending"
+                                    AdminSection.ALERT_HISTORY -> "${alertHistory.size} alert${if (alertHistory.size != 1) "s" else ""}"
+                                    AdminSection.PRONE_AREAS   -> "${proneAreas.size} location${if (proneAreas.size != 1) "s" else ""}"
+                                    AdminSection.USERS       -> "${allUsers.size} user${if (allUsers.size != 1) "s" else ""}"
+                                    AdminSection.RIDES     -> "${pendingRides.size} pending"
+                                    AdminSection.REPORTS   -> "${reportedPosts.size + reportedComments.size + reportedImages.size + userReports.size} reported"
+                                    AdminSection.PROFANITY -> "${moderationLogs.size} entries"
+                                    AdminSection.AUDIT     -> "${auditLogs.size} entries"
+                                    AdminSection.TRASH     -> "${trashItems.size} item${if (trashItems.size != 1) "s" else ""}"
                                     else -> ""
                                 }, fontSize = 11.sp, color = Color.White.copy(alpha = 0.65f))
                             }
@@ -1235,7 +1345,7 @@ fun AdminScreen(paddingValues: PaddingValues, adminUserName: String = "") {
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     when (selectedSection) {
-                        0 -> {
+                        AdminSection.DASHBOARD -> {
                             if (isLoadingDashboard) {
                                 item { AdminLoadingState() }
                             } else {
@@ -1286,11 +1396,9 @@ fun AdminScreen(paddingValues: PaddingValues, adminUserName: String = "") {
                                         modifier = Modifier.padding(start = 2.dp))
                                     Spacer(Modifier.height(8.dp))
                                     val attentionItems = listOf(
-                                        Triple("Posts",         pendingPosts.size,                          1),
-                                        Triple("Rides",         pendingRides.size,                          2),
-                                        Triple("Reports",       reportedPosts.size + reportedComments.size, 3),
-                                        Triple("Photo Reports", reportedImages.size,                        4),
-                                        Triple("User Reports",  userReports.size,                           5)
+                                        Triple("Posts",    pendingPosts.size, 1),
+                                        Triple("Rides", pendingRides.size, AdminSection.RIDES),
+                                        Triple("Reports",  reportedPosts.size + reportedComments.size + reportedImages.size + userReports.size, AdminSection.REPORTS)
                                     ).filter { it.second > 0 }
 
                                     if (attentionItems.isEmpty()) {
@@ -1487,7 +1595,7 @@ fun AdminScreen(paddingValues: PaddingValues, adminUserName: String = "") {
                                 }
                             }
                         } // end else isLoadingDashboard
-                        1 -> {
+                        AdminSection.POSTS -> {
                             if (isLoadingPosts) {
                                 item { AdminLoadingState() }
                             } else if (pendingPosts.isEmpty()) {
@@ -1579,7 +1687,131 @@ fun AdminScreen(paddingValues: PaddingValues, adminUserName: String = "") {
                                 }
                             }
                         }
-                        2 -> {
+                        AdminSection.ALERT_HISTORY -> {
+                            item {
+                                AdminAlertHistorySection(
+                                    alerts     = alertHistory,
+                                    isLoading  = isLoadingAlertHistory,
+                                    expandedId = expandedAlertHistoryId,
+                                    onToggle   = { id -> expandedAlertHistoryId = if (expandedAlertHistoryId == id) null else id }
+                                )
+                            }
+                        }
+                        AdminSection.PRONE_AREAS -> {
+                            item {
+                                AdminProneAreasSection(areas = proneAreas, isLoading = isLoadingProneAreas)
+                            }
+                        }
+                        AdminSection.USERS -> {
+                            item {
+                                OutlinedTextField(
+                                    value = userSearchQuery, onValueChange = { userSearchQuery = it },
+                                    placeholder = { Text("Search by name or email", fontSize = 13.sp) },
+                                    leadingIcon = { Icon(Icons.Default.Search, null, tint = AMuted, modifier = Modifier.size(18.dp)) },
+                                    trailingIcon = {
+                                        if (userSearchQuery.isNotBlank()) {
+                                            IconButton(onClick = { userSearchQuery = "" }) {
+                                                Icon(Icons.Default.Close, null, tint = AMuted, modifier = Modifier.size(16.dp))
+                                            }
+                                        }
+                                    },
+                                    singleLine = true, shape = RoundedCornerShape(12.dp),
+                                    colors = OutlinedTextFieldDefaults.colors(
+                                        focusedBorderColor = AGreen900, unfocusedBorderColor = ADivider,
+                                        focusedContainerColor = AWhite, unfocusedContainerColor = AWhite
+                                    ),
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                            }
+                            val filteredUsers = allUsers.filter {
+                                userSearchQuery.isBlank() ||
+                                        it.displayName.contains(userSearchQuery, ignoreCase = true) ||
+                                        it.username.contains(userSearchQuery, ignoreCase = true) ||
+                                        it.email.contains(userSearchQuery, ignoreCase = true)
+                            }
+                            if (isLoadingUsers) {
+                                item { AdminLoadingState() }
+                            } else if (filteredUsers.isEmpty()) {
+                                item {
+                                    AdminEmptyState(Icons.Default.PersonSearch,
+                                        if (userSearchQuery.isBlank()) "No users yet" else "No matches",
+                                        if (userSearchQuery.isBlank()) "Registered users will appear here." else "Try a different name or email.")
+                                }
+                            } else {
+                                item {
+                                    Text("${filteredUsers.size} user${if (filteredUsers.size != 1) "s" else ""}",
+                                        fontSize = 12.sp, color = AMuted,
+                                        modifier = Modifier.padding(start = 4.dp, bottom = 2.dp))
+                                }
+                                items(filteredUsers, key = { it.id }) { user ->
+                                    AdminUserCard(
+                                        user = user,
+                                        onSave = { newDisplayName ->
+                                            db.collection("users").document(user.id)
+                                                .update("displayName", newDisplayName)
+                                                .addOnSuccessListener {
+                                                    val idx = allUsers.indexOfFirst { it.id == user.id }
+                                                    if (idx != -1) allUsers[idx] = allUsers[idx].copy(displayName = newDisplayName)
+                                                    toast("User updated.")
+                                                    logAudit("Edited user", "user", user.username, "displayName updated")
+                                                }.addOnFailureListener { toast("Failed to update user.", false) }
+                                        },
+                                        onRoleChange = { newRole ->
+                                            db.collection("users").document(user.id)
+                                                .update("role", newRole)
+                                                .addOnSuccessListener {
+                                                    val idx = allUsers.indexOfFirst { it.id == user.id }
+                                                    if (idx != -1) allUsers[idx] = allUsers[idx].copy(role = newRole)
+                                                    toast("Role changed: ${user.role} → $newRole")
+                                                    logAudit("Changed role: ${user.role} → $newRole", "user", user.username, "by $adminUserName")
+                                                }.addOnFailureListener { toast("Failed to change role.", false) }
+                                        },
+                                        onScheduleDelete = {
+                                            val scheduledFor = com.google.firebase.Timestamp(
+                                                java.util.Date(System.currentTimeMillis() + 14L * 24 * 60 * 60 * 1000))
+                                            db.collection("users").document(user.id)
+                                                .set(mapOf("pendingDeletion" to true, "deletionScheduledAt" to scheduledFor),
+                                                    com.google.firebase.firestore.SetOptions.merge())
+                                                .addOnSuccessListener {
+                                                    val idx = allUsers.indexOfFirst { it.id == user.id }
+                                                    if (idx != -1) allUsers[idx] = allUsers[idx].copy(
+                                                        pendingDeletion = true, deletionScheduledAt = scheduledFor.toDate().time)
+                                                    db.collection("notifications").add(hashMapOf(
+                                                        "userName" to user.username,
+                                                        "message" to "⚠️ Your account is scheduled for deletion in 14 days by an admin. Log in before then to cancel.",
+                                                        "type" to "moderation",
+                                                        "timestamp" to System.currentTimeMillis(), "read" to false))
+                                                    toast("Account scheduled for deletion in 14 days.")
+                                                    logAudit("Scheduled user deletion", "user", user.username, "14-day grace period")
+                                                }.addOnFailureListener { toast("Failed to schedule deletion.", false) }
+                                        },
+                                        onCancelDelete = {
+                                            db.collection("users").document(user.id)
+                                                .set(mapOf("pendingDeletion" to false, "deletionScheduledAt" to null, "warningCount" to 0),
+                                                    com.google.firebase.firestore.SetOptions.merge())
+                                                .addOnSuccessListener {
+                                                    val idx = allUsers.indexOfFirst { it.id == user.id }
+                                                    if (idx != -1) allUsers[idx] = allUsers[idx].copy(pendingDeletion = false, deletionScheduledAt = 0L, warningCount = 0)
+                                                    toast("Deletion canceled. Warning count reset.")
+                                                    logAudit("Canceled user deletion", "user", user.username, "restored by admin, warnings reset")
+                                                }.addOnFailureListener { toast("Failed to cancel deletion.", false) }
+                                        },
+                                        onLiftSuspension = {
+                                            db.collection("users").document(user.id)
+                                                .set(mapOf("suspended" to false, "suspendedUntil" to null, "warningCount" to 0),
+                                                    com.google.firebase.firestore.SetOptions.merge())
+                                                .addOnSuccessListener {
+                                                    val idx = allUsers.indexOfFirst { it.id == user.id }
+                                                    if (idx != -1) allUsers[idx] = allUsers[idx].copy(suspended = false, suspendedUntil = 0L, warningCount = 0)
+                                                    toast("Suspension lifted. Warning count reset.")
+                                                    logAudit("Lifted suspension", "user", user.username, "restored by admin, warnings reset")
+                                                }.addOnFailureListener { toast("Failed to lift suspension.", false) }
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                        AdminSection.RIDES -> {
                             if (isLoadingRides) {
                                 item { AdminLoadingState() }
                             } else if (pendingRides.isEmpty()) {
@@ -1670,19 +1902,22 @@ fun AdminScreen(paddingValues: PaddingValues, adminUserName: String = "") {
                                 }
                             }
                         }
-                        3 -> {
-                            val isLoadingReports = isLoadingReportedPosts || isLoadingReportedComments
+                        AdminSection.REPORTS -> {
+                            val isLoadingReportsTab = isLoadingReportedPosts || isLoadingReportedComments || isLoadingReports || isLoadingUserReports
                             item {
                                 // ── Chip toggle ───────────────────────────────
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
+                                        .horizontalScroll(rememberScrollState())
                                         .padding(bottom = 4.dp),
                                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                                 ) {
                                     listOf(
                                         "Posts"    to reportedPosts.size,
-                                        "Comments" to reportedComments.size
+                                        "Comments" to reportedComments.size,
+                                        "Photos"   to reportedImages.size,
+                                        "Users"    to userReports.size
                                     ).forEach { (label, count) ->
                                         val selected = selectedReportChip == label
                                         FilterChip(
@@ -1715,7 +1950,7 @@ fun AdminScreen(paddingValues: PaddingValues, adminUserName: String = "") {
                                 }
                             }
 
-                            if (isLoadingReports) {
+                            if (isLoadingReportsTab) {
                                 item { AdminLoadingState() }
                             } else if (selectedReportChip == "Posts") {
                                 if (reportedPosts.isEmpty()) {
@@ -1823,8 +2058,7 @@ fun AdminScreen(paddingValues: PaddingValues, adminUserName: String = "") {
                                         )
                                     }
                                 }
-                            } else {
-                                // Comments chip
+                            } else if (selectedReportChip == "Comments") {
                                 if (reportedComments.isEmpty()) {
                                     item { AdminEmptyState(Icons.Default.CheckCircle, "No reported comments", "All comments have been reviewed.") }
                                 } else {
@@ -1996,29 +2230,97 @@ fun AdminScreen(paddingValues: PaddingValues, adminUserName: String = "") {
                                         } // end else user-reported
                                     }
                                 }
-                            }
-                        }
-                        4 -> {
-                            if (isLoadingReports) {
-                                item { AdminLoadingState() }
-                            } else if (reportedImages.isEmpty()) {
-                                item { AdminEmptyState(Icons.Default.CheckCircle, "No reported images", "All photos have been reviewed.") }
+                            } else if (selectedReportChip == "Photos") {
+                                if (reportedImages.isEmpty()) {
+                                    item { AdminEmptyState(Icons.Default.CheckCircle, "No reported images", "All photos have been reviewed.") }
+                                } else {
+                                    item {
+                                        Text("${reportedImages.size} alert${if (reportedImages.size != 1) "s" else ""} with reported photos",
+                                            fontSize = 12.sp, color = AMuted,
+                                            modifier = Modifier.padding(start = 4.dp, bottom = 2.dp))
+                                    }
+                                    items(reportedImages, key = { it.alertId }) { report ->
+                                        AdminReportCard(
+                                            report          = report,
+                                            onDeletePhoto   = { deleteAlertPhoto(report) },
+                                            onDismissReport = { dismissReports(report) }
+                                        )
+                                    }
+                                }
                             } else {
-                                item {
-                                    Text("${reportedImages.size} alert${if (reportedImages.size != 1) "s" else ""} with reported photos",
-                                        fontSize = 12.sp, color = AMuted,
-                                        modifier = Modifier.padding(start = 4.dp, bottom = 2.dp))
-                                }
-                                items(reportedImages, key = { it.alertId }) { report ->
-                                    AdminReportCard(
-                                        report          = report,
-                                        onDeletePhoto   = { deleteAlertPhoto(report) },
-                                        onDismissReport = { dismissReports(report) }
-                                    )
+                                // Users chip
+                                if (userReports.isEmpty()) {
+                                    item { AdminEmptyState(Icons.Default.PersonOff, "No user reports", "No users have been reported.") }
+                                } else {
+                                    item {
+                                        Text(
+                                            "${userReports.size} pending report${if (userReports.size != 1) "s" else ""}",
+                                            fontSize = 12.sp, color = AMuted,
+                                            modifier = Modifier.padding(start = 4.dp, bottom = 2.dp)
+                                        )
+                                    }
+                                    items(userReports, key = { it.id }) { report ->
+                                        AdminUserReportCard(
+                                            report    = report,
+                                            currentWarningCount = allUsers.find { it.username == report.reportedName }?.warningCount ?: 0,
+                                            onDismiss = {
+                                                db.collection("userReports").document(report.id)
+                                                    .update("reviewed", true)
+                                                    .addOnSuccessListener {
+                                                        userReports.remove(report)
+                                                        toast("Report dismissed.")
+                                                        logAudit("Dismissed user report", "user_report", report.reportedName, report.reason)
+                                                    }
+                                                    .addOnFailureListener { toast("Failed to dismiss.", false) }
+                                            },
+                                            onWarn = {
+                                                db.collection("userReports").document(report.id)
+                                                    .update("reviewed", true)
+                                                    .addOnSuccessListener {
+                                                        userReports.remove(report)
+                                                        val targetUser = allUsers.find { it.username == report.reportedName }
+                                                        val newWarningCount = (targetUser?.warningCount ?: 0) + 1
+                                                        if (targetUser != null) {
+                                                            db.collection("users").document(targetUser.id)
+                                                                .update("warningCount", newWarningCount)
+                                                        }
+                                                        if (newWarningCount >= 3) {
+                                                            val suspendedUntil = com.google.firebase.Timestamp(
+                                                                java.util.Date(System.currentTimeMillis() + 7L * 24 * 60 * 60 * 1000))
+                                                            targetUser?.let {
+                                                                db.collection("users").document(it.id)
+                                                                    .set(mapOf("suspended" to true, "suspendedUntil" to suspendedUntil),
+                                                                        com.google.firebase.firestore.SetOptions.merge())
+                                                            }
+                                                            db.collection("notifications").add(hashMapOf(
+                                                                "userName"  to report.reportedName,
+                                                                "message"   to "🚫 You've received your 3rd warning and your account is suspended for 7 days. You won't be able to log in until the suspension lifts.",
+                                                                "type"      to "moderation",
+                                                                "timestamp" to System.currentTimeMillis(),
+                                                                "read"      to false
+                                                            ))
+                                                            toast("3rd warning — account suspended for 7 days.")
+                                                            logAudit("Suspended user (3rd warning)", "user_report", report.reportedName, report.reason)
+                                                        } else {
+                                                            db.collection("notifications").add(hashMapOf(
+                                                                "userName"  to report.reportedName,
+                                                                "message"   to "⚠️ You have received a warning from an admin regarding your behavior on the platform. Please review community guidelines. ($newWarningCount/3)",
+                                                                "type"      to "moderation",
+                                                                "timestamp" to System.currentTimeMillis(),
+                                                                "read"      to false
+                                                            ))
+                                                            toast("Warning sent to ${report.reportedName}. ($newWarningCount/3)")
+                                                            logAudit("Warned user ($newWarningCount/3)", "user_report", report.reportedName, report.reason)
+                                                        }
+                                                    }
+                                                    .addOnFailureListener { toast("Failed to warn.", false) }
+                                            }
+                                        )
+                                    }
                                 }
                             }
                         }
-                        6 -> {
+                        AdminSection.PROFANITY -> {
                             if (isLoadingModerationLogs) {
                                 item { AdminLoadingState() }
                             } else if (moderationLogs.isEmpty()) {
@@ -2127,7 +2429,7 @@ fun AdminScreen(paddingValues: PaddingValues, adminUserName: String = "") {
                                 }
                             }
                         }
-                        7 -> {
+                        AdminSection.AUDIT -> {
                             if (isLoadingAuditLogs) {
                                 item { AdminLoadingState() }
                             } else if (auditLogs.isEmpty()) {
@@ -2146,55 +2448,7 @@ fun AdminScreen(paddingValues: PaddingValues, adminUserName: String = "") {
                             }
                         }
 
-                        5 -> {
-                            if (isLoadingUserReports) {
-                                item { AdminLoadingState() }
-                            } else if (userReports.isEmpty()) {
-                                item { AdminEmptyState(Icons.Default.PersonOff, "No user reports", "No users have been reported.") }
-                            } else {
-                                item {
-                                    Text(
-                                        "${userReports.size} pending report${if (userReports.size != 1) "s" else ""}",
-                                        fontSize = 12.sp, color = AMuted,
-                                        modifier = Modifier.padding(start = 4.dp, bottom = 2.dp)
-                                    )
-                                }
-                                items(userReports, key = { it.id }) { report ->
-                                    AdminUserReportCard(
-                                        report    = report,
-                                        onDismiss = {
-                                            db.collection("userReports").document(report.id)
-                                                .update("reviewed", true)
-                                                .addOnSuccessListener {
-                                                    userReports.remove(report)
-                                                    toast("Report dismissed.")
-                                                    logAudit("Dismissed user report", "user_report", report.reportedName, report.reason)
-                                                }
-                                                .addOnFailureListener { toast("Failed to dismiss.", false) }
-                                        },
-                                        onWarn = {
-                                            db.collection("userReports").document(report.id)
-                                                .update("reviewed", true)
-                                                .addOnSuccessListener {
-                                                    userReports.remove(report)
-                                                    db.collection("notifications").add(hashMapOf(
-                                                        "userName"  to report.reportedName,
-                                                        "message"   to "⚠️ You have received a warning from an admin regarding your behavior on the platform. Please review community guidelines.",
-                                                        "type"      to "moderation",
-                                                        "timestamp" to System.currentTimeMillis(),
-                                                        "read"      to false
-                                                    ))
-                                                    toast("Warning sent to ${report.reportedName}.")
-                                                    logAudit("Warned user", "user_report", report.reportedName, report.reason)
-                                                }
-                                                .addOnFailureListener { toast("Failed to warn.", false) }
-                                        }
-                                    )
-                                }
-                            }
-                        }
-
-                        8 -> {
+                        AdminSection.TRASH -> {
                             // ── Trash ──────────────────────────────────────────
                             item {
                                 Row(
@@ -4151,6 +4405,7 @@ private fun AdminModerationLogCard(log: ModerationLog, onDismiss: () -> Unit = {
 @Composable
 private fun AdminUserReportCard(
     report    : UserReport,
+    currentWarningCount: Int = 0,
     onDismiss : () -> Unit,
     onWarn    : () -> Unit
 ) {
@@ -4310,7 +4565,18 @@ private fun AdminUserReportCard(
                             Text("· ${report.emergencyType}", fontSize = 11.sp, color = roleColor.copy(alpha = 0.7f))
                         }
                     }
-                    Text(formatAdminTime(report.timestamp), fontSize = 11.sp, color = AMuted)
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        if (currentWarningCount > 0) {
+                            Box(Modifier
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(if (currentWarningCount >= 2) ARedColor.copy(alpha = 0.15f) else AAmber500.copy(alpha = 0.15f))
+                                .padding(horizontal = 7.dp, vertical = 2.dp)) {
+                                Text("$currentWarningCount/3 warnings", fontSize = 10.sp, fontWeight = FontWeight.Bold,
+                                    color = if (currentWarningCount >= 2) ARedColor else AAmber500)
+                            }
+                        }
+                        Text(formatAdminTime(report.timestamp), fontSize = 11.sp, color = AMuted)
+                    }
                 }
             }
 
@@ -4766,6 +5032,249 @@ private fun AdminTrashCard(
                         Icon(Icons.Default.DeleteForever, null, modifier = Modifier.size(14.dp))
                         Spacer(Modifier.width(4.dp))
                         Text("Delete", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+    }
+}
+@Composable
+private fun AdminUserCard(
+    user: AdminUser,
+    onSave: (String) -> Unit,
+    onScheduleDelete: () -> Unit,
+    onCancelDelete: () -> Unit,
+    onRoleChange: (String) -> Unit,
+    onLiftSuspension: () -> Unit = {}
+) {
+    var showEditDialog by remember { mutableStateOf(false) }
+    var showDeleteDialog by remember { mutableStateOf(false) }
+    var editName by remember(user.displayName) { mutableStateOf(user.displayName) }
+    var editRole by remember(user.role) { mutableStateOf(user.role) }
+
+    val roleColor = when (user.role) { "admin" -> Color(0xFF6A1B9A); else -> AGreen900 }
+    val roleBg    = when (user.role) { "admin" -> Color(0xFFF3E5F5); else -> AGreen50 }
+
+    if (showEditDialog) {
+        AlertDialog(
+            onDismissRequest = { showEditDialog = false },
+            shape = RoundedCornerShape(20.dp), containerColor = AWhite,
+            icon = { Box(Modifier.size(52.dp).clip(CircleShape).background(AGreen50), Alignment.Center) {
+                Icon(Icons.Default.Edit, null, tint = AGreen900, modifier = Modifier.size(24.dp)) } },
+            title = { Text("Edit User", fontWeight = FontWeight.ExtraBold, fontSize = 17.sp,
+                color = AOnSurface, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth()) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    OutlinedTextField(
+                        value = editName, onValueChange = { editName = it },
+                        label = { Text("Display name", fontSize = 12.sp) },
+                        singleLine = true, shape = RoundedCornerShape(10.dp), modifier = Modifier.fillMaxWidth(),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedTextColor    = AOnSurface,
+                            unfocusedTextColor  = AOnSurface,
+                            focusedBorderColor  = AGreen900,
+                            unfocusedBorderColor = ADivider,
+                            focusedContainerColor   = AWhite,
+                            unfocusedContainerColor = AWhite
+                        )
+                    )
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text("Role", fontSize = 12.sp, color = AMuted, fontWeight = FontWeight.SemiBold)
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Box(Modifier.clip(RoundedCornerShape(6.dp)).background(Color(0xFFF3F4F6))
+                                .padding(horizontal = 8.dp, vertical = 3.dp)) {
+                                Text(user.role.replaceFirstChar { it.uppercase() }, fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold, color = AMuted)
+                            }
+                            Text("Change role from the user list, not here",
+                                fontSize = 10.sp, color = AMuted)
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(onClick = { showEditDialog = false; onSave(editName.trim()) },
+                        enabled = editName.isNotBlank(),
+                        modifier = Modifier.fillMaxWidth().height(46.dp), shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = AGreen900, contentColor = Color.White)
+                    ) { Text("Save changes", fontWeight = FontWeight.Bold) }
+                    OutlinedButton(onClick = { showEditDialog = false },
+                        modifier = Modifier.fillMaxWidth().height(44.dp), shape = RoundedCornerShape(12.dp)
+                    ) { Text("Cancel", color = AMuted) }
+                }
+            }
+        )
+    }
+
+    if (showDeleteDialog) {
+        AlertDialog(
+            onDismissRequest = { showDeleteDialog = false },
+            shape = RoundedCornerShape(20.dp), containerColor = AWhite,
+            icon = { Box(Modifier.size(52.dp).clip(CircleShape).background(ARedLight), Alignment.Center) {
+                Icon(Icons.Default.PersonRemove, null, tint = ARedColor, modifier = Modifier.size(24.dp)) } },
+            title = { Text("Delete ${user.displayName}?", fontWeight = FontWeight.ExtraBold, fontSize = 17.sp,
+                color = AOnSurface, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth()) },
+            text = {
+                Text("This schedules permanent deletion in 14 days — the same grace period users get when deleting their own account. ${user.displayName} will be signed out on next login attempt and can cancel by logging back in before the deadline.",
+                    fontSize = 13.sp, color = AMuted, textAlign = TextAlign.Center)
+            },
+            confirmButton = {
+                Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(onClick = { showDeleteDialog = false; onScheduleDelete() },
+                        modifier = Modifier.fillMaxWidth().height(46.dp), shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = ARedColor, contentColor = Color.White)
+                    ) { Text("Schedule deletion", fontWeight = FontWeight.Bold) }
+                    OutlinedButton(onClick = { showDeleteDialog = false },
+                        modifier = Modifier.fillMaxWidth().height(44.dp), shape = RoundedCornerShape(12.dp)
+                    ) { Text("Cancel", color = AMuted) }
+                }
+            }
+        )
+    }
+
+    Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = AWhite), elevation = CardDefaults.cardElevation(2.dp)) {
+        Column(Modifier.fillMaxWidth()) {
+            if (user.pendingDeletion) {
+                Box(Modifier.fillMaxWidth()
+                    .background(ARedLight, RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp))
+                    .padding(horizontal = 14.dp, vertical = 8.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Icon(Icons.Default.Timer, null, tint = ARedColor, modifier = Modifier.size(13.dp))
+                        Text("Pending deletion · ${formatAdminTime(user.deletionScheduledAt)}",
+                            fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = ARedColor)
+                    }
+                }
+            }
+            if (user.suspended) {
+                Box(Modifier.fillMaxWidth()
+                    .background(AAmber50, RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp))
+                    .padding(horizontal = 14.dp, vertical = 8.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Icon(Icons.Default.Block, null, tint = AAmber500, modifier = Modifier.size(13.dp))
+                        Text(
+                            if (user.suspendedUntil > System.currentTimeMillis())
+                                "Suspended until ${formatAdminTime(user.suspendedUntil)}"
+                            else "Suspension expired — will lift on next login",
+                            fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = AAmber500)
+                    }
+                }
+            }
+            Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Box(Modifier.size(40.dp).clip(CircleShape).background(roleBg), Alignment.Center) {
+                        if (user.photoUrl.isNotBlank()) {
+                            AsyncImage(model = user.photoUrl, contentDescription = null,
+                                contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize().clip(CircleShape))
+                        } else {
+                            Text(user.displayName.take(1).uppercase(), fontWeight = FontWeight.ExtraBold,
+                                fontSize = 16.sp, color = roleColor)
+                        }
+                    }
+                    Column(Modifier.weight(1f)) {
+                        Text(user.displayName, fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = AOnSurface)
+                        Text(user.email.ifBlank { "@${user.username}" }, fontSize = 12.sp, color = AMuted)
+                    }
+                    Box(Modifier.clip(RoundedCornerShape(6.dp)).background(roleBg)
+                        .padding(horizontal = 8.dp, vertical = 3.dp)) {
+                        Text(user.role.replaceFirstChar { it.uppercase() }, fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold, color = roleColor)
+                    }
+                }
+                if (user.createdAt > 0L) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Icon(Icons.Default.CalendarMonth, null, tint = AMuted, modifier = Modifier.size(11.dp))
+                        Text("Joined ${formatAdminTime(user.createdAt)}", fontSize = 11.sp, color = AMuted)
+                    }
+                }
+                HorizontalDivider(color = ADivider, thickness = 0.5.dp)
+                var showRoleDialog by remember { mutableStateOf(false) }
+                var pendingRole by remember { mutableStateOf(user.role) }
+                if (showRoleDialog) {
+                    AlertDialog(
+                        onDismissRequest = { showRoleDialog = false; pendingRole = user.role },
+                        shape = RoundedCornerShape(20.dp), containerColor = AWhite,
+                        icon = { Box(Modifier.size(52.dp).clip(CircleShape).background(Color(0xFFF3E5F5)), Alignment.Center) {
+                            Icon(Icons.Default.AdminPanelSettings, null, tint = Color(0xFF6A1B9A), modifier = Modifier.size(24.dp)) } },
+                        title = { Text("Change Role", fontWeight = FontWeight.ExtraBold, fontSize = 17.sp,
+                            color = AOnSurface, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth()) },
+                        text = {
+                            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                                Text("${user.displayName} is currently ${user.role}.", fontSize = 13.sp, color = AMuted, textAlign = TextAlign.Center)
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                                    listOf("rider", "admin").forEach { r ->
+                                        val selected = pendingRole == r
+                                        Box(Modifier.weight(1f).clip(RoundedCornerShape(10.dp))
+                                            .background(if (selected) AGreen900 else Color(0xFFF3F4F6))
+                                            .clickable { pendingRole = r }
+                                            .padding(vertical = 8.dp), Alignment.Center) {
+                                            Text(r.replaceFirstChar { it.uppercase() }, fontSize = 12.sp,
+                                                color = if (selected) Color.White else AMuted, fontWeight = FontWeight.SemiBold)
+                                        }
+                                    }
+                                }
+                                if (pendingRole == "admin" && user.role != "admin") {
+                                    Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp))
+                                        .background(ARedLight).padding(10.dp)) {
+                                        Text("This grants full admin access, including editing other users' roles.",
+                                            fontSize = 12.sp, color = ARedColor, textAlign = TextAlign.Center,
+                                            modifier = Modifier.fillMaxWidth())
+                                    }
+                                }
+                            }
+                        },
+                        confirmButton = {
+                            Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Button(
+                                    onClick = { showRoleDialog = false; onRoleChange(pendingRole) },
+                                    enabled = pendingRole != user.role,
+                                    modifier = Modifier.fillMaxWidth().height(46.dp), shape = RoundedCornerShape(12.dp),
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = if (pendingRole == "admin") ARedColor else AGreen900,
+                                        contentColor = Color.White)
+                                ) { Text("Confirm: ${user.role} → $pendingRole", fontWeight = FontWeight.Bold) }
+                                OutlinedButton(onClick = { showRoleDialog = false; pendingRole = user.role },
+                                    modifier = Modifier.fillMaxWidth().height(44.dp), shape = RoundedCornerShape(12.dp)
+                                ) { Text("Cancel", color = AMuted) }
+                            }
+                        }
+                    )
+                }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(
+                        onClick = { pendingRole = user.role; showRoleDialog = true },
+                        modifier = Modifier.width(40.dp).height(40.dp), shape = RoundedCornerShape(10.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFF6A1B9A)),
+                        border = androidx.compose.foundation.BorderStroke(1.5.dp, Color(0xFF6A1B9A)),
+                        contentPadding = PaddingValues(0.dp)
+                    ) { Icon(Icons.Default.AdminPanelSettings, null, modifier = Modifier.size(16.dp)) }
+                    OutlinedButton(
+                        onClick = { editName = user.displayName; showEditDialog = true },
+                        modifier = Modifier.weight(1f).height(40.dp), shape = RoundedCornerShape(10.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = AGreen900),
+                        border = androidx.compose.foundation.BorderStroke(1.5.dp, AGreen900)
+                    ) { Icon(Icons.Default.Edit, null, modifier = Modifier.size(14.dp)); Spacer(Modifier.width(4.dp))
+                        Text("Edit", fontSize = 12.sp, fontWeight = FontWeight.Bold) }
+                    if (user.pendingDeletion) {
+                        Button(onClick = onCancelDelete,
+                            modifier = Modifier.weight(1f).height(40.dp), shape = RoundedCornerShape(10.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = AGreen900, contentColor = Color.White)
+                        ) { Icon(Icons.Default.Restore, null, modifier = Modifier.size(14.dp)); Spacer(Modifier.width(4.dp))
+                            Text("Cancel deletion", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color.White) }
+                    } else if (user.suspended) {
+                        Button(onClick = onLiftSuspension,
+                            modifier = Modifier.weight(1f).height(40.dp), shape = RoundedCornerShape(10.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = AAmber500, contentColor = Color.White)
+                        ) { Icon(Icons.Default.LockOpen, null, modifier = Modifier.size(14.dp)); Spacer(Modifier.width(4.dp))
+                            Text("Lift suspension", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color.White) }
+                    } else {
+                        OutlinedButton(onClick = { showDeleteDialog = true },
+                            modifier = Modifier.weight(1f).height(40.dp), shape = RoundedCornerShape(10.dp),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = ARedColor),
+                            border = androidx.compose.foundation.BorderStroke(1.5.dp, ARedColor)
+                        ) { Icon(Icons.Default.PersonRemove, null, modifier = Modifier.size(14.dp)); Spacer(Modifier.width(4.dp))
+                            Text("Delete", fontSize = 12.sp, fontWeight = FontWeight.Bold) }
                     }
                 }
             }

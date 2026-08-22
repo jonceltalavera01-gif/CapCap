@@ -107,6 +107,7 @@ fun SettingsScreen(navController: NavController) {
     var settings          by remember { mutableStateOf(UserSettings()) }
     var userName         by remember { mutableStateOf("") }
     var isAdmin          by remember { mutableStateOf(false) }
+    var userRole         by remember { mutableStateOf("rider") }
     var firestoreEmail   by remember { mutableStateOf("") }
     var isEmailVerified  by remember { mutableStateOf(currentUser?.isEmailVerified ?: true) }
     var isResendingEmail by remember { mutableStateOf(false) }
@@ -155,6 +156,7 @@ fun SettingsScreen(navController: NavController) {
                 userDocId = doc.id
                 userName  = doc.getString("username").orEmpty()
                 isAdmin   = doc.getString("role") == "admin"
+                userRole  = doc.getString("role") ?: "rider"
                 val prefs = doc.get("settings") as? Map<*, *>
                 // Graceful migration: bikeTypes may be an array (new) or a string (old)
                 val rawBikeTypes: List<String> = when (val raw = doc.get("bikeTypes")) {

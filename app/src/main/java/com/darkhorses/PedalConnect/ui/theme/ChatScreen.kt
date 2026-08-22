@@ -103,6 +103,8 @@ fun ChatScreen(
 
     var messageText by remember { mutableStateOf("") }
     var replyingTo by remember { mutableStateOf<Message?>(null) }
+    var isUploadingImage by remember { mutableStateOf(false) }
+    var fullScreenImageUrl by remember { mutableStateOf<String?>(null) }
     var reactionTrayMessageId by remember { mutableStateOf<String?>(null) }
     var showSeenByMessageId by remember { mutableStateOf<String?>(null) }
     var showGroupInfo by remember { mutableStateOf(false) }
@@ -126,12 +128,15 @@ fun ChatScreen(
     ) { uri ->
         if (uri != null) {
             scope.launch {
+                isUploadingImage = true
                 try {
                     val bytes = context.contentResolver.openInputStream(uri)!!.readBytes()
                     val result = CloudinaryHelper.uploadImage(bytes)
                     viewModel.sendMessage(conversationId, otherUserId, "", imageUrl = result.url)
                 } catch (e: Exception) {
                     Toast.makeText(context, "Upload failed: ${e.message}", Toast.LENGTH_SHORT).show()
+                } finally {
+                    isUploadingImage = false
                 }
             }
         }
@@ -330,6 +335,29 @@ fun ChatScreen(
                             )
                         }
 
+                        if (isUploadingImage) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .background(Color(0xFFF5F5F5))
+                                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                CircularProgressIndicator(
+                                    color = CGreen900,
+                                    strokeWidth = 2.dp,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Spacer(Modifier.width(8.dp))
+                                Text(
+                                    "Sending image…",
+                                    fontSize = 12.sp,
+                                    color = CGreen700,
+                                    fontStyle = androidx.compose.ui.text.font.FontStyle.Italic
+                                )
+                            }
+                        }
+
                         // ── Reply Preview ──────────────────────────────────────────
                         replyingTo?.let { replyMsg ->
                             val sender = activeParticipants[replyMsg.senderId]
@@ -366,8 +394,19 @@ fun ChatScreen(
                                 .padding(bottom = paddingValues.calculateBottomPadding()),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            IconButton(onClick = { photoPicker.launch("image/*") }) {
-                                Icon(Icons.Default.Image, contentDescription = "Send Image", tint = CGreen900)
+                            IconButton(
+                                onClick = { photoPicker.launch("image/*") },
+                                enabled = !isUploadingImage
+                            ) {
+                                if (isUploadingImage) {
+                                    CircularProgressIndicator(
+                                        color = CGreen900,
+                                        strokeWidth = 2.dp,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                } else {
+                                    Icon(Icons.Default.Image, contentDescription = "Send Image", tint = CGreen900)
+                                }
                             }
                             Spacer(Modifier.width(4.dp))
                             OutlinedTextField(
@@ -427,6 +466,42 @@ fun ChatScreen(
                 conversation = activeConversation!!,
                 onDismiss = { showAddParticipants = false }
             )
+        }
+
+        fullScreenImageUrl?.let { imageUrl ->
+            androidx.compose.ui.window.Dialog(
+                onDismissRequest = { fullScreenImageUrl = null },
+                properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.Black.copy(alpha = 0.95f))
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null
+                        ) { fullScreenImageUrl = null },
+                    contentAlignment = Alignment.Center
+                ) {
+                    AsyncImage(
+                        model = imageUrl,
+                        contentDescription = null,
+                        modifier = Modifier.fillMaxWidth(),
+                        contentScale = ContentScale.Fit
+                    )
+                    IconButton(
+                        onClick = { fullScreenImageUrl = null },
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(16.dp)
+                            .size(40.dp)
+                            .clip(CircleShape)
+                            .background(Color.White.copy(alpha = 0.2f))
+                    ) {
+                        Icon(Icons.Default.Close, contentDescription = "Close", tint = Color.White)
+                    }
+                }
+            }
         }
 
         if (messages.isEmpty()) {
@@ -692,7 +767,11 @@ fun ChatScreen(
                                                     modifier = Modifier
                                                         .fillMaxWidth()
                                                         .heightIn(max = 200.dp)
-                                                        .clip(RoundedCornerShape(8.dp)),
+                                                        .clip(RoundedCornerShape(8.dp))
+                                                        .clickable(
+                                                            interactionSource = remember { MutableInteractionSource() },
+                                                            indication = null
+                                                        ) { fullScreenImageUrl = message.imageUrl },
                                                     contentScale = ContentScale.Crop
                                                 )
                                                 if (message.text.isNotEmpty()) Spacer(Modifier.height(4.dp))

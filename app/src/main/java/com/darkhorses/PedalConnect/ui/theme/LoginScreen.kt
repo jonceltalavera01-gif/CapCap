@@ -335,6 +335,23 @@ fun LoginScreen(navController: NavController, paddingValues: PaddingValues) {
                         .addOnSuccessListener { docs ->
                             if (!docs.isEmpty) {
                                 val doc = docs.documents[0]
+
+                                val isSuspended = doc.getBoolean("suspended") == true
+                                val suspendedUntilMillis = doc.getTimestamp("suspendedUntil")?.toDate()?.time
+                                if (isSuspended && suspendedUntilMillis != null && System.currentTimeMillis() < suspendedUntilMillis) {
+                                    val daysLeft = ((suspendedUntilMillis - System.currentTimeMillis()) / (1000 * 60 * 60 * 24)) + 1
+                                    isLoginLoading = false
+                                    loginGeneralError = "Your account is suspended for $daysLeft more day${if (daysLeft != 1L) "s" else ""} due to community guideline violations."
+                                    auth.signOut()
+                                    return@addOnSuccessListener
+                                } else if (isSuspended) {
+                                    doc.reference.set(
+                                        mapOf("suspended" to false, "suspendedUntil" to null),
+                                        com.google.firebase.firestore.SetOptions.merge()
+                                    )
+                                    Toast.makeText(context, "Your suspension has ended. Welcome back!", Toast.LENGTH_LONG).show()
+                                }
+
                                 val isPendingDeletion = doc.getBoolean("pendingDeletion") == true
                                 val scheduledAtMillis = doc.getTimestamp("deletionScheduledAt")?.toDate()?.time
 
@@ -460,6 +477,25 @@ fun LoginScreen(navController: NavController, paddingValues: PaddingValues) {
                     .addOnSuccessListener { docs ->
                         if (!docs.isEmpty) {
                             val doc = docs.documents[0]
+
+                            val isSuspended = doc.getBoolean("suspended") == true
+                            val suspendedUntilMillis = doc.getTimestamp("suspendedUntil")?.toDate()?.time
+                            if (isSuspended && suspendedUntilMillis != null && System.currentTimeMillis() < suspendedUntilMillis) {
+                                // Still inside the suspension window — block login entirely.
+                                val daysLeft = ((suspendedUntilMillis - System.currentTimeMillis()) / (1000 * 60 * 60 * 24)) + 1
+                                isLoginLoading = false
+                                loginGeneralError = "Your account is suspended for $daysLeft more day${if (daysLeft != 1L) "s" else ""} due to community guideline violations."
+                                auth.signOut()
+                                return@addOnSuccessListener
+                            } else if (isSuspended) {
+                                // Suspension window has passed — auto-lift it on this login.
+                                doc.reference.set(
+                                    mapOf("suspended" to false, "suspendedUntil" to null),
+                                    com.google.firebase.firestore.SetOptions.merge()
+                                )
+                                Toast.makeText(context, "Your suspension has ended. Welcome back!", Toast.LENGTH_LONG).show()
+                            }
+
                             val isPendingDeletion = doc.getBoolean("pendingDeletion") == true
                             val scheduledAtMillis = doc.getTimestamp("deletionScheduledAt")?.toDate()?.time
 
@@ -756,7 +792,7 @@ fun LoginScreen(navController: NavController, paddingValues: PaddingValues) {
                 text = {
                     Text(
                         "Would you like to use your fingerprint for faster login next time?",
-                        color = Color(0xFF4B5563)
+                        color = Color(0xFF1A1A1A)
                     )
                 },
                 confirmButton = {

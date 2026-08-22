@@ -126,6 +126,7 @@ fun ProfileScreen(
     var showRidesSheet   by remember { mutableStateOf(false) }
     val ridesSheetState  = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var selectedEvent    by remember { mutableStateOf<RideEvent?>(null) }
+    var userRole by remember { mutableStateOf("rider") }
 
     val myPosts      = remember { mutableStateListOf<ProfilePost>() }
     // Tracks optimistic like state independently of the snapshot listener
@@ -277,6 +278,7 @@ fun ProfileScreen(
                     userSkillLevel = doc.getString("skillLevel")
                     helperRating      = doc.getDouble("helperRating") ?: 0.0
                     helperRatingCount = (doc.getLong("helperRatingCount") ?: 0L).toInt()
+                    userRole = doc.getString("role") ?: "rider"
                 }
             }
     }
