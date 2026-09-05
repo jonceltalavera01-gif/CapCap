@@ -118,7 +118,7 @@ private const val OVERPASS_INTERVAL_MS = 90_000L
 private const val LINKED_RIDE_GPS_TIMEOUT_MS = 15_000L
 private const val OVERPASS_MOVE_KM     = 0.25
 private const val AUTO_RECENTER_TIMEOUT_MS = 10_000L  // re-center map after this long untouched
-private const val ARRIVAL_RADIUS_M = 25.0  // treat as "arrived" within this many meters of destination
+private const val ARRIVAL_RADIUS_M = 40.0  // treat as "arrived" within this many meters of destination
 
 private fun fuzzDistance(km: Double): Double = when {
     km < 1.0 -> (Math.round(km * 10).toDouble()) / 10.0  // 0.1km steps under 1km
@@ -581,6 +581,7 @@ fun HomeScreen(
     // snapping the match backward, and prevents false matches to a far-ahead leg
     // of a route that loops back near itself.
     var breadcrumbLastMatchedIdx by remember { mutableIntStateOf(0) }
+    var navigationLastMatchedIdx by remember { mutableIntStateOf(0) }
 
     val alerts = remember { mutableStateListOf<AlertItem>() }
     var myLocationOverlay by remember { mutableStateOf<MyLocationNewOverlay?>(null) }
@@ -1694,6 +1695,7 @@ fun HomeScreen(
                 }
                 newPolylines.forEach { liveMap.overlays.add(it) }
                 activePolylines = newPolylines
+                navigationLastMatchedIdx = 0
                 if (isReroute) {
                     // Background correction — keep whatever the user was looking at.
                     showTurnPanel  = wasTurnPanelActive
@@ -1931,6 +1933,7 @@ fun HomeScreen(
         }
         mapViewRef?.overlays?.add(poly)
         activePolylines       = listOf(poly)
+        navigationLastMatchedIdx = 0
         destinationPoint      = points.last()
         destinationShopType   = null
         routeOptions          = emptyList()
@@ -2068,6 +2071,7 @@ fun HomeScreen(
             poly.outlinePaint.strokeWidth = if (i == idx) 12f else 8f
         }
         map.invalidate(); currentStepIdx = 0
+        navigationLastMatchedIdx = 0
     }
 
     fun fetchRoute(start: GeoPoint, end: GeoPoint) { fetchRoutes(start, end) }
@@ -2127,6 +2131,54 @@ fun HomeScreen(
                 publishLocation(gp, locationSharingEnabled)
                 mapRedrawTrigger++
 
+                // ── Navigation progress & Polyline Trimming ───────────────────
+                // Detect which polyline points the user has passed and trim them
+                // in real-time. Works for SOS response, POI nav, and breadcrumbs.
+                val navPoints = when {
+                    isBreadcrumbFollowing -> breadcrumbPoints
+                    showTurnPanel && routeOptions.isNotEmpty() ->
+                        routeOptions.getOrNull(selectedRouteIdx)?.points ?: emptyList()
+                    else -> emptyList()
+                }
+
+                if (navPoints.size >= 2) {
+                    val match = matchBreadcrumbProgress(
+                        currentPoint     = gp,
+                        breadcrumbPoints = navPoints,
+                        lastMatchedIdx   = navigationLastMatchedIdx,
+                        windowSize       = 60 // larger window for high-speed cycling
+                    )
+                    navigationLastMatchedIdx = match.matchedIdx
+
+                    // Update breadcrumb specific state if needed
+                    if (isBreadcrumbFollowing) {
+                        breadcrumbLastMatchedIdx = match.matchedIdx
+                        breadcrumbRemainingKm    = match.remainingKm
+                    }
+
+                    // Trim the active polyline(s)
+                    if (match.matchedIdx > 0 && activePolylines.isNotEmpty()) {
+                        val remainingPoints = navPoints.subList(match.matchedIdx, navPoints.size)
+                        activePolylines.forEach { poly ->
+                            if (remainingPoints.size >= 2) {
+                                poly.setPoints(remainingPoints)
+                            } else {
+                                poly.setPoints(emptyList())
+                            }
+                        }
+                        mapViewRef?.invalidate()
+                    }
+
+                    // Off-route check for breadcrumb
+                    if (isBreadcrumbFollowing && match.distFromTrailKm > 0.1) {
+                        val nowMs = System.currentTimeMillis()
+                        if (nowMs - lastOffRouteToastMs > 20_000L) {
+                            lastOffRouteToastMs = nowMs
+                            Toast.makeText(context, "You've drifted from the saved route.", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                }
+
                 // ── Turn-by-turn advancement ──────────────────────────────────
                 if (showTurnPanel && routeOptions.isNotEmpty()) {
                     checkOffRoute(gp)
@@ -2144,25 +2196,6 @@ fun HomeScreen(
                             )
                             if (distToStep < 0.03 && currentStepIdx < steps.size - 1)
                                 currentStepIdx++
-                        }
-                    }
-                }
-
-                // ── Breadcrumb-follow: off-route check + remaining distance ───
-                if (isBreadcrumbFollowing && breadcrumbPoints.size >= 2) {
-                    val match = matchBreadcrumbProgress(
-                        currentPoint     = gp,
-                        breadcrumbPoints = breadcrumbPoints,
-                        lastMatchedIdx   = breadcrumbLastMatchedIdx
-                    )
-                    breadcrumbLastMatchedIdx = match.matchedIdx
-                    breadcrumbRemainingKm    = match.remainingKm
-
-                    if (match.distFromTrailKm > 0.1) {
-                        val nowMs = System.currentTimeMillis()
-                        if (nowMs - lastOffRouteToastMs > 20_000L) {
-                            lastOffRouteToastMs = nowMs
-                            Toast.makeText(context, "You've drifted from the saved route.", Toast.LENGTH_SHORT).show()
                         }
                     }
                 }
@@ -2215,7 +2248,9 @@ fun HomeScreen(
                     val mv = mapViewRef
                     if (mv != null) {
                         val currentZoom = mv.zoomLevelDouble
-                        val zoomNeedsChange = kotlin.math.abs(currentZoom - targetZoom) > 0.05
+                        // Disable speed-based auto-zoom adjustment during navigation
+                        val isNavigating = showTurnPanel || isBreadcrumbFollowing
+                        val zoomNeedsChange = !isNavigating && kotlin.math.abs(currentZoom - targetZoom) > 0.05
 
                         if (movedEnoughForCamera || zoomNeedsChange) {
                             isProgrammaticScrollRef.set(true)
@@ -4320,6 +4355,7 @@ fun HomeScreen(
                                         }
                                         liveMap.overlays.add(polyline)
                                         activePolylines  = listOf(polyline)
+                                        navigationLastMatchedIdx = 0
                                         routeOptions     = listOf(RouteOption("Responding", "Fastest route to rider", distKm, durMin, points, Color(0xFF1565C0)))
                                         selectedRouteIdx = 0
                                         turnSteps        = steps
@@ -4582,6 +4618,7 @@ fun HomeScreen(
                                         val snapshotRouteIdx      = selectedRouteIdx
                                         val snapshotTurnSteps     = turnSteps
                                         val snapshotStepIdx       = currentStepIdx
+                                        val snapshotMatchedIdx    = navigationLastMatchedIdx
                                         val snapshotDestination   = destinationPoint
 
                                         // ── Clear the map/route immediately — local, synchronous, doesn't
@@ -4652,6 +4689,7 @@ fun HomeScreen(
                                                 selectedRouteIdx    = snapshotRouteIdx
                                                 turnSteps           = snapshotTurnSteps
                                                 currentStepIdx      = snapshotStepIdx
+                                                navigationLastMatchedIdx = snapshotMatchedIdx
                                                 activePolylines     = snapshotPolylines
                                                 snapshotPolylines.forEach { poly ->
                                                     if (mapViewRef?.overlays?.contains(poly) == false) {
