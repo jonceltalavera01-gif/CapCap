@@ -612,8 +612,9 @@ import com.darkhorses.PedalConnect.utils.OrsApiManager
         var pendingRouteIdx  by remember { mutableIntStateOf(-1) }  // -1 = nothing previewed yet
         var isLoadingRoute      by remember { mutableStateOf(false) }
         var isRespondingToAlert by remember { mutableStateOf(false) }
-        var activePolylines  by remember { mutableStateOf<List<Polyline>>(emptyList()) }
+              var activePolylines  by remember { mutableStateOf<List<Polyline>>(emptyList()) }
         var staticSavedRoutePolyline by remember { mutableStateOf<Polyline?>(null) }
+        var pendingHandoffSavedRoute by remember { mutableStateOf<List<GeoPoint>>(emptyList()) }
 
 
         var turnSteps         by remember { mutableStateOf<List<TurnStep>>(emptyList()) }
@@ -2178,40 +2179,8 @@ import com.darkhorses.PedalConnect.utils.OrsApiManager
             breadcrumbRemainingKm = distKm
             isFollowingLocation   = true
 
-            // If a workout is linked to this session, treat following a saved route
-            // the same as tapping "Start Ride" — otherwise the coaching panel has
-            // no live time/speed/distance to show (those only update while isTracking).
-            // Guarded so plain route-following with no workout keeps today's behavior
-            // unchanged: no auto-tracking, no Stop button, nothing recorded.
-            if (activeWorkout != null && !isTracking) {
-                resetRide()
-                isTracking = true
-                isPaused = false
-                workoutGoalMetAnnounced = false
-                rideStartPoint = userGeoPoint ?: myLocationOverlay?.myLocation
-                persistRideSnapshot()
-            } else if (activeWorkout == null && !isTracking && (pendingWorkoutOptions.size + failedWorkoutOptions.size) == 1) {
-                // No workout was already linked (e.g. arrived via Directions, not
-                // the Training tab), but there's exactly one pending/failed workout — link
-                // it the same way the single-option case on the manual Start Ride
-                // button does, so the coaching panel shows immediately.
-                val (wk, w) = if (pendingWorkoutOptions.isNotEmpty()) pendingWorkoutOptions.first() else failedWorkoutOptions.first()
-                resetRide()
-                isTracking = true
-                isPaused = false
-                workoutGoalMetAnnounced = false
-                rideStartPoint = userGeoPoint ?: myLocationOverlay?.myLocation
-                effectiveLinkedWeek = wk
-                effectiveLinkedWorkoutId = w.id
-                persistRideSnapshot()
-                scope.launch {
-                    try { markWorkoutInProgress(db, userName, wk, w.id) }
-                    catch (e: Exception) { android.util.Log.e("HomeScreen", "Failed to mark workout in progress", e) }
-                }
-            }
-            // If there are multiple workout options and none is linked yet, leave
-            // tracking off here — the user can tap "Start Ride" once following the
-            // route, which will show the picker (same as starting without a route).
+            // Automated tracking removal: The user wants to manually tap "Start Ride" 
+            // when they arrive at their saved route.
 
             mapRedrawTrigger++
             mapViewRef?.invalidate()
@@ -2276,6 +2245,7 @@ import com.darkhorses.PedalConnect.utils.OrsApiManager
                     return@LaunchedEffect
                 }
                 if (pendingPolylinePoints.size >= 2) {
+                    pendingHandoffSavedRoute = pendingPolylinePoints
                     // Draw the static saved route polyline onto the map so the user can see it
                     mapViewRef?.let { map ->
                         val savedRoutePoly = Polyline().apply {
@@ -2471,14 +2441,24 @@ import com.darkhorses.PedalConnect.utils.OrsApiManager
                             gp.latitude, gp.longitude, destNow.latitude, destNow.longitude
                         )
                         if (distToDestKm * 1000.0 <= ARRIVAL_RADIUS_M) {
-                            val arrivedMessage = if (isRespondingToAlert)
-                                "You've arrived at the rider's location."
-                            else
-                                "You've arrived at your destination."
-                            endActiveNavigation(
-                                spokenMessage = arrivedMessage,
-                                toastMessage  = arrivedMessage
-                            )
+                            if (pendingHandoffSavedRoute.isNotEmpty()) {
+                                val savedRoute = pendingHandoffSavedRoute
+                                pendingHandoffSavedRoute = emptyList()
+                                endActiveNavigation(
+                                    spokenMessage = "You've arrived at the start of your saved route. Navigating saved route now.",
+                                    toastMessage  = "Arrived at saved route start — follow the trail."
+                                )
+                                startBreadcrumbRoute(savedRoute)
+                            } else {
+                                val arrivedMessage = if (isRespondingToAlert)
+                                    "You've arrived at the rider's location."
+                                else
+                                    "You've arrived at your destination."
+                                endActiveNavigation(
+                                    spokenMessage = arrivedMessage,
+                                    toastMessage  = arrivedMessage
+                                )
+                            }
                         }
                     }
                     // ── Map camera follow ─────────────────────────────────────────
