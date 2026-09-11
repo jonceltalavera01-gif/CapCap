@@ -202,7 +202,7 @@ fun AlertsScreen(
                                 sendUserNotification(
                                     FirebaseFirestore.getInstance(), riderName,
                                     "The cyclist responding to your $emergencyType alert is no longer available. Your alert is active again — another cyclist can now help you.",
-                                    "alert"
+                                    "info"
                                 )
                             }
                         }
@@ -225,7 +225,7 @@ fun AlertsScreen(
                                     sendUserNotification(
                                         FirebaseFirestore.getInstance(), riderName,
                                         "Your $emergencyType alert was automatically closed after 2 hours with no response. If you still need help, please send a new alert.",
-                                        "alert"
+                                        "info"
                                     )
                                 }
                         }
@@ -373,7 +373,7 @@ fun AlertsScreen(
                             sendUserNotification(
                                 FirebaseFirestore.getInstance(), formerResponder,
                                 "The rider has reopened their ${alert.emergencyType} alert for other helpers. You no longer need to respond.",
-                                "alert"
+                                "info"
                             )
                         }
                         successMessage = "Alert reopened — nearby cyclists can respond again."
@@ -1942,14 +1942,14 @@ fun AlertCard(
                                                                             sendAdminNotification(
                                                                                 db,
                                                                                 "⚠️ Photo on ${alert.riderName}'s ${alert.emergencyType} alert was auto-hidden after 3 reports. Review alert ID: ${alert.id}",
-                                                                                "alert"
+                                                                                "info"
                                                                             )
                                                                         }
                                                                 } else {
                                                                     sendAdminNotification(
                                                                         db,
                                                                         "🚩 $helperName reported a photo on ${alert.riderName}'s ${alert.emergencyType} alert. ($reportCount/3 reports)",
-                                                                        "alert"
+                                                                        "info"
                                                                     )
                                                                 }
                                                             }

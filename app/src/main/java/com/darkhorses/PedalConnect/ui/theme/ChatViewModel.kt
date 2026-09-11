@@ -395,9 +395,10 @@ class ChatViewModel : ViewModel() {
         replyToId: String? = null,
         replyToText: String? = null,
         replyToSenderName: String? = null,
+        sharedPostId: String? = null,
         onResult: (Boolean) -> Unit = {}
     ) {
-        if (currentUserId.isEmpty() || (text.isBlank() && imageUrl == null)) return
+        if (currentUserId.isEmpty() || (text.isBlank() && imageUrl == null && sharedPostId == null)) return
         viewModelScope.launch {
             val conversation = _conversations.value.find { it.id == conversationId }
             val participantIds = conversation?.participantIds ?: if (otherUserId != "group" && otherUserId.isNotEmpty()) {
@@ -421,7 +422,8 @@ class ChatViewModel : ViewModel() {
                         imageUrl = imageUrl,
                         replyToId = replyToId,
                         replyToText = replyToText,
-                        replyToSenderName = replyToSenderName
+                        replyToSenderName = replyToSenderName,
+                        sharedPostId = sharedPostId
                     )
                 } ?: false
             } catch (e: Exception) {

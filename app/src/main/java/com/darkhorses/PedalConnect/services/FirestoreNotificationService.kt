@@ -4,8 +4,10 @@ import android.app.*
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
-import android.os.Build
-import android.os.IBinder
+import android.media.AudioAttributes
+import android.media.MediaPlayer
+import android.media.RingtoneManager
+import android.os.*
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.darkhorses.PedalConnect.MainActivity
@@ -22,6 +24,10 @@ class FirestoreNotificationService : Service() {
     private val db = FirebaseFirestore.getInstance()
     private val auth = FirebaseAuth.getInstance()
 
+    private var mediaPlayer: MediaPlayer? = null
+    private val serviceHandler = Handler(Looper.getMainLooper())
+    private var alarmStopRunnable: Runnable? = null
+
     @Volatile private var currentUsername: String? = null
 
     // Cached in-memory from a realtime Firestore listener so we don't need an
@@ -36,6 +42,8 @@ class FirestoreNotificationService : Service() {
         const val SYSTEM_NOTIFICATION_ID = 3001
         const val ACTION_START = "com.darkhorses.PedalConnect.action.START_NOTIFICATIONS"
         const val ACTION_STOP = "com.darkhorses.PedalConnect.action.STOP_NOTIFICATIONS"
+        const val ACTION_STOP_ALARM = "STOP_ALARM"
+        const val ACTION_SOS_BROADCAST = "com.darkhorses.PedalConnect.action.SOS_BROADCAST"
     }
 
     override fun onCreate() {
@@ -48,9 +56,15 @@ class FirestoreNotificationService : Service() {
             Log.d("NotificationService", "Stop requested — user disabled in-app notifications")
             listenerRegistration?.remove()
             listenerRegistration = null
+            stopAlarmSound()
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
             return START_NOT_STICKY
+        }
+
+        if (intent?.action == ACTION_STOP_ALARM) {
+            stopAlarmSound()
+            return START_STICKY
         }
 
         // Ensure notification channels exist
@@ -147,6 +161,9 @@ class FirestoreNotificationService : Service() {
                 val message = doc.getString("message") ?: "New notification"
                 val type = doc.getString("type") ?: "info"
                 val timestamp = doc.getLong("timestamp") ?: 0L
+                val lat = doc.getDouble("latitude") ?: 0.0
+                val lon = doc.getDouble("longitude") ?: 0.0
+                val locName = doc.getString("locationName") ?: "Unknown Location"
 
                 // If toId is null, it's a fallback notification where userName was used as recipient.
                 // In this case, the actor is likely "Admin".
@@ -154,10 +171,26 @@ class FirestoreNotificationService : Service() {
 
                 // Ignore notifications older than 10 minutes from now
                 if (Math.abs(System.currentTimeMillis() - timestamp) < 600_000) {
-                    if (!notificationsEnabled) {
+                    val isInForeground = isAppInForeground()
+                    
+                    if (!notificationsEnabled && type != "alert") {
                         Log.d("NotificationService", "Notifications disabled by user, skipping system notification.")
-                    } else if (!isAppInForeground() || type == "alert") {
-                        showSystemNotification(message, type, actorName)
+                    } else if (!isInForeground || type == "alert") {
+                        showSystemNotification(message, type, actorName, lat, lon)
+                        
+                        // Alarm and Popup for SOS alert — ONLY when in foreground as requested
+                        if (type == "alert" && isInForeground) {
+                            startAlarmForSOS(20000L)
+                            
+                            // Send local broadcast to HomeScreen
+                            val broadcastIntent = Intent(ACTION_SOS_BROADCAST).apply {
+                                putExtra("senderName", actorName)
+                                putExtra("locationName", locName)
+                                putExtra("lat", lat)
+                                putExtra("lon", lon)
+                            }
+                            sendBroadcast(broadcastIntent)
+                        }
                     }
 
                     // Auto-read messages/alerts to prevent repeat notifications
@@ -206,7 +239,8 @@ class FirestoreNotificationService : Service() {
         return appProcessInfo.importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND
     }
 
-    private fun showSystemNotification(message: String, type: String, senderName: String) {
+    private fun showSystemNotification(message: String, type: String, senderName: String, lat: Double = 0.0, lon: Double = 0.0) {
+        
         val title = when(type) {
             "like" -> "Post Interaction"
             "comment" -> "New Comment"
@@ -219,7 +253,9 @@ class FirestoreNotificationService : Service() {
 
         val intent = Intent(this, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            // No longer forcing open_alerts even if backgrounded, so a tap just opens the app normally.
         }
+
         val pendingIntent = PendingIntent.getActivity(
             this, System.currentTimeMillis().toInt(), intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
@@ -235,8 +271,93 @@ class FirestoreNotificationService : Service() {
             .setAutoCancel(true)
             .setContentIntent(pendingIntent)
 
+        if (type == "alert") {
+            // Removed setFullScreenIntent to prevent the app from opening automatically
+            // when it's in the background/closed.
+            builder.setCategory(NotificationCompat.CATEGORY_ALARM)
+        }
+
         val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         notificationManager.notify(System.currentTimeMillis().toInt(), builder.build())
+    }
+
+    private fun startAlarmForSOS(durationMs: Long) {
+        try {
+            stopAlarmSound() // Stop any previous alarm
+
+            val alarmUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
+                ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
+            
+            mediaPlayer = MediaPlayer().apply {
+                setDataSource(applicationContext, alarmUri)
+                setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_ALARM)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                        .build()
+                )
+                isLooping = true
+                prepare()
+                start()
+            }
+
+            vibrateForSOS(durationMs)
+
+            // Auto-stop logic
+            alarmStopRunnable = Runnable { stopAlarmSound() }
+            serviceHandler.postDelayed(alarmStopRunnable!!, durationMs)
+
+        } catch (e: Exception) {
+            Log.e("NotificationService", "Failed to start SOS alarm", e)
+        }
+    }
+
+    private fun stopAlarmSound() {
+        try {
+            alarmStopRunnable?.let { serviceHandler.removeCallbacks(it) }
+            alarmStopRunnable = null
+            
+            mediaPlayer?.let {
+                if (it.isPlaying) it.stop()
+                it.release()
+            }
+            mediaPlayer = null
+            
+            // Stop vibration too
+            val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                val vm = getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager
+                vm.defaultVibrator
+            } else {
+                @Suppress("DEPRECATION")
+                getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+            }
+            vibrator.cancel()
+        } catch (e: Exception) {
+            Log.e("NotificationService", "Failed to stop alarm", e)
+        }
+    }
+
+    private fun vibrateForSOS(durationMs: Long) {
+        try {
+            val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                val vm = getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager
+                vm.defaultVibrator
+            } else {
+                @Suppress("DEPRECATION")
+                getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+            }
+
+            if (vibrator.hasVibrator()) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    vibrator.vibrate(VibrationEffect.createOneShot(durationMs, VibrationEffect.DEFAULT_AMPLITUDE))
+                } else {
+                    @Suppress("DEPRECATION")
+                    vibrator.vibrate(durationMs)
+                }
+            }
+        } catch (e: Exception) {
+            Log.e("NotificationService", "Vibration failed", e)
+        }
     }
 
     private fun createNotificationChannels() {
@@ -272,6 +393,7 @@ class FirestoreNotificationService : Service() {
     override fun onDestroy() {
         listenerRegistration?.remove()
         settingsListenerRegistration?.remove()
+        stopAlarmSound()
         super.onDestroy()
     }
     override fun onBind(intent: Intent?): IBinder? = null

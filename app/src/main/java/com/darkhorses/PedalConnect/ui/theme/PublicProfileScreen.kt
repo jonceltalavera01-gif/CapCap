@@ -548,7 +548,7 @@ fun PublicProfileScreen(
                                 db.collection("notifications").add(hashMapOf(
                                     "userName"  to "Admin",
                                     "message"   to "🚩 $currentUserName reported $targetUserName's profile. Reason: $finalReason",
-                                    "type"      to "alert",
+                                    "type"      to "info",
                                     "timestamp" to System.currentTimeMillis(),
                                     "read"      to false
                                 ))
@@ -904,9 +904,9 @@ fun PublicProfileScreen(
                                                 db.collection("posts").document(selectedPostId).collection("comments").document(c.id).update("status", "hidden")
                                                 db.collection("posts").document(selectedPostId).update("comments", com.google.firebase.firestore.FieldValue.increment(-1))
                                                 db.collection("notifications").add(hashMapOf("userName" to c.userName, "message" to "Your comment was hidden by the community. Reason: $finalReason", "type" to "moderation", "timestamp" to System.currentTimeMillis(), "read" to false))
-                                                db.collection("notifications").add(hashMapOf("userName" to "Admin", "message" to "⚠️ Comment auto-hidden after $count reports. Last reason: $finalReason", "type" to "alert", "timestamp" to System.currentTimeMillis(), "read" to false))
+                                                db.collection("notifications").add(hashMapOf("userName" to "Admin", "message" to "⚠️ Comment auto-hidden after $count reports. Last reason: $finalReason", "type" to "info", "timestamp" to System.currentTimeMillis(), "read" to false))
                                             } else {
-                                                db.collection("notifications").add(hashMapOf("userName" to "Admin", "message" to "🚩 $currentUserName reported a comment. ($count/3 reports) Reason: $finalReason", "type" to "alert", "timestamp" to System.currentTimeMillis(), "read" to false))
+                                                db.collection("notifications").add(hashMapOf("userName" to "Admin", "message" to "🚩 $currentUserName reported a comment. ($count/3 reports) Reason: $finalReason", "type" to "info", "timestamp" to System.currentTimeMillis(), "read" to false))
                                             }
                                         }
                                     commentReportTarget = null; selectedCommentReportReason = ""; otherCommentReportReasonText = ""; commentReportReasonError = null

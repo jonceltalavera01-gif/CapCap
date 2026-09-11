@@ -606,7 +606,7 @@ private fun NotificationCard(
                 sendNotificationToUsername(
                     targetUsername = responder,
                     message        = message,
-                    type           = if (confirmed) "accepted" else "alert"
+                    type           = if (confirmed) "accepted" else "info"
                 )
             }
             .addOnFailureListener {
@@ -618,7 +618,7 @@ private fun NotificationCard(
                 sendNotificationToUsername(
                     targetUsername = responder,
                     message        = message,
-                    type           = if (confirmed) "accepted" else "alert"
+                    type           = if (confirmed) "accepted" else "info"
                 )
             }
     }

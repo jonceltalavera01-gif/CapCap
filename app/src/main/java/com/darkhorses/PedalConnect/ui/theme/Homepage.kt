@@ -2261,7 +2261,7 @@ fun Homepage(
                                                         sendAdminNotification(
                                                             db,
                                                             "⚠️ Comment by $authorDisplay was auto-hidden after $count reports. Last reason: $finalReason",
-                                                            "alert"
+                                                            "info"
                                                         )
                                                         sendUserNotification(
                                                             db, c.userName,
@@ -3667,7 +3667,7 @@ fun Homepage(
                                                                 sendAdminNotification(
                                                                     db2,
                                                                     "🚩 $reporterDisplay reported a post by $authorDisplay. ($count/3 reports) Reason: $finalReason",
-                                                                    "alert"
+                                                                    "info"
                                                                 )
                                                             }
                                                         }

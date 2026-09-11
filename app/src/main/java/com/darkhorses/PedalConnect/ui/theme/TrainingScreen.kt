@@ -81,10 +81,7 @@ private val DAY_LABELS = listOf("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
 
 // java.util.Calendar's day-of-week is Sunday-first (SUNDAY=1..SATURDAY=7).
 // DAY_LABELS above is Monday-first (Mon=0..Sun=6) — this converts between them.
-private fun todayAsDayLabelIndex(): Int {
-    val calendarDayOfWeek = java.util.Calendar.getInstance().get(java.util.Calendar.DAY_OF_WEEK)
-    return (calendarDayOfWeek + 5) % 7
-}
+private fun todayAsDayLabelIndex(): Int = getDayOfWeekIndex(System.currentTimeMillis())
 internal val WORKOUT_TYPES = listOf("Recovery", "Endurance", "Intervals", "Long Ride", "Race")
 internal val TYPE_DIFFICULTIES = mapOf(
     "Recovery" to listOf("Light Recovery", "Active Recovery", "Extended Recovery"),
@@ -331,10 +328,39 @@ fun TrainingScreen(
     var detailsWorkout by remember { mutableStateOf<TrainingWorkout?>(null) }
     var detailsWeekNum by remember { mutableStateOf<Int?>(null) }
 
+    fun persist(updated: TrainingPlan) {
+        plan = updated
+        plansCollection.document(updated.id).set(updated.toMap(), SetOptions.merge())
+    }
+
     LaunchedEffect(userName) {
         plansCollection.whereEqualTo("isActive", true).limit(1)
             .addSnapshotListener { snap, _ ->
-                plan = snap?.documents?.firstOrNull()?.data?.let { documentToPlan(it) }
+                val fetched = snap?.documents?.firstOrNull()?.data?.let { documentToPlan(it) }
+                if (fetched != null) {
+                    // Automatically mark workouts as failed if their day has passed and
+                    // they haven't been completed or started.
+                    var planChanged = false
+                    val updatedWeeks = fetched.weeks.map { week ->
+                        val updatedWorkouts = week.workouts.map { workout ->
+                            if (!workout.completed && !workout.failed && !workout.inProgress &&
+                                isWorkoutDayPassed(fetched.createdAt, week.weekNumber, workout.dayOfWeek)
+                            ) {
+                                planChanged = true
+                                workout.copy(failed = true, previouslyFailed = true)
+                            } else workout
+                        }
+                        if (planChanged) week.copy(workouts = updatedWorkouts) else week
+                    }
+
+                    val finalPlan = if (planChanged) fetched.copy(weeks = updatedWeeks) else fetched
+                    if (planChanged) {
+                        persist(finalPlan)
+                    }
+                    plan = finalPlan
+                } else {
+                    plan = null
+                }
                 isLoadingPlan = false
             }
         plansCollection.whereEqualTo("isActive", false)
@@ -345,13 +371,6 @@ fun TrainingScreen(
                     ?.mapNotNull { it.data?.let { d -> documentToPlan(d) } }
                     ?: emptyList()
             }
-    }
-
-    fun persist(updated: TrainingPlan) {
-        plan = updated
-        plansCollection.document(updated.id).set(updated.toMap(), SetOptions.merge())
-        // Note: no failure handling/rollback — a failed write leaves the optimistic
-        // state until the next snapshot silently corrects it.
     }
 
     fun toggleWorkout(workoutId: String) {
@@ -671,8 +690,17 @@ fun TrainingScreen(
                 ) { innerPadding ->
 
                     if (showWorkoutDetailsDialog && detailsWorkout != null) {
+                        val isDayPassed = remember(detailsWorkout?.id, plan?.createdAt, detailsWeekNum) {
+                            val p = plan
+                            val w = detailsWorkout
+                            val wn = detailsWeekNum
+                            if (p != null && w != null && wn != null) {
+                                isWorkoutDayPassed(p.createdAt, wn, w.dayOfWeek)
+                            } else false
+                        }
                         WorkoutDetailsDialog(
                             workout = detailsWorkout!!,
+                            isDayPassed = isDayPassed,
                             onDismiss = { 
                                 showWorkoutDetailsDialog = false
                                 detailsWeekNum = null
@@ -838,13 +866,22 @@ fun TrainingScreen(
                                                                 ridePrefs.getBoolean("resume_is_tracking", false) &&
                                                                 ridePrefs.getString("resume_linked_workout_id", null) == workout.id
                                                     }
+                                                    val isDayPassed = remember(workout.id, plan?.createdAt) {
+                                                        plan?.let { isWorkoutDayPassed(it.createdAt, weekNum, workout.dayOfWeek) } ?: false
+                                                    }
                                                     Button(
                                                         onClick = {
                                                             val startId = UUID.randomUUID().toString()
                                                             navController.navigate("home/$userName?linkedWeek=$weekNum&linkedWorkoutId=${workout.id}&autoStart=true&startId=$startId")
                                                         },
+                                                        enabled = !isDayPassed || canResumeLive,
                                                         shape = RoundedCornerShape(10.dp),
-                                                        colors = ButtonDefaults.buttonColors(containerColor = TGreen900, contentColor = Color.White),
+                                                        colors = ButtonDefaults.buttonColors(
+                                                            containerColor = TGreen900,
+                                                            contentColor = Color.White,
+                                                            disabledContainerColor = TDivider,
+                                                            disabledContentColor = TTextMuted
+                                                        ),
                                                         contentPadding = PaddingValues(horizontal = 12.dp)
                                                     ) {
                                                         Text(
@@ -1029,7 +1066,7 @@ fun TrainingScreen(
                                     workouts = selectedDayWorkouts,
                                     onEdit = { 
                                         detailsWorkout = it
-                                        detailsWeekNum = plan?.weeks?.getOrNull(currentWeekIndex)?.weekNumber
+                                        detailsWeekNum = week.weekNumber
                                         showWorkoutDetailsDialog = true 
                                     },
                                     onToggle = { toggleWorkout(it.id) }
@@ -1884,6 +1921,7 @@ private fun WorkoutFormDialog(
 @Composable
 private fun WorkoutDetailsDialog(
     workout: TrainingWorkout,
+    isDayPassed: Boolean = false,
     onDismiss: () -> Unit,
     onEdit: () -> Unit,
     onDelete: () -> Unit,
@@ -2144,14 +2182,23 @@ private fun WorkoutDetailsDialog(
                                 onDismiss()
                                 onStart()
                             },
+                            enabled = !isDayPassed,
                             modifier = Modifier.weight(1f).height(50.dp),
                             shape = RoundedCornerShape(14.dp),
-                            colors = ButtonDefaults.buttonColors(containerColor = TGreen900),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = TGreen900,
+                                disabledContainerColor = TDivider,
+                                disabledContentColor = TTextMuted
+                            ),
                             contentPadding = PaddingValues(horizontal = 4.dp)
                         ) {
                             Text(
-                                if (workout.failed || workout.actualDistanceKm != null) "Re-attempt" else "Start Workout",
-                                color = Color.White,
+                                when {
+                                    isDayPassed -> "Day Passed"
+                                    workout.failed || workout.actualDistanceKm != null -> "Re-attempt"
+                                    else -> "Start Workout"
+                                },
+                                color = if (isDayPassed) TTextMuted else Color.White,
                                 fontWeight = FontWeight.SemiBold,
                                 fontSize = 13.sp,
                                 maxLines = 1,

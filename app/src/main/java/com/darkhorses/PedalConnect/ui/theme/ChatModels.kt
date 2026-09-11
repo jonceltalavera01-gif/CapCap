@@ -37,7 +37,8 @@ data class Message(
     val replyToText: String? = null,
     val replyToSenderName: String? = null,
     @get:PropertyName("isSystemMessage") @set:PropertyName("isSystemMessage")
-    var isSystemMessage: Boolean = false
+    var isSystemMessage: Boolean = false,
+    val sharedPostId: String? = null
 )
 
 data class UserPresence(

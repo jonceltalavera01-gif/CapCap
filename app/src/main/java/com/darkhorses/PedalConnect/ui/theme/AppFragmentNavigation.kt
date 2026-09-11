@@ -20,10 +20,22 @@ import androidx.navigation.navDeepLink
 import androidx.compose.runtime.LaunchedEffect
 
 @Composable
-fun AppNavigator(paddingValues: PaddingValues) {
+fun AppNavigator(
+    paddingValues: PaddingValues,
+    navLat: Double? = null,
+    navLon: Double? = null,
+    openAlerts: Boolean = false
+) {
     val context       = LocalContext.current
     val navController = rememberNavController()
     val chatViewModel: ChatViewModel = viewModel()
+
+    // ── Handle incoming SOS navigation request ─────────────────────────────
+    LaunchedEffect(navLat, navLon) {
+        if (navLat != null && navLon != null) {
+            navController.navigate("home_navigate/$navLat/$navLon")
+        }
+    }
 
     // ── Online Status Lifecycle Observer ─────────────────────────────────────
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -89,6 +101,7 @@ fun AppNavigator(paddingValues: PaddingValues) {
             HomeScreen(
                 navController    = navController,
                 userName         = userName,
+                openAlertsTab    = openAlerts,
                 linkedWeekNumber = linkedWeek,
                 linkedWorkoutId  = linkedWorkoutId,
                 autoStartRide    = autoStart,

@@ -356,7 +356,8 @@ class ChatRepository {
         replyToId: String? = null,
         replyToText: String? = null,
         replyToSenderName: String? = null,
-        isSystemMessage: Boolean = false
+        isSystemMessage: Boolean = false,
+        sharedPostId: String? = null
     ): Boolean {
         val timestamp = Timestamp.now()
         val message = hashMapOf(
@@ -370,6 +371,7 @@ class ChatRepository {
             "replyToText" to replyToText,
             "replyToSenderName" to replyToSenderName,
             "isSystemMessage" to isSystemMessage,
+            "sharedPostId" to sharedPostId,
             "isUnsent" to false,
             "seenBy" to emptyList<String>()
         )
@@ -386,7 +388,12 @@ class ChatRepository {
             val groupName = convSnapshot.getString("groupName")
 
             val updates = mutableMapOf<String, Any>(
-                "lastMessage" to if (isSystemMessage) text else if (imageUrl != null) "📷 Photo" else text,
+                "lastMessage" to when {
+                    isSystemMessage -> text
+                    sharedPostId != null -> "🔗 Shared a post"
+                    imageUrl != null -> "📷 Photo"
+                    else -> text
+                },
                 "lastMessageSenderId" to senderId,
                 "lastMessageTimestamp" to timestamp
             )

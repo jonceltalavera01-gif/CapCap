@@ -821,6 +821,16 @@ fun ChatScreen(
                                                     fontStyle = androidx.compose.ui.text.font.FontStyle.Italic
                                                 )
                                             } else {
+                                                if (message.sharedPostId != null) {
+                                                    PostPreviewCard(
+                                                        postId = message.sharedPostId,
+                                                        isMine = isMine,
+                                                        onClick = {
+                                                            navController.navigate("post/${message.sharedPostId}")
+                                                        }
+                                                    )
+                                                    if (message.text.isNotEmpty() || message.imageUrl != null) Spacer(Modifier.height(8.dp))
+                                                }
                                                 if (message.imageUrl != null) {
                                                     AsyncImage(
                                                         model = message.imageUrl,
@@ -838,10 +848,10 @@ fun ChatScreen(
                                                     if (message.text.isNotEmpty()) Spacer(Modifier.height(4.dp))
                                                 }
                                                 if (message.text.isNotEmpty()) {
-                                                    Text(
-                                                        message.text,
-                                                        color = if (isMine) Color.White else COnSurface,
-                                                        fontSize = 14.sp
+                                                    ClickableMessageText(
+                                                        text = message.text,
+                                                        isMine = isMine,
+                                                        navController = navController
                                                     )
                                                 }
                                             }
@@ -1215,6 +1225,156 @@ fun GroupInfoDialog(
                 ) {
                     Text("Close", color = CGreen900)
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ClickableMessageText(
+    text: String,
+    isMine: Boolean,
+    navController: NavController
+) {
+    val context = LocalContext.current
+    val uriTag = "URI"
+    val webTag = "URL"
+    val annotatedString = remember(text) {
+        val builder = androidx.compose.ui.text.AnnotatedString.Builder(text)
+        
+        // Custom scheme for posts
+        val postRegex = Regex("pedalconnect://post/([a-zA-Z0-9_-]+)")
+        val postMatches = postRegex.findAll(text)
+        for (match in postMatches) {
+            builder.addStringAnnotation(tag = uriTag, annotation = match.value, start = match.range.first, end = match.range.last + 1)
+            builder.addStyle(
+                style = androidx.compose.ui.text.SpanStyle(
+                    color = if (isMine) Color(0xFFB8E6CC) else Color(0xFF0D7050),
+                    textDecoration = androidx.compose.ui.text.style.TextDecoration.Underline,
+                    fontWeight = FontWeight.Bold
+                ),
+                start = match.range.first,
+                end = match.range.last + 1
+            )
+        }
+
+        // Standard web links
+        val webRegex = Regex("(https?://[\\w\\d:#@%/;$()~_?\\+-=\\.&]*)")
+        val webMatches = webRegex.findAll(text)
+        for (match in webMatches) {
+            builder.addStringAnnotation(tag = webTag, annotation = match.value, start = match.range.first, end = match.range.last + 1)
+            builder.addStyle(
+                style = androidx.compose.ui.text.SpanStyle(
+                    color = if (isMine) Color(0xFF81D4FA) else Color(0xFF0277BD),
+                    textDecoration = androidx.compose.ui.text.style.TextDecoration.Underline
+                ),
+                start = match.range.first,
+                end = match.range.last + 1
+            )
+        }
+        
+        builder.toAnnotatedString()
+    }
+
+    androidx.compose.foundation.text.ClickableText(
+        text = annotatedString,
+        style = LocalTextStyle.current.copy(
+            color = if (isMine) Color.White else COnSurface,
+            fontSize = 14.sp
+        ),
+        onClick = { offset ->
+            annotatedString.getStringAnnotations(tag = uriTag, start = offset, end = offset)
+                .firstOrNull()?.let { annotation ->
+                    val postId = annotation.item.split("/").last()
+                    navController.navigate("post/$postId")
+                }
+            
+            annotatedString.getStringAnnotations(tag = webTag, start = offset, end = offset)
+                .firstOrNull()?.let { annotation ->
+                    try {
+                        val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(annotation.item))
+                        context.startActivity(intent)
+                    } catch (_: Exception) {
+                        Toast.makeText(context, "Cannot open link", Toast.LENGTH_SHORT).show()
+                    }
+                }
+        }
+    )
+}
+
+@Composable
+private fun PostPreviewCard(
+    postId: String,
+    isMine: Boolean,
+    onClick: () -> Unit
+) {
+    val db = remember { com.google.firebase.firestore.FirebaseFirestore.getInstance() }
+    var post by remember { mutableStateOf<Post?>(null) }
+    var isLoading by remember { mutableStateOf(true) }
+
+    LaunchedEffect(postId) {
+        db.collection("posts").document(postId).get()
+            .addOnSuccessListener { doc ->
+                post = doc.toObject(Post::class.java)?.copy(id = doc.id)
+                isLoading = false
+            }
+            .addOnFailureListener {
+                isLoading = false
+            }
+    }
+
+    val cardBg = if (isMine) Color.Black.copy(alpha = 0.2f) else Color(0xFFF3F4F6)
+    val textColor = if (isMine) Color.White else Color(0xFF111827)
+    val mutedColor = if (isMine) Color.White.copy(alpha = 0.7f) else Color(0xFF6B7280)
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onClick() },
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = cardBg)
+    ) {
+        if (isLoading) {
+            Box(Modifier.fillMaxWidth().height(80.dp), Alignment.Center) {
+                CircularProgressIndicator(color = if (isMine) Color.White else Color(0xFF0D7050), strokeWidth = 2.dp, modifier = Modifier.size(24.dp))
+            }
+        } else if (post != null) {
+            Column {
+                if (post?.imageUrl?.isNotBlank() == true) {
+                    AsyncImage(
+                        model = post?.imageUrl,
+                        contentDescription = null,
+                        modifier = Modifier.fillMaxWidth().height(120.dp),
+                        contentScale = ContentScale.Crop
+                    )
+                }
+                Column(Modifier.padding(12.dp)) {
+                    Text(
+                        post?.displayName?.ifBlank { post?.userName } ?: "Post",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 14.sp,
+                        color = textColor
+                    )
+                    Text(
+                        post?.activity ?: "Activity",
+                        fontSize = 12.sp,
+                        color = mutedColor
+                    )
+                    if (post?.description?.isNotBlank() == true) {
+                        Text(
+                            post?.description ?: "",
+                            fontSize = 13.sp,
+                            maxLines = 2,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                            color = textColor,
+                            modifier = Modifier.padding(top = 4.dp)
+                        )
+                    }
+                }
+            }
+        } else {
+            Box(Modifier.fillMaxWidth().padding(16.dp), Alignment.Center) {
+                Text("Post no longer available", fontSize = 12.sp, color = mutedColor)
             }
         }
     }

@@ -20,6 +20,7 @@ object NotificationHelper {
         senderDisplayName: String,
         latitude: Double,
         longitude: Double,
+        locationName: String,
         alertId: String
     ) {
         try {
@@ -65,7 +66,10 @@ object NotificationHelper {
                     "type" to "alert",
                     "timestamp" to now,
                     "read" to false,
-                    "alertId" to alertId
+                    "alertId" to alertId,
+                    "locationName" to locationName,
+                    "latitude" to latitude,
+                    "longitude" to longitude
                 )
                 batch.set(notifRef, data)
             }

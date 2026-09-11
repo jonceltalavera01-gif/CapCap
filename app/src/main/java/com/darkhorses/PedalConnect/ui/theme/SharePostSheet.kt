@@ -137,7 +137,8 @@ fun SharePostSheet(
                                 conversationId = conversationId,
                                 senderId = currentUserId,
                                 text = shareText,
-                                participantIds = participantIds
+                                participantIds = participantIds,
+                                sharedPostId = post.id
                             )
                             Toast.makeText(context, "Post shared with $targetName!", Toast.LENGTH_SHORT).show()
                         }

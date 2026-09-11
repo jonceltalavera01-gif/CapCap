@@ -142,6 +142,51 @@ internal fun documentToPlan(data: Map<String, Any?>): TrainingPlan = TrainingPla
 // disagree on the same ride's outcome.
 internal const val WORKOUT_COMPLETION_THRESHOLD = 0.9
 
+/**
+ * Returns the 0-based day of week (0=Mon, 6=Sun) for a given timestamp.
+ */
+internal fun getDayOfWeekIndex(timestamp: Long): Int {
+    val calendar = java.util.Calendar.getInstance()
+    calendar.timeInMillis = timestamp
+    val day = calendar.get(java.util.Calendar.DAY_OF_WEEK)
+    return (day + 5) % 7
+}
+
+/**
+ * Determines if a workout's scheduled day has already passed relative to today.
+ * A workout is scheduled for [weekNumber] and [dayOfWeek] (0=Mon, 6=Sun),
+ * starting from [planCreatedAt].
+ */
+internal fun isWorkoutDayPassed(planCreatedAt: Long, weekNumber: Int, dayOfWeek: Int): Boolean {
+    if (planCreatedAt <= 0) return false
+
+    val calendar = java.util.Calendar.getInstance()
+    calendar.timeInMillis = planCreatedAt
+
+    // Align plan start to the Monday of its creation week to establish the "Week 1" baseline.
+    val startDayOfWeek = getDayOfWeekIndex(planCreatedAt)
+    calendar.add(java.util.Calendar.DAY_OF_YEAR, -startDayOfWeek)
+    calendar.set(java.util.Calendar.HOUR_OF_DAY, 0)
+    calendar.set(java.util.Calendar.MINUTE, 0)
+    calendar.set(java.util.Calendar.SECOND, 0)
+    calendar.set(java.util.Calendar.MILLISECOND, 0)
+
+    val planMondayStart = calendar.timeInMillis
+
+    // Scheduled date is the Monday of that week + the day offset
+    val workoutScheduledDate = planMondayStart +
+            (weekNumber - 1L) * 7 * 24 * 60 * 60 * 1000 +
+            dayOfWeek.toLong() * 24 * 60 * 60 * 1000
+
+    val today = java.util.Calendar.getInstance()
+    today.set(java.util.Calendar.HOUR_OF_DAY, 0)
+    today.set(java.util.Calendar.MINUTE, 0)
+    today.set(java.util.Calendar.SECOND, 0)
+    today.set(java.util.Calendar.MILLISECOND, 0)
+
+    return workoutScheduledDate < today.timeInMillis
+}
+
 internal fun evaluateWorkoutGoal(
     workout: TrainingWorkout,
     actualDistanceKm: Double,

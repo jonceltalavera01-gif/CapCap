@@ -1,6 +1,7 @@
     package com.darkhorses.PedalConnect.ui.theme
 
     import com.darkhorses.PedalConnect.services.FallDetectionService
+    import com.darkhorses.PedalConnect.services.FirestoreNotificationService
     import android.Manifest
     import android.os.Build
     import android.content.Context
@@ -105,6 +106,12 @@ import com.darkhorses.PedalConnect.utils.OrsApiManager
     import androidx.compose.ui.zIndex
     import kotlinx.coroutines.tasks.await
 
+    data class SosAlertData(
+        val senderName: String,
+        val locationName: String,
+        val lat: Double,
+        val lon: Double
+    )
 
     // ── Colour tokens ─────────────────────────────────────────────────────────────
     private val Green900 = Color(0xFF06402B)
@@ -506,6 +513,8 @@ import com.darkhorses.PedalConnect.utils.OrsApiManager
         var fallDetectionEnabled by remember { mutableStateOf<Boolean?>(null) }
         var showCancelResponderDialog by remember { mutableStateOf(false) }
         var showMapLegend             by remember { mutableStateOf(false) }
+
+        var inAppSosAlertData by remember { mutableStateOf<SosAlertData?>(null) }
 
 
         LaunchedEffect(userName) {
@@ -1352,6 +1361,27 @@ import com.darkhorses.PedalConnect.utils.OrsApiManager
             }
             lifecycleOwner.lifecycle.addObserver(observer)
             onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+        }
+
+        LaunchedEffect(Unit) {
+            val receiver = object : android.content.BroadcastReceiver() {
+                override fun onReceive(context: Context?, intent: Intent?) {
+                    if (intent?.action == FirestoreNotificationService.ACTION_SOS_BROADCAST) {
+                        val sender = intent.getStringExtra("senderName") ?: "Someone"
+                        val loc = intent.getStringExtra("locationName") ?: "Unknown Location"
+                        val lat = intent.getDoubleExtra("lat", 0.0)
+                        val lon = intent.getDoubleExtra("lon", 0.0)
+                        inAppSosAlertData = SosAlertData(sender, loc, lat, lon)
+                    }
+                }
+            }
+            val filter = android.content.IntentFilter(FirestoreNotificationService.ACTION_SOS_BROADCAST)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                context.registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
+            } else {
+                @Suppress("UnspecifiedRegisterReceiverFlag")
+                context.registerReceiver(receiver, filter)
+            }
         }
 
         // ── Keep screen on during active ride or navigation ───────────────────────
@@ -4810,7 +4840,7 @@ import com.darkhorses.PedalConnect.utils.OrsApiManager
                                                                 sendUserNotification(
                                                                     db, alert.responderName!!,
                                                                     "$riderDisplay has cancelled their ${alert.emergencyType} alert.",
-                                                                    "alert"
+                                                                    "info"
                                                                 )
                                                             }
                                                             .addOnFailureListener {
@@ -4945,7 +4975,7 @@ import com.darkhorses.PedalConnect.utils.OrsApiManager
                                                             sendUserNotification(
                                                                 db, alert.riderName,
                                                                 "$responderDisplay can no longer respond to your ${alert.emergencyType} alert. Your alert is active again.",
-                                                                "alert"
+                                                                "info"
                                                             )
                                                         }
                                                         .addOnFailureListener {
@@ -4953,7 +4983,7 @@ import com.darkhorses.PedalConnect.utils.OrsApiManager
                                                             sendUserNotification(
                                                                 db, alert.riderName,
                                                                 "$userName can no longer respond to your ${alert.emergencyType} alert. Your alert is active again.",
-                                                                "alert"
+                                                                "info"
                                                             )
                                                         }
                                                 }
@@ -5074,6 +5104,141 @@ import com.darkhorses.PedalConnect.utils.OrsApiManager
                             }
                         }
                     )
+                }
+
+                              inAppSosAlertData?.let { data ->
+                    androidx.compose.ui.window.Dialog(onDismissRequest = { 
+                        inAppSosAlertData = null
+                        val stopAlarmIntent = Intent(context, FirestoreNotificationService::class.java).apply {
+                            action = FirestoreNotificationService.ACTION_STOP_ALARM
+                        }
+                        context.startService(stopAlarmIntent)
+                    }) {
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .wrapContentHeight(),
+                            shape = RoundedCornerShape(0.dp), // Sharper edges for NDRRMC look
+                            colors = CardDefaults.cardColors(containerColor = Color(0xFFFFD180)), // Bright Orange
+                            border = BorderStroke(6.dp, Color(0xFFFF6D00)), // Thick bright border
+                            elevation = CardDefaults.cardElevation(24.dp)
+                        ) {
+                            Column(
+                                modifier = Modifier
+                                    .background(Color(0xFFFFD180))
+                                    .padding(24.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(18.dp)
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(14.dp)
+                                ) {
+                                    Icon(
+                                        Icons.Default.Warning, 
+                                        null, 
+                                        tint = Color(0xFFD50000), 
+                                        modifier = Modifier.size(40.dp)
+                                    )
+                                    Text(
+                                        "EMERGENCY BROADCAST",
+                                        fontWeight = FontWeight.Black,
+                                        fontSize = 24.sp,
+                                        color = Color(0xFFD50000),
+                                        letterSpacing = 1.5.sp
+                                    )
+                                    Icon(
+                                        Icons.Default.Warning, 
+                                        null, 
+                                        tint = Color(0xFFD50000), 
+                                        modifier = Modifier.size(40.dp)
+                                    )
+                                }
+
+                                HorizontalDivider(color = Color(0xFFD50000), thickness = 3.dp)
+
+                                Text(
+                                    text = "${data.senderName.uppercase()} NEEDS URGENT HELP!",
+                                    fontSize = 20.sp,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    textAlign = TextAlign.Center,
+                                    color = Color.Black
+                                )
+
+                                Column(
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(4.dp))
+                                        .background(Color.White.copy(alpha = 0.5f))
+                                        .padding(16.dp)
+                                ) {
+                                    Text(
+                                        "LAST KNOWN LOCATION:",
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Black,
+                                        color = Color(0xFF555555)
+                                    )
+                                    Text(
+                                        data.locationName.uppercase(),
+                                        fontSize = 16.sp,
+                                        fontWeight = FontWeight.ExtraBold,
+                                        color = Color.Black,
+                                        textAlign = TextAlign.Center
+                                    )
+                                }
+
+                                Text(
+                                    "A rider is in distress near your location. Assistance is needed immediately.",
+                                    fontSize = 15.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color.DarkGray,
+                                    textAlign = TextAlign.Center,
+                                    lineHeight = 20.sp
+                                )
+
+                                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                                    Button(
+                                        onClick = {
+                                            inAppSosAlertData = null
+                                            selectedItem = 3 // Switch to Alerts tab
+                                            val stopAlarmIntent = Intent(context, FirestoreNotificationService::class.java).apply {
+                                                action = FirestoreNotificationService.ACTION_STOP_ALARM
+                                            }
+                                            context.startService(stopAlarmIntent)
+                                        },
+                                        modifier = Modifier.fillMaxWidth().height(64.dp),
+                                        shape = RoundedCornerShape(4.dp),
+                                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD50000))
+                                    ) {
+                                        Text(
+                                            "VIEW ALERT TO HELP", 
+                                            fontWeight = FontWeight.Black, 
+                                            fontSize = 18.sp,
+                                            color = Color.White
+                                        )
+                                    }
+
+                                    OutlinedButton(
+                                        onClick = {
+                                            inAppSosAlertData = null
+                                            val stopAlarmIntent = Intent(context, FirestoreNotificationService::class.java).apply {
+                                                action = FirestoreNotificationService.ACTION_STOP_ALARM
+                                            }
+                                            context.startService(stopAlarmIntent)
+                                        },
+                                        modifier = Modifier.fillMaxWidth().height(52.dp),
+                                        shape = RoundedCornerShape(4.dp),
+                                        border = BorderStroke(2.dp, Color.Black),
+                                        colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.Black)
+                                    ) {
+                                        Text("DISMISS", fontWeight = FontWeight.ExtraBold, fontSize = 15.sp)
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
 
                 if (showMapLegend) {

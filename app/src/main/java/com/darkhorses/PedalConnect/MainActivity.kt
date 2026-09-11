@@ -42,10 +42,19 @@ class MainActivity : FragmentActivity() {
         askNotificationPermission()
         startNotificationService()
         enableEdgeToEdge()
+        val navLat = intent.getDoubleExtra("nav_lat", 0.0)
+        val navLon = intent.getDoubleExtra("nav_lon", 0.0)
+        val openAlerts = intent.getBooleanExtra("open_alerts", false)
+
         setContent {
             CapCapTheme {
                 Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
-                    AppNavigator(paddingValues = innerPadding)
+                    AppNavigator(
+                        paddingValues = innerPadding,
+                        navLat = if (navLat != 0.0) navLat else null,
+                        navLon = if (navLon != 0.0) navLon else null,
+                        openAlerts = openAlerts
+                    )
                 }
             }
         }

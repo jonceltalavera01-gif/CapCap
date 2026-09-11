@@ -110,6 +110,14 @@ class FallDetectionService : Service(), SensorEventListener {
             countdownJob = null
             stopVibration()
             stopAlarmSound()
+
+            // Reset detection state to allow immediate re-detection after cancellation
+            lastTriggerTime = 0L
+            freeFallDetected = false
+            inFreeFall = false
+            freeFallStartTime = 0L
+            lastFreeFallTimestamp = 0L
+
             val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             nm.cancel(SOS_NOTIFICATION_ID)
         }
@@ -227,6 +235,7 @@ class FallDetectionService : Service(), SensorEventListener {
                     senderDisplayName = displayName,
                     latitude = lat,
                     longitude = lon,
+                    locationName = address,
                     alertId = docRef.id
                 )
 

@@ -196,6 +196,7 @@ fun SosSheet(
                                 senderDisplayName = displayName,
                                 latitude = userGeoPoint!!.latitude,
                                 longitude = userGeoPoint.longitude,
+                                locationName = address,
                                 alertId = docRef.id
                             )
 
