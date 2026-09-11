@@ -107,6 +107,7 @@ import com.darkhorses.PedalConnect.utils.OrsApiManager
     import kotlinx.coroutines.tasks.await
 
     data class SosAlertData(
+        val alertId: String,
         val senderName: String,
         val locationName: String,
         val lat: Double,
@@ -1367,11 +1368,12 @@ import com.darkhorses.PedalConnect.utils.OrsApiManager
             val receiver = object : android.content.BroadcastReceiver() {
                 override fun onReceive(context: Context?, intent: Intent?) {
                     if (intent?.action == FirestoreNotificationService.ACTION_SOS_BROADCAST) {
+                        val alertId = intent.getStringExtra("alertId") ?: ""
                         val sender = intent.getStringExtra("senderName") ?: "Someone"
                         val loc = intent.getStringExtra("locationName") ?: "Unknown Location"
                         val lat = intent.getDoubleExtra("lat", 0.0)
                         val lon = intent.getDoubleExtra("lon", 0.0)
-                        inAppSosAlertData = SosAlertData(sender, loc, lat, lon)
+                        inAppSosAlertData = SosAlertData(alertId, sender, loc, lat, lon)
                     }
                 }
             }

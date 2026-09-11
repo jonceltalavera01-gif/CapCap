@@ -164,6 +164,7 @@ class FirestoreNotificationService : Service() {
                 val lat = doc.getDouble("latitude") ?: 0.0
                 val lon = doc.getDouble("longitude") ?: 0.0
                 val locName = doc.getString("locationName") ?: "Unknown Location"
+                val alertId = doc.getString("alertId") ?: ""
 
                 // If toId is null, it's a fallback notification where userName was used as recipient.
                 // In this case, the actor is likely "Admin".
@@ -188,6 +189,7 @@ class FirestoreNotificationService : Service() {
                                 putExtra("locationName", locName)
                                 putExtra("lat", lat)
                                 putExtra("lon", lon)
+                                putExtra("alertId", alertId)
                             }
                             sendBroadcast(broadcastIntent)
                         }

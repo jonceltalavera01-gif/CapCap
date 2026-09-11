@@ -46,6 +46,9 @@ import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.SetOptions
 import com.darkhorses.PedalConnect.services.FallDetectionService
 import com.darkhorses.PedalConnect.services.FirestoreNotificationService
+import com.darkhorses.PedalConnect.ui.theme.BiometricHelper
+import androidx.fragment.app.FragmentActivity
+import com.google.firebase.auth.EmailAuthProvider
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -143,6 +146,18 @@ fun SettingsScreen(navController: NavController) {
     var showDeleteStep2  by remember { mutableStateOf(false) }
     var isDeleting       by remember { mutableStateOf(false) }
     var deleteError      by remember { mutableStateOf<String?>(null) }
+
+    // ── Biometric state ───────────────────────────────────────────────────────
+    var showBiometricDialog by remember { mutableStateOf(false) }
+    var biometricPassword   by remember { mutableStateOf("") }
+    var isVerifyingPassword by remember { mutableStateOf(false) }
+    var biometricError      by remember { mutableStateOf<String?>(null) }
+    var isFingerprintEnabled by remember {
+        mutableStateOf(
+            BiometricHelper.isBiometricEnabled(context) &&
+                    BiometricHelper.getCredentials(context).first == currentUser?.email
+        )
+    }
 
     // ── Load settings from Firestore ──────────────────────────────────────────
     LaunchedEffect(currentUser?.email) {
@@ -1004,6 +1019,30 @@ fun SettingsScreen(navController: NavController) {
                 )
             }
 
+            // ── Security ──────────────────────────────────────────────────────
+            if (BiometricHelper.isBiometricHardwareAvailable(context)) {
+                Spacer(Modifier.height(4.dp))
+                SettingsSectionHeader("Security")
+                SettingsGroup {
+                    SettingsToggleRow(
+                        icon     = Icons.Rounded.Fingerprint,
+                        label    = "Fingerprint Login",
+                        sublabel = if (isFingerprintEnabled) "Enabled" else "Use biometrics to log in",
+                        tint     = SettingsGreen900,
+                        checked  = isFingerprintEnabled,
+                        onCheckedChange = { v ->
+                            if (v) {
+                                showBiometricDialog = true
+                            } else {
+                                BiometricHelper.deleteBiometricAccount(context)
+                                isFingerprintEnabled = false
+                                Toast.makeText(context, "Fingerprint login disabled", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    )
+                }
+            }
+
             // ── Support ───────────────────────────────────────────────────────
             Spacer(Modifier.height(4.dp))
             SettingsSectionHeader("Support")
@@ -1040,6 +1079,121 @@ fun SettingsScreen(navController: NavController) {
             }
 
             Spacer(Modifier.height(32.dp))
+        }
+
+        // ── Biometric Password Dialog ─────────────────────────────────────────
+        if (showBiometricDialog) {
+            AlertDialog(
+                onDismissRequest = { 
+                    if (!isVerifyingPassword) {
+                        showBiometricDialog = false
+                        biometricPassword = ""
+                        biometricError = null
+                    }
+                },
+                shape = RoundedCornerShape(20.dp),
+                containerColor = Color.White,
+                icon = {
+                    Box(Modifier.size(56.dp).background(SettingsGreen100, CircleShape),
+                        contentAlignment = Alignment.Center) {
+                        Icon(Icons.Rounded.Fingerprint, null, tint = SettingsGreen900, modifier = Modifier.size(30.dp))
+                    }
+                },
+                title = {
+                    Text("Enable Fingerprint Login", fontWeight = FontWeight.ExtraBold, fontSize = 18.sp,
+                        color = SettingsGreen900, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+                },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Text("Enter your current password to link your fingerprint to this account.",
+                            fontSize = 14.sp, color = TextSecondary, textAlign = TextAlign.Center)
+                        
+                        OutlinedTextField(
+                            value = biometricPassword,
+                            onValueChange = { biometricPassword = it; biometricError = null },
+                            label = { Text("Password") },
+                            placeholder = { Text("Your account password") },
+                            modifier = Modifier.fillMaxWidth(),
+                            visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                            keyboardOptions = KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Password, imeAction = ImeAction.Done),
+                            keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
+                            shape = RoundedCornerShape(12.dp),
+                            singleLine = true,
+                            isError = biometricError != null,
+                            supportingText = if (biometricError != null) {
+                                { Text(biometricError!!, color = ErrorRed) }
+                            } else null,
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = SettingsGreen700,
+                                unfocusedBorderColor = DividerColor,
+                                cursorColor = SettingsGreen700
+                            )
+                        )
+                    }
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            if (biometricPassword.isBlank()) {
+                                biometricError = "Password required"
+                                return@Button
+                            }
+                            isVerifyingPassword = true
+                            biometricError = null
+                            scope.launch {
+                                try {
+                                    val email = currentUser?.email ?: ""
+                                    val credential = EmailAuthProvider.getCredential(email, biometricPassword)
+                                    currentUser?.reauthenticate(credential)?.await()
+                                    
+                                    // Successfully re-authenticated, now prompt for biometric to finalize
+                                    val activity = context as? FragmentActivity
+                                    if (activity != null) {
+                                        BiometricHelper.showBiometricPrompt(
+                                            activity = activity,
+                                            onSuccess = {
+                                                BiometricHelper.saveCredentials(context, email, biometricPassword)
+                                                isFingerprintEnabled = true
+                                                showBiometricDialog = false
+                                                biometricPassword = ""
+                                                Toast.makeText(context, "Fingerprint registered successfully! ✅", Toast.LENGTH_SHORT).show()
+                                            },
+                                            onError = { err ->
+                                                biometricError = "Biometric error: $err"
+                                            }
+                                        )
+                                    } else {
+                                        biometricError = "System error: context is not FragmentActivity"
+                                    }
+                                } catch (e: Exception) {
+                                    biometricError = "Invalid password. Please try again."
+                                } finally {
+                                    isVerifyingPassword = false
+                                }
+                            }
+                        },
+                        enabled = !isVerifyingPassword && biometricPassword.isNotBlank(),
+                        modifier = Modifier.fillMaxWidth().height(48.dp),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = SettingsGreen900, contentColor = Color.White)
+                    ) {
+                        if (isVerifyingPassword) {
+                            CircularProgressIndicator(color = Color.White, modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                        } else {
+                            Text("Verify & Enable", fontWeight = FontWeight.Bold, color = Color.White)
+                        }
+                    }
+                },
+                dismissButton = {
+                    TextButton(
+                        onClick = { showBiometricDialog = false; biometricPassword = ""; biometricError = null },
+                        enabled = !isVerifyingPassword,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Cancel", color = TextSecondary)
+                    }
+                }
+            )
         }
     }
 }
